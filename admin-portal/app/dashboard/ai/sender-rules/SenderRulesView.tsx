@@ -11,7 +11,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AlertBanner, AlertBannerDescription, AlertBannerTitle, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, ConfirmationDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Label } from '@keepr/ui';
+import { AlertBanner, AlertBannerDescription, AlertBannerTitle, Button, Card,
+  Checkbox, CardContent, CardDescription, CardHeader, CardTitle, ConfirmationDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Label } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/format';
 import type { ReportAccess } from '@/lib/reports/report-access';
@@ -20,7 +21,7 @@ import { createSenderRulesApi, SenderRulesError, type SenderRulesApi } from '@/l
 import { diffLineText, diffRuleSets } from '@/lib/sender-rules/diff';
 import type { SenderRulesLoad } from '@/lib/sender-rules/load';
 import { filterOrgs, type OrgListResult } from '@/lib/sender-rules/orgs';
-import { THRESHOLD_KEYS, type RuleSetPinRow, type SenderRuleSet, type ThresholdKey } from '@/lib/sender-rules/types';
+import { THRESHOLD_KEYS, hasNewAppOnlyKey, type RuleSetPinRow, type SenderRuleSet, type ThresholdKey } from '@/lib/sender-rules/types';
 import { invalidReason, setThreshold } from '@/lib/sender-rules/validate';
 import { RulesCard } from './RulesCard';
 
@@ -29,10 +30,17 @@ export const STOP_TEST_WARNING = 'The test stops. Its changes can still be publi
 export const UNDO_ALL_WARNING = 'Every org goes back to the default rules. Running tests stop. Apps pick this up within 6 hours.';
 export const PICKUP_NOTE = 'Apps pick up changes within 6 hours, or on restart.';
 
+/** BACKLOG-4212: shown while the rules carry a key apps older than 2.49 refuse. */
+export const OLD_APP_WARNING = "Apps older than 2.49 can't read this setting and will keep their current rules until they update.";
+export const OLD_APP_CONFIRM = 'I understand. Publish it anyway.';
+
 /** Where an action's result is also shown, next to the button that ran it. */
 type Place = 'running' | 'publish-test' | 'publish-everyone' | 'history';
 type Notice = { tone: 'ok' | 'error'; message: string; blocks?: string[]; at?: Place } | null;
-type DiffView = { status: 'loading' } | { status: 'ready'; lines: string[] } | { status: 'error'; message: string };
+type DiffView =
+  | { status: 'loading' }
+  | { status: 'ready'; lines: string[]; newAppOnly: boolean }
+  | { status: 'error'; message: string };
 type Pending =
   | { type: 'promote'; version: number }
   | { type: 'stop'; pin: RuleSetPinRow }
@@ -52,7 +60,9 @@ export interface SenderRulesViewProps {
 const orgLabel = (name: string | null) => name ?? 'Deleted org';
 
 function thresholdTexts(c: SenderRuleSet): Record<ThresholdKey, string> {
-  return Object.fromEntries(THRESHOLD_KEYS.map((k) => [k, String(c.thresholds[k])])) as Record<ThresholdKey, string>;
+  return Object.fromEntries(
+    THRESHOLD_KEYS.map((k) => [k, c.thresholds[k] === undefined ? '' : String(c.thresholds[k])]),
+  ) as Record<ThresholdKey, string>;
 }
 
 export function SenderRulesView({ access, load, orgs, api: injected }: SenderRulesViewProps) {
@@ -113,6 +123,9 @@ function Loaded({
   const [viewing, setViewing] = useState<{ version: number; diff: DiffView } | null>(null);
   const [orgQuery, setOrgQuery] = useState('');
   const [orgId, setOrgId] = useState('');
+  // BACKLOG-4212 publish guard: an explicit tick, for the draft and for a promote.
+  const [oldAppConfirmed, setOldAppConfirmed] = useState(false);
+  const [promoteConfirmed, setPromoteConfirmed] = useState(false);
 
   const api = (): SenderRulesApi => injected ?? createSenderRulesApi(createClient());
 
@@ -121,7 +134,7 @@ function Loaded({
     try {
       const c = await api().content(version);
       if (c === null) return { status: 'error', message: 'Version not found' };
-      return { status: 'ready', lines: diffRuleSets(released, c).map(diffLineText) };
+      return { status: 'ready', lines: diffRuleSets(released, c).map(diffLineText), newAppOnly: hasNewAppOnlyKey(c) };
     } catch (e) {
       return { status: 'error', message: e instanceof SenderRulesError ? e.message : 'Version ' + version + ' could not be read.' };
     }
@@ -154,7 +167,9 @@ function Loaded({
   const changes = diffRuleSets(released, draft).map(diffLineText);
   const thresholdPending = Object.values(thresholdErrors).some(Boolean);
   const draftInvalid = invalidReason(draft);
-  const canPublish = changes.length > 0 && !thresholdPending && draftInvalid === null && !busy;
+  const draftNewAppOnly = hasNewAppOnlyKey(draft);
+  const oldAppOk = !draftNewAppOnly || oldAppConfirmed;
+  const canPublish = changes.length > 0 && !thresholdPending && draftInvalid === null && oldAppOk && !busy;
   const pickable = orgs && orgs.ok ? filterOrgs(orgs.orgs, orgQuery) : [];
   const pickedOrg = orgs && orgs.ok ? orgs.orgs.find((o) => o.id === orgId) : undefined;
 
@@ -162,6 +177,7 @@ function Loaded({
     setThresholdText((t) => ({ ...t, [key]: text }));
     const r = setThreshold(draft, key, text);
     if (r.ok) {
+      if (!hasNewAppOnlyKey(r.content)) setOldAppConfirmed(false);
       setDraft(r.content);
       setThresholdErrors((e) => ({ ...e, [key]: undefined }));
     } else {
@@ -176,6 +192,7 @@ function Loaded({
       const c = await api().content(version);
       if (c === null) throw new SenderRulesError('version_not_found', 'Version not found');
       setDraft(c);
+      setOldAppConfirmed(false);
       setBaseVersion(version);
       setThresholdText(thresholdTexts(c));
       setThresholdErrors({});
@@ -207,7 +224,23 @@ function Loaded({
   const basePins = baseVersion !== releasedVersion ? state.pins.filter((p) => p.version === baseVersion) : [];
   const baseNote = basePins.length > 0 ? `testing on ${basePins.map((p) => orgLabel(p.org_name)).join(', ')}` : undefined;
 
+  /** BACKLOG-4212 publish guard: the warning and the tick that must be set before publishing. */
+  const oldAppGuard = (id: string, checked: boolean, set: (v: boolean) => void) => (
+    <span className="block space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900" data-testid={`old-app-guard-${id}`}>
+      <span className="block" role="alert">
+        {OLD_APP_WARNING}
+      </span>
+      <span className="flex items-center gap-2">
+        <Checkbox id={`old-app-confirm-${id}`} checked={checked} onCheckedChange={(v) => set(v === true)} />
+        <Label htmlFor={`old-app-confirm-${id}`} className="text-sm font-normal">
+          {OLD_APP_CONFIRM}
+        </Label>
+      </span>
+    </span>
+  );
+
   const openPromote = async (version: number) => {
+    setPromoteConfirmed(false);
     setPending({ type: 'promote', version });
     setPendingDiff({ status: 'loading' });
     setPendingDiff(await diffOf(version));
@@ -336,6 +369,7 @@ function Loaded({
                 Invalid rule set: {draftInvalid}
               </p>
             )}
+            {draftNewAppOnly && oldAppGuard('draft', oldAppConfirmed, setOldAppConfirmed)}
 
             <div className="space-y-2">
               <h4 className="font-medium text-gray-900">Publish to a test org</h4>
@@ -461,10 +495,14 @@ function Loaded({
             <>
               <span className="block">Every org gets v{pending.version}. Tests running on other orgs stop.</span>
               {diffBlock(pendingDiff)}
+              {pendingDiff?.status === 'ready' &&
+                pendingDiff.newAppOnly &&
+                oldAppGuard('promote', promoteConfirmed, setPromoteConfirmed)}
             </>
           }
           confirmLabel="Make this everyone's"
           loading={busy}
+          confirmDisabled={pendingDiff?.status !== 'ready' || (pendingDiff.newAppOnly && !promoteConfirmed)}
           onCancel={() => setPending(null)}
           onConfirm={() =>
             // promote re-publishes v<n>'s content as a NEW version; name the version everyone now runs.

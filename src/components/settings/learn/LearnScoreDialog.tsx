@@ -19,6 +19,7 @@ import type { LearnScore } from "../../../../electron/types/ipc/window-api-learn
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnDetailLines, learnTiles } from "./learnScoreView";
 import { scoreDialogPrivacyText } from "./learnPilotCopy";
+import { useLearnSignalLines } from "./useLearnSignalLines";
 
 export function LearnScoreDialog({
   open,
@@ -44,6 +45,8 @@ export function LearnScoreDialog({
 }): React.ReactElement {
   const [details, setDetails] = useState(false);
   const { copied, copy } = useCopyText("LearnScore");
+  // BACKLOG-4257: asked for once the score is shown; the score never waits for it.
+  const signalLines = useLearnSignalLines(open && copyBlock !== null);
   const title =
     answered === null
       ? "How Keepr is doing"
@@ -101,7 +104,7 @@ export function LearnScoreDialog({
                     <button
                       type="button"
                       className="self-start rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                      onClick={() => copy(copyBlock)}
+                      onClick={() => copy(signalLines ? `${copyBlock}\n${signalLines}` : copyBlock)}
                     >
                       {copied ? "Copied" : "Copy score"}
                     </button>

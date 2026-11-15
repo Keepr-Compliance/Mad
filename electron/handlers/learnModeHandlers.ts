@@ -105,6 +105,9 @@ import {
 } from "../services/learn/scoring";
 import type { LearnPilotReportDeps } from "../services/learnPilotReportService";
 import { getActiveSenderRules } from "../services/senderRuleSetStore";
+import { formatSignalLines, scoreSignals, vendorRoleDomains, type SignalScore } from "../services/learn/signalScoring";
+import { signalLoadersFor } from "../services/db/learnSignalsDb";
+import { listDealVendorRoleEmails } from "../services/db/dealContactEmailsDb";
 import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
 import {
@@ -119,6 +122,7 @@ import {
   LearnSetEnabledArgsSchema,
   LearnSetPilotReportArgsSchema,
   LearnGetStateArgsSchema,
+  LearnSignalsArgsSchema,
 } from "../schemas/learnMode";
 import type {
   LearnAnswerResult,
@@ -135,6 +139,7 @@ import type {
   LearnSampleDrawResponse,
   LearnSampleNextResult,
   LearnScoreResult,
+  LearnSignalsResult,
   LearnSetEnabledResult,
   LearnSetPilotReportResult,
   LearnStateResult,
@@ -152,6 +157,7 @@ export const LEARN_GATED_CHANNELS = [
   "learn:sample-next",
   "learn:sample-answer",
   "learn:score",
+  "learn:signals",
   "learn:preview",
   "learn:attachment-open",
 ] as const;
@@ -574,6 +580,43 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         // never fails the score
       }
       return { success: true, score, copyBlock: formatCopyBlock(score) };
+    }),
+  );
+
+  ipcMain.handle(
+    "learn:signals",
+    guarded("learn:signals", async (_e, payload?: unknown): Promise<LearnSignalsResult> => {
+      // BACKLOG-4257: per-email signals, measured in shadow, in their own
+      // channel so learn:score never waits for them. The renderer calls this
+      // after the score is shown. Never part of the score (SR R8), never handed
+      // to the pilot report (D3). Context = the run's rules, the deal-contact
+      // keep sets and the vendor-role domains only. A failed pass is reported
+      // as "not available", never as a refusal of the score.
+      const g = await gate();
+      if (isFailure(g)) return g;
+      if (!LearnSignalsArgsSchema.safeParse(payload).success) return fail(LEARN_INVALID_ERROR);
+      const run = getLastRun(g.userId);
+      if (!run) return fail(LEARN_NO_RUN_ERROR);
+      const userId = g.userId;
+      let signals: SignalScore | null = null;
+      try {
+        signals = await scoreSignals({
+          run,
+          keyRows: listAnswerKeyTransactions(userId),
+          dealAnswers: listDealAnswers(userId),
+          ctx: {
+            rules: run.senderRules,
+            keep: buildKeepSets(listDealContactEmails(userId), run.senderRules),
+            vendorRoleDomains: vendorRoleDomains(listDealVendorRoleEmails(userId), run.senderRules),
+          },
+          loaders: signalLoadersFor(userId),
+        });
+      } catch (error) {
+        logService.warn("Learn mode signals unavailable", MODULE, {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
+      return { success: true, signals, copyLines: formatSignalLines(signals).join("\n") };
     }),
   );
 

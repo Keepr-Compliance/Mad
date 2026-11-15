@@ -33,7 +33,12 @@ import { LearnSettings } from "../LearnSettings";
 import { LearnScoreHost, LearnSessionHost } from "../LearnSessionHost";
 import { LearnAnswersPrivacyRow } from "../LearnAnswersPrivacyRow";
 import { LearnEmailPane } from "../LearnEmailPane";
-import type { LearnPreviewResult, LearnScoreResult, LearnStateResult } from "../../../../../electron/types/ipc/window-api-learn";
+import type {
+  LearnPreviewResult,
+  LearnScoreResult,
+  LearnSignalsResult,
+  LearnStateResult,
+} from "../../../../../electron/types/ipc/window-api-learn";
 import {
   CLEANUP_NEXT,
   CLEANUP_NEXT_2,
@@ -62,7 +67,13 @@ interface FakeMain {
   list: Extract<typeof LIST_ANSWERS, { success: true }>["answers"];
   /** BACKLOG-4212: main's newsletter senders (shape of learn:list-suppressed). */
   suppressed: Array<{ senderKey: string; newsletterCount: number; hidden: boolean }>;
+  /** BACKLOG-4257: what learn:signals answers (a never-settling promise = still measuring). */
+  signals: Promise<LearnSignalsResult>;
 }
+
+/** learn:signals' copyLines shape (signalScoring.formatSignalLines), synthetic counts. */
+const SIGNAL_LINES =
+  "Signals (measured only; signals v1, terms v1; complete)\nSignal anchor.subject: newsletter 0/0 vs old rules 0/0; deal mail 0/0; gate true kept 0 lost 0, known wrong dropped 0/0, cleanup No dropped 0/0, cleanup Yes lost 0/0, unmeasured 0; keep bar not enough data (newsletter_n, positive_n, true_detections_n)";
 
 let main: FakeMain;
 let api: Record<string, jest.Mock>;
@@ -89,6 +100,7 @@ function install(overrides: Partial<FakeMain> = {}): void {
     score: { ...(SCORE as Extract<LearnScoreResult, { success: true }>) },
     list: [],
     suppressed: [],
+    signals: Promise.resolve({ success: true, signals: null, copyLines: SIGNAL_LINES }),
     ...overrides,
   };
   const s = SCORE as Extract<LearnScoreResult, { success: true }>;
@@ -134,6 +146,8 @@ function install(overrides: Partial<FakeMain> = {}): void {
       return main.bulk.find((b) => b.rowId === args.rowId)!.preview;
     }),
     attachmentOpen: jest.fn(async () => ({ success: true, dataUrl: "data:application/pdf;base64,JVBERi0=", downloadedNow: true })),
+    // BACKLOG-4257: the signal lines arrive in their own call, after the score.
+    signals: jest.fn(() => main.signals),
     deleteAnswers: jest.fn(async () => ({ success: true, removed: { deal: 2, bulk: 3 } })),
     listAnswers: jest.fn(async () => ({ success: true, answers: main.list })),
     listSuppressed: jest.fn(async () => ({ success: true, senders: main.suppressed.map((x) => ({ ...x })) })),
@@ -396,10 +410,31 @@ describe("SC score", () => {
     expect(details).toHaveTextContent("Deals found, without manual deals created before 2026-08-31: 0 of 0 (n/a)");
     expect(details).toHaveTextContent("skipped (deal type not buyer or seller)");
     expect(details).toHaveTextContent("skipped (status not closed, active or pending)");
-    fireEvent.click(within(done).getByRole("button", { name: "Copy score" }));
-    expect(writeText).toHaveBeenCalledWith((SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock);
+    // BACKLOG-4257: Copy = main's score block + the signal lines once they have loaded.
+    await waitFor(() => expect(api.signals).toHaveBeenCalled());
+    await waitFor(() => {
+      fireEvent.click(within(done).getByRole("button", { name: "Copy score" }));
+      expect(writeText).toHaveBeenLastCalledWith(
+        `${(SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock}\n${SIGNAL_LINES}`,
+      );
+    });
     // No address, subject or file name anywhere in the score dialog.
     expect(done.textContent).not.toMatch(/canary/i);
+  });
+
+  it("4257: while the signals are still measuring, Copy carries the score block and a measuring line", async () => {
+    const writeText = jest.fn(async () => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    main.signals = new Promise(() => undefined);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /See score/ }));
+    const d = await screen.findByRole("dialog", { name: "How Keepr is doing" });
+    await waitFor(() => expect(api.signals).toHaveBeenCalled());
+    fireEvent.click(within(d).getByRole("button", { name: "Details" }));
+    fireEvent.click(within(d).getByRole("button", { name: "Copy score" }));
+    expect(writeText).toHaveBeenLastCalledWith(
+      `${(SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock}\nSignals (measured only): measuring…`,
+    );
   });
 
   it("See score opens the same dialog titled How Keepr is doing", async () => {

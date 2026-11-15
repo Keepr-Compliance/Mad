@@ -28,6 +28,9 @@ const LEARN_ENTRIES = [
     .map((f) => path.join(ELECTRON, "services", "learn", f)),
   path.join(ELECTRON, "services", "db", "learnModeDbService.ts"),
   path.join(ELECTRON, "services", "db", "learnModeSql.ts"),
+  // BACKLOG-4257 PR2: the signal loaders (signalScoring.ts is picked up above).
+  path.join(ELECTRON, "services", "db", "learnSignalsDb.ts"),
+  path.join(ELECTRON, "services", "db", "learnSignalsSql.ts"),
   // PR2: the IPC surface, its schemas and the preload bridge.
   path.join(ELECTRON, "handlers", "learnModeHandlers.ts"),
   path.join(ELECTRON, "schemas", "learnMode.ts"),
@@ -47,6 +50,8 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   // of a message and pulls both fetchers).
   ["attachmentHandlers (provider download)", /electron\/handlers\/attachmentHandlers\.ts$/],
   ["emailAttachmentService (provider download)", /electron\/services\/emailAttachmentService\.ts$/],
+  // BACKLOG-4257: the background form-text drain (PR3) downloads attachments; Learn never reaches it.
+  ["formTextDrain (attachment drain)", /electron\/services\/formTextDrain(Sql)?\.ts$/],
 ];
 
 // Value imports only: `import type` / `export type` carry no code.
@@ -199,6 +204,8 @@ describe("P4 learn tables appear in no sync / export / upload path", () => {
   const ALLOWED = new Set([
     "electron/database/schema.sql",
     "electron/services/db/learnModeSql.ts",
+    // BACKLOG-4257: Learn's read-only signal SQL (reads the answered sample).
+    "electron/services/db/learnSignalsSql.ts",
   ]);
 
   function filesNamingTables(): string[] {
