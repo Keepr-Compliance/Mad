@@ -327,10 +327,12 @@ export const BULK_ROW_SENDER_SQL = sql`
 
 /**
  * Answer one sample row and snapshot its sender in the same statement
- * (BACKLOG-4212). Bound: answer, answered_at, updated_at, sender_key, user id, row id.
+ * (BACKLOG-4212). Bound: answer, answered_at, updated_at, sender_key, rule_version, user id, row id.
+ * rule_version is the version in force when the user ANSWERED (not when the row was
+ * drawn), so answers_by_rule_version separates answers given under different wording.
  */
 export const ANSWER_BULK_SQL = sql`
-  UPDATE learn_bulk_answers SET answer = ?, answered_at = ?, updated_at = ?, sender_key = ?
+  UPDATE learn_bulk_answers SET answer = ?, answered_at = ?, updated_at = ?, sender_key = ?, rule_version = ?
   WHERE user_id = ? AND id = ? AND deleted_at IS NULL
 `;
 

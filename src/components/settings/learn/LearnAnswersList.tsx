@@ -17,7 +17,7 @@ const ANSWER_TEXT: Record<string, string> = {
   yes: "Yes, my deal",
   no: "No",
   real_estate: "Real estate",
-  newsletter_spam: "Newsletter or spam",
+  newsletter_spam: "Automated or mass mail",
   skip: "Skipped",
 };
 

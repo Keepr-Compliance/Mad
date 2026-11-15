@@ -42,7 +42,7 @@ export const THRESHOLD_LABELS: Record<ThresholdKey, string> = {
   minCensusLinkedEmails: 'Minimum linked emails',
   reportSendIntervalHours: 'Report interval (hours)',
   reportMaxRows: 'Report rows (max 500)',
-  userSuppressMinAnswers: 'Newsletter answers to skip a sender',
+  userSuppressMinAnswers: 'Automated answers to skip a sender',
 };
 
 /** A label for any string the server may send; unknown values come back unchanged. */

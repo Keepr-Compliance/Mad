@@ -25,21 +25,13 @@ const ANSWER_ROW = "flex flex-wrap gap-3";
 /** Secondary, bordered, neutral: visible on the white panel, never ghost. */
 const SKIP_BUTTON =
   "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
-export const MAIL_KEYS_TIP = "Tip: use the arrow keys: \u2190 newsletter, \u2192 real estate, \u2193 other. U undoes.";
-export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> = [
-  {
-    heading: "Newsletter or spam",
-    body: "sent to many people, such as marketing, promotions and mass mailings, even when it's about real estate.",
-  },
-  {
-    heading: "Real estate business",
-    body: "written to you about real estate work, such as clients, deals, lenders, title and other agents.",
-  },
-  {
-    heading: "Other business",
-    body: "written to you but not about real estate, such as personal mail, software notices or bills.",
-  },
+export const MAIL_TIP_INTRO = "Check in order and stop at the first match:";
+export const MAIL_TIP_STEPS: readonly string[] = [
+  "A person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals \u2192 Real estate work.",
+  "Otherwise, if a machine or a list sent it (newsletter, listing alert, promotion, receipt, bank or app alert) \u2192 Automated or mass mail, even when it's about real estate.",
+  "Otherwise \u2192 Other: a person wrote to you about something else, or you can't tell.",
 ];
+export const MAIL_KEYS_TIP = "Tip: \u2190 automated \u00b7 \u2192 real estate \u00b7 \u2193 other \u00b7 U undoes.";
 
 /** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
 function MailAnswerHelp(): React.ReactElement {
@@ -77,11 +69,14 @@ function MailAnswerHelp(): React.ReactElement {
           style={{ left: pos?.left ?? 0, top: pos?.top ?? 0 }}
           className="pointer-events-none fixed z-[100] w-72 max-w-[calc(100vw-16px)] rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
         >
-          {MAIL_ANSWER_HELP.map((h) => (
-            <span key={h.heading} className="mb-1 block last:mb-0">
-              <strong className="font-medium text-gray-900">{h.heading}:</strong> {h.body}
-            </span>
-          ))}
+          <span className="mb-1 block font-medium text-gray-900">{MAIL_TIP_INTRO}</span>
+          <ol className="m-0 list-none space-y-1 p-0">
+            {MAIL_TIP_STEPS.map((t, n) => (
+              <li key={t}>
+                {n + 1}. {t}
+              </li>
+            ))}
+          </ol>
           <span className="mt-2 block text-gray-500" data-testid="learn-answer-help-keys">
             {MAIL_KEYS_TIP}
           </span>
@@ -144,7 +139,7 @@ function SkipButton({ session, mail }: { session: UseLearnSession; mail: boolean
       onClick={() => void session.skip()}
     >
       <SkipForward className="h-4 w-4 shrink-0" aria-hidden="true" />
-      {mail ? "Other business" : "Skip for now"} <Hint k={hint} />
+      {mail ? "Other" : "Skip for now"} <Hint k={hint} />
     </button>
   );
 }
@@ -213,7 +208,7 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
   return (
     <>
       <h2 className="m-0 inline-flex items-center justify-center gap-2 text-xl font-semibold leading-7">
-        <span>Is this real estate business, or a newsletter / spam?</span>
+        <span>What kind of email is this?</span>
         <MailAnswerHelp />
       </h2>
       <div className="flex flex-col items-center gap-1">
@@ -232,15 +227,15 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           onClick={() => void session.answerMail("newsletter_spam")}
         >
           <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Newsletter or spam <Hint k="←" />
+          Automated or mass mail <Hint k="←" />
         </button>
         <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
           <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Real estate business <Hint k="→" />
+          Real estate work <Hint k="→" />
         </button>
       </div>
       <SkipButton session={session} mail />
-      <span className="text-[13px] text-gray-500">Listing alerts and marketing mail count as newsletters.</span>
+      <span className="text-[13px] text-gray-500">Listing alerts and marketing mail count as automated or mass mail.</span>
     </>
   );
 }

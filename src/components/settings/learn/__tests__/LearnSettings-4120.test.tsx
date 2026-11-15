@@ -18,7 +18,7 @@
  *   C3    "N more" only when another question exists; keeps skipped deals
  *   C4    Done for now keeps an in-flight answer and asks nothing after it
  *   C8    deleting one answer re-reads the score and the count
- *   SUP   BACKLOG-4212: "Senders you marked as newsletters": rows, copy,
+ *   SUP   BACKLOG-4212: "Senders you marked as automated or mass mail": rows, copy,
  *         inline-confirmed Stop hiding / Hide again, hidden when empty, shown
  *         with Learn mode off, re-read after an answer is deleted
  *
@@ -313,8 +313,8 @@ describe("AT the one attachment, when its question is shown", () => {
     expect(api.cleanupAnswer).toHaveBeenCalledWith({ detectionId: "d1", answer: "yes" });
 
     fireEvent.click(within(dialog).getByRole("button", { name: /^No$/ }));
-    await within(dialog).findByText("Is this real estate business, or a newsletter / spam?");
-    fireEvent.click(within(dialog).getByRole("button", { name: /Real estate business/ }));
+    await within(dialog).findByText("What kind of email is this?");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Real estate work/ }));
     await within(dialog).findByText("Canarynews second issue", { selector: "span.text-base" });
     // Mail questions name no attachment and open none (flyer.pdf is listed only).
     expect(attachmentCalls()).toHaveLength(2);
@@ -346,7 +346,7 @@ describe("IMG remote images blocked until Show images, per email", () => {
     fireEvent.click(within(pane).getByRole("button", { name: "Show images" }));
     expect(remoteImages(within(dialog).getByTestId("learn-email-pane"))).toBe(1);
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Newsletter or spam/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Automated or mass mail/ }));
     await within(dialog).findByText("Canarynews second issue", { selector: "span.text-base" });
     const next = within(dialog).getByTestId("learn-email-pane");
     expect(remoteImages(next)).toBe(0);
@@ -366,8 +366,8 @@ describe("SK/UN skip and undo", () => {
     expect(within(dialog).getByTestId("learn-question-progress")).toHaveTextContent("Question 2 of 4");
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
-    await within(dialog).findByText("Is this real estate business, or a newsletter / spam?");
-    fireEvent.click(within(dialog).getByRole("button", { name: /Other business/ }));
+    await within(dialog).findByText("What kind of email is this?");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Other$/ }));
     await waitFor(() => expect(api.sampleAnswer).toHaveBeenCalledWith({ rowId: SAMPLE_ROW_ID, answer: "skip" }));
   });
 
@@ -505,7 +505,7 @@ const progress = (dialog: HTMLElement) => within(dialog).getByTestId("learn-ques
 /** Wait for question N, then answer it (a mail question, or Yes on a deal). */
 async function answerQuestion(dialog: HTMLElement, n: number, of: number): Promise<void> {
   await waitFor(() => expect(progress(dialog)).toHaveTextContent(`Question ${n} of ${of}`));
-  const button = await within(dialog).findByRole("button", { name: /Newsletter or spam|Yes, my deal/ });
+  const button = await within(dialog).findByRole("button", { name: /Automated or mass mail|Yes, my deal/ });
   await waitFor(() => expect(button).not.toBeDisabled());
   fireEvent.click(button);
 }
@@ -545,7 +545,7 @@ describe("C1/C2/C3 sittings of 12", () => {
 
     const next = await screen.findByRole("dialog", { name: "Learn mode question" });
     await waitFor(() => expect(progress(next)).toHaveTextContent("Question 1 of 12"));
-    await within(next).findByRole("button", { name: /Newsletter or spam/ });
+    await within(next).findByRole("button", { name: /Automated or mass mail/ });
     expect(within(next).queryByText("4120 Canarytest Lane, Testville, ZZ 00000")).toBeNull();
     expect(api.cleanupNext).toHaveBeenLastCalledWith({ exclude: ["d1"] });
     for (let n = 1; n <= 12; n++) await answerQuestion(next, n, 12);
@@ -667,7 +667,7 @@ describe("C8 Your answers in Help Keepr learn", () => {
   });
 });
 
-describe("SUP Senders you marked as newsletters (BACKLOG-4212)", () => {
+describe("SUP Senders you marked as automated or mass mail (BACKLOG-4212)", () => {
   const SENDERS = [
     { senderKey: "news@mail.example", newsletterCount: 3, hidden: true },
     { senderKey: "promo@offers.example", newsletterCount: 2, hidden: false },
@@ -678,7 +678,7 @@ describe("SUP Senders you marked as newsletters (BACKLOG-4212)", () => {
     install({ suppressed: SENDERS.map((x) => ({ ...x })) });
     renderSection();
     const box = await screen.findByTestId("learn-suppressed-senders");
-    expect(box).toHaveTextContent("Senders you marked as newsletters");
+    expect(box).toHaveTextContent("Senders you marked as automated or mass mail");
     expect(within(box).getByTestId("learn-suppressed-copy")).toHaveTextContent(
       /^Keepr skips mail from these senders when it looks for new deals\. This list stays on this (Mac|computer)\. Senders on your deals are never hidden\. Choose Stop hiding to see their mail again\.$/,
     );

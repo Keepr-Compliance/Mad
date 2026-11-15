@@ -1,7 +1,7 @@
 /**
- * "Senders you marked as newsletters" — BACKLOG-4212 PR3.
+ * "Senders you marked as automated or mass mail" — BACKLOG-4212 PR3.
  *
- * Senders the user answered "Newsletter or spam" for often enough that Keepr
+ * Senders the user answered "Automated or mass mail" for often enough that Keepr
  * skips their mail when it looks for new deals, plus the ones the user chose
  * "Stop hiding" for. Each row toggles Stop hiding / Hide again, confirmed
  * inline inside the row (no dialog: the LearnAnswersList pattern).
@@ -105,7 +105,7 @@ export function LearnSuppressedSenders({ machine }: { machine: string }): React.
   return (
     <div className="overflow-hidden rounded-lg border border-[#E6E4DF] bg-white" data-testid="learn-suppressed-senders">
       <div className="border-b border-[#E6E4DF] bg-[#FAF9F7] px-4 py-3">
-        <div className="font-semibold">Senders you marked as newsletters</div>
+        <div className="font-semibold">Senders you marked as automated or mass mail</div>
         <p className="m-0 mt-1 text-[13px] text-gray-500" data-testid="learn-suppressed-copy">
           Keepr skips mail from these senders when it looks for new deals. This list stays on {machine}. Senders on
           your deals are never hidden. Choose Stop hiding to see their mail again.
