@@ -205,6 +205,16 @@ describe("Learn shortcuts, wide layout and score container (BACKLOG-4212)", () =
     await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith({ rowId: "row-1", answer: "skip" }));
   });
 
+  it("after clicking email text, ArrowDown (real keyboard) scrolls and answers nothing", async () => {
+    await openDialog("mail", [/automated or mass mail/i]);
+    const scroll = await screen.findByTestId("learn-email-scroll");
+    await userEvent.click(scroll);
+    expect(scroll).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
+  });
+
   it("wide windows widen the answer panel; the row wraps so the pair sits side by side when it fits", async () => {
     await openDialog("mail", [/automated or mass mail/i]);
     const body = screen.getByTestId("learn-question-body");
