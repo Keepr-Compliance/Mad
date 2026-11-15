@@ -6,6 +6,9 @@
  * is both switches, the UPDATE targets this user's row for this machine id,
  * the state file lands in userData, and OFF (either switch) clears it.
  * Mutations: gate = diagnostics only; .eq filter dropped; counts read on main.
+ * settle() waits for the service's own runs (__whenIdleForTests), not a fixed
+ * real-time sleep: a slow state-file write once let the OFF case overlap the
+ * ON run's bookkeeping (Windows CI).
  */
 import { randomUUID } from "crypto";
 import fs from "fs";
@@ -62,12 +65,19 @@ import * as svc from "../deviceProfileService";
 const ROW = randomUUID();
 const stateFile = path.join(userData, "device-profile-state.json");
 
-async function settle(): Promise<void> {
+// Captured before any fake timers are installed.
+const realSetTimeout = global.setTimeout;
+const realRename = fs.promises.rename.bind(fs.promises);
+
+async function advance(): Promise<void> {
+  // The collection's waits (quiet period, count checks) are fake timers.
   for (let i = 0; i < 40; i++) await jest.advanceTimersByTimeAsync(10_000);
-  // fs.promises work runs on the real thread pool: let it finish.
-  jest.useRealTimers();
-  await new Promise((r) => setTimeout(r, 50));
-  jest.useFakeTimers();
+}
+
+async function settle(): Promise<void> {
+  await advance();
+  // fs.promises work runs on the real thread pool: wait for the runs themselves.
+  await svc.__whenIdleForTests();
 }
 
 beforeEach(() => {
@@ -78,7 +88,10 @@ beforeEach(() => {
   fs.rmSync(stateFile, { force: true });
   svc.__resetDeviceProfileServiceForTests();
 });
-afterEach(() => jest.useRealTimers());
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
 afterAll(() => fs.rmSync(userData, { recursive: true, force: true }));
 
 it("ON: one UPDATE of devices for (user_id, device_id); counts from the worker; state file written", async () => {
@@ -93,10 +106,12 @@ it("ON: one UPDATE of devices for (user_id, device_id); counts from the worker; 
   expect(fs.readFileSync(stateFile, "utf8")).not.toContain("machine-a");
 });
 
-it.each([
+const OFF_CASES: Array<[string, Partial<typeof switches>]> = [
   ["diagnostics OFF", { diag: false, crash: true }],
   ["crash reports OFF (diagnostics ON)", { diag: true, crash: false }],
-])("%s: no collection; the earlier profile is cleared and the file removed", async (_n, sw) => {
+];
+
+async function offClearsTheProfile(sw: Partial<typeof switches>): Promise<void> {
   svc.onDeviceRegistered("u1", "machine-a", "login", ROW);
   await settle();
   expect(fs.existsSync(stateFile)).toBe(true);
@@ -105,5 +120,57 @@ it.each([
   await settle();
   expect(calls).toHaveLength(2);
   expect(calls[1].update).toMatchObject({ hardware_profile: null });
+  expect(fs.existsSync(stateFile)).toBe(false);
+}
+
+it.each(OFF_CASES)("%s: no collection; the earlier profile is cleared and the file removed", async (_n, sw) => {
+  await offClearsTheProfile(sw);
+});
+
+describe("state-file write delayed 30 ms (slow disk)", () => {
+  beforeEach(() => {
+    jest.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+      await new Promise((r) => realSetTimeout(r, 30));
+      return realRename(from, to);
+    });
+  });
+
+  it.each(OFF_CASES)("%s: no collection; the earlier profile is cleared and the file removed", async (_n, sw) => {
+    await offClearsTheProfile(sw);
+  });
+});
+
+it("OFF while the ON run's post-UPDATE bookkeeping is in flight: its own null lands after the toggle's", async () => {
+  // Hold the SECOND state-file write: the first is the pending-clear flag
+  // written before the UPDATE, the second the bookkeeping after it.
+  let renames = 0;
+  let entered!: () => void;
+  const reached = new Promise<void>((r) => (entered = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  jest.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+    if (++renames === 2) {
+      entered();
+      await released;
+    }
+    return realRename(from, to);
+  });
+
+  svc.onDeviceRegistered("u1", "machine-a", "login", ROW);
+  await advance();
+  await reached;
+  expect(calls).toHaveLength(1); // the profile UPDATE has returned
+
+  switches.diag = false;
+  svc.onPrivacyGateChanged();
+  release();
+  await settle();
+
+  // Intended (deviceProfileService finally block): the toggle's null AND a
+  // fresh null from the run itself, so a null is the last write the row sees.
+  expect(calls).toHaveLength(3);
+  expect(calls[0].update).toMatchObject({ hardware_profile: expect.objectContaining({ cpuCores: 8 }) });
+  expect(calls[1].update).toMatchObject({ hardware_profile: null });
+  expect(calls[2].update).toMatchObject({ hardware_profile: null });
   expect(fs.existsSync(stateFile)).toBe(false);
 });
