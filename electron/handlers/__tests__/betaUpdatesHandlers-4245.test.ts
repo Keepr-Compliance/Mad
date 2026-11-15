@@ -205,6 +205,9 @@ afterEach(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Drop queued once-implementations a failed test may leave behind.
+  cloud.getPreferences.mockReset();
+  cloud.syncPreferences.mockReset();
   mockPeekGate = null;
   resetBetaUpdatesHandlersForTests();
   resetBetaUpdatesStateForTests();
