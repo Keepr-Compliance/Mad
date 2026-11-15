@@ -14,9 +14,10 @@
 import type { PublicRunSummary } from "../../services/learn/baselineRunner";
 import type { SampleDrawResult } from "../../services/learn/bulkSample";
 import type { LearnScore } from "../../services/learn/scoring";
+import type { SignalScore } from "../../services/learn/signalScoring";
 import type { BulkAnswer, DealAnswer } from "../../services/learn/learnRules";
 
-export type { PublicRunSummary, SampleDrawResult, LearnScore, BulkAnswer, DealAnswer };
+export type { PublicRunSummary, SampleDrawResult, LearnScore, SignalScore, BulkAnswer, DealAnswer };
 
 export type LearnFailure = { success: false; error: string };
 
@@ -71,7 +72,13 @@ export type LearnSampleNextResult =
   | LearnFailure;
 
 export type LearnScoreResult =
-  | { success: true; score: LearnScore; copyBlock: string }
+  | {
+      success: true;
+      score: LearnScore;
+      copyBlock: string;
+      /** BACKLOG-4257: per-email signals measured in shadow; null when the pass failed. Never inside `score`. */
+      signals: SignalScore | null;
+    }
   | LearnFailure;
 
 export type LearnDeleteAnswersResult =

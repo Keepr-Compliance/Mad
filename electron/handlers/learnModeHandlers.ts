@@ -105,6 +105,9 @@ import {
 } from "../services/learn/scoring";
 import type { LearnPilotReportDeps } from "../services/learnPilotReportService";
 import { getActiveSenderRules } from "../services/senderRuleSetStore";
+import { formatSignalLines, scoreSignals, vendorRoleDomains, type SignalScore } from "../services/learn/signalScoring";
+import { signalLoadersFor } from "../services/db/learnSignalsDb";
+import { listDealVendorRoleEmails } from "../services/db/dealContactEmailsDb";
 import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
 import {
@@ -552,10 +555,13 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       if (isFailure(g)) return g;
       const run = getLastRun(g.userId);
       if (!run) return fail(LEARN_NO_RUN_ERROR);
+      const keyRows = listAnswerKeyTransactions(g.userId);
+      const dealAnswers = listDealAnswers(g.userId);
+      const keep = buildKeepSets(listDealContactEmails(g.userId), run.senderRules);
       const { score, detector } = scoreRunWithDetector(
         run,
-        listAnswerKeyTransactions(g.userId),
-        listDealAnswers(g.userId),
+        keyRows,
+        dealAnswers,
         listAnsweredBulkWithText(g.userId),
         countSeedLinkedToDeals(
           listDealLinkedSeedCandidates(g.userId, run.senderRules.suppress.exactAddresses),
@@ -563,7 +569,7 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         ),
         {
           rules: run.senderRules,
-          keep: buildKeepSets(listDealContactEmails(g.userId), run.senderRules),
+          keep,
           linked: listDealLinkedEmails(g.userId),
         },
       );
@@ -573,7 +579,31 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       } catch {
         // never fails the score
       }
-      return { success: true, score, copyBlock: formatCopyBlock(score) };
+      // BACKLOG-4257: per-email signals, measured in shadow. A separate field,
+      // never inside `score` (SR R8), never handed to the pilot report (D3).
+      // Context = the run's rules, the deal-contact keep sets and the vendor-role
+      // domains only. A failure here never fails the score.
+      const userId = g.userId;
+      let signals: SignalScore | null = null;
+      try {
+        signals = await scoreSignals({
+          run,
+          keyRows,
+          dealAnswers,
+          ctx: {
+            rules: run.senderRules,
+            keep,
+            vendorRoleDomains: vendorRoleDomains(listDealVendorRoleEmails(userId), run.senderRules),
+          },
+          loaders: signalLoadersFor(userId),
+        });
+      } catch (error) {
+        logService.warn("Learn mode signals unavailable", MODULE, {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
+      const copyBlock = [formatCopyBlock(score), ...formatSignalLines(signals)].join("\n");
+      return { success: true, score, copyBlock, signals };
     }),
   );
 

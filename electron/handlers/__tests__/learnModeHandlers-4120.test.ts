@@ -1681,3 +1681,70 @@ describe("C-B3 (main) get-state { settle: true } waits for the queued pilot job"
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4257 (M3) PR2, SR R8: the per-email signals are returned as their own
+// field next to the score, never inside it, and the pilot report is unchanged.
+// ---------------------------------------------------------------------------
+describe("R8 (4257) signals are a separate field; the pilot payload is byte-identical", () => {
+  it("learn:score returns signals beside the score; maybeSend gets the score as scoreRunWithDetector makes it", async () => {
+    const maybeSend = jest.fn();
+    ipcHandlers.clear();
+    featureGateHandlers.registerFeatureGateHandlers();
+    handlers.registerLearnModeHandlers({ pilotReport: { maybeSend, queueWithdraw: jest.fn() } });
+    setToggle(true);
+    const e1 = seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: `Offer accepted on ${CANARY_ADDRESS}`, body: CANARY_BODY });
+    run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4257-r8', ?, ?, 'active')`, USER, CANARY_ADDRESS);
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4257-r8', ?, 't-4257-r8', ?, 'th-4257-r8')`, USER, e1);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    const score = r.score as Record<string, unknown>;
+    const signals = r.signals as { complete: boolean; values: unknown[]; emails: { dealLinked: number } };
+    expect(signals.complete).toBe(true);
+    expect(signals.emails.dealLinked).toBe(1);
+    expect(signals.values.length).toBeGreaterThan(30);
+    expect("signals" in score).toBe(false);
+
+    // The same score, built directly, as before this item.
+    const { getLastRun } = await import("../../services/learn/baselineRunner");
+    const scoring = await import("../../services/learn/scoring");
+    const dbs = await import("../../services/db/learnModeDbService");
+    const { buildKeepSets } = await import("../../utils/senderFilter/senderFilter");
+    const { buildPilotReport } = await import("../../services/learn/pilotReport");
+    const lastRun = getLastRun(USER);
+    if (!lastRun) throw new Error("no run");
+    const direct = scoring.scoreRunWithDetector(
+      lastRun,
+      dbs.listAnswerKeyTransactions(USER),
+      dbs.listDealAnswers(USER),
+      dbs.listAnsweredBulkWithText(USER),
+      scoring.countSeedLinkedToDeals(
+        dbs.listDealLinkedSeedCandidates(USER, lastRun.senderRules.suppress.exactAddresses),
+        lastRun.senderRules,
+      ),
+      {
+        rules: lastRun.senderRules,
+        keep: buildKeepSets(dbs.listDealContactEmails(USER), lastRun.senderRules),
+        linked: dbs.listDealLinkedEmails(USER),
+      },
+    );
+    expect(maybeSend).toHaveBeenCalledTimes(1);
+    const [uid, sentScore, sentDetector] = maybeSend.mock.calls[0];
+    expect(uid).toBe(USER);
+    expect(sentScore).toBe(r.score);
+    expect(JSON.stringify(sentScore)).toBe(JSON.stringify(direct.score));
+    expect(JSON.stringify(buildPilotReport(sentScore, sentDetector, "2.49.0"))).toBe(
+      JSON.stringify(buildPilotReport(direct.score, direct.detector, "2.49.0")),
+    );
+
+    // Copy block: the score's lines unchanged, then the signal lines (counts only).
+    const copy = String(r.copyBlock);
+    const base = scoring.formatCopyBlock(direct.score);
+    expect(copy.startsWith(`${base}\nSignals (measured only; signals v1, terms v1; complete)`)).toBe(true);
+    const signalLines = copy.slice(base.length);
+    expect(signalLines).toContain("Signal anchor.subject:");
+    for (const needle of ["@", "Canarytest", "Canarybody", "Testville"]) expect(signalLines).not.toContain(needle);
+  });
+});
