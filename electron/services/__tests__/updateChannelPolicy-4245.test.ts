@@ -82,7 +82,7 @@ function makeUpdater(version: string) {
       return state.channel;
     },
     set channel(v: string | null) {
-      // Same side effect as the library setter (AppUpdater.js:43-44).
+      // Same side effect as the library setter (AppUpdater.js:44).
       log.push(["channel", v]);
       state.channel = v;
       state.allowDowngrade = true;
@@ -390,6 +390,41 @@ describe("B6 runtime change: the preference is re-applied", () => {
     cloud.syncPreferences.mockRejectedValue(new Error("offline"));
     await mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } });
     expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("preferences:update on, then off before the first save finishes -> off", async () => {
+    cloud.getPreferences.mockResolvedValue({});
+    const saves: Array<() => void> = [];
+    cloud.syncPreferences.mockImplementation(
+      () => new Promise<void>((resolve) => { saves.push(() => resolve()); }),
+    );
+    const on = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } }) as Promise<unknown>;
+    const off = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } }) as Promise<unknown>;
+    while (saves.length < 2) await new Promise((r) => setImmediate(r));
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    saves[0]();
+    await on;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    saves[1]();
+    await off;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("preferences:update on twice, saves finishing out of order -> on", async () => {
+    cloud.getPreferences.mockResolvedValue({});
+    const saves: Array<() => void> = [];
+    cloud.syncPreferences.mockImplementation(
+      () => new Promise<void>((resolve) => { saves.push(() => resolve()); }),
+    );
+    const first = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } }) as Promise<unknown>;
+    const second = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } }) as Promise<unknown>;
+    while (saves.length < 2) await new Promise((r) => setImmediate(r));
+    saves[1]();
+    await second;
+    expect(mockUpdater.allowPrerelease).toBe(true);
+    saves[0]();
+    await first;
+    expect(mockUpdater.allowPrerelease).toBe(true);
   });
 
   it("preferences:update with a non-boolean value -> off", async () => {

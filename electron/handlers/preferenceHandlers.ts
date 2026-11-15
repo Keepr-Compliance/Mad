@@ -42,6 +42,13 @@ interface PreferenceResponse {
 }
 
 /**
+ * BACKLOG-4245: counts preferences:update calls that name
+ * `updates.betaUpdates`. A turn-on is applied after its save only if no later
+ * call has named the preference since.
+ */
+let betaUpdatesWrites = 0;
+
+/**
  * Register all preference-related IPC handlers
  */
 export function registerPreferenceHandlers(): void {
@@ -195,6 +202,7 @@ export function registerPreferenceHandlers(): void {
         // BACKLOG-4245: turning beta updates off takes effect at once; turning
         // them on takes effect only once the cloud save has succeeded.
         const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
+        const betaUpdatesWrite = betaUpdates === null ? 0 : ++betaUpdatesWrites;
         if (betaUpdates === false) {
           applyBetaUpdates(false);
         }
@@ -215,7 +223,7 @@ export function registerPreferenceHandlers(): void {
           updatedPreferences,
         );
 
-        if (betaUpdates === true) {
+        if (betaUpdates === true && betaUpdatesWrite === betaUpdatesWrites) {
           applyBetaUpdates(true);
         }
 

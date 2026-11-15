@@ -18,11 +18,12 @@
  * Library lines relied on (node_modules/electron-updater/out/):
  * - AppUpdater.js:218   allowPrerelease defaults to "version has a prerelease part"
  * - AppUpdater.js:138   allowDowngrade defaults to false
- * - AppUpdater.js:43-44 the channel setter sets allowDowngrade = true
+ * - AppUpdater.js:44    the channel setter sets allowDowngrade = true (the only
+ *                        `allowDowngrade = true` in out/)
  * - AppUpdater.js:339-362 update only when newer, or older with allowDowngrade
- * - providers/GitHubProvider.js:50-90 allowPrerelease: first eligible feed entry
- * - providers/GitHubProvider.js:91-102,158-177 otherwise GitHub's /releases/latest
- * - providers/GitHubProvider.js:131-141 prerelease tag: beta-mac.yml, then latest-mac.yml
+ * - providers/GitHubProvider.js:51-91 allowPrerelease: first eligible feed entry
+ * - providers/GitHubProvider.js:92-105,158-176 otherwise GitHub's /releases/latest
+ * - providers/GitHubProvider.js:131-140 prerelease tag: beta-mac.yml, then latest-mac.yml
  */
 
 jest.mock("../logService", () => ({
@@ -230,7 +231,7 @@ describe("leaving and staying on beta", () => {
   });
 });
 
-describe("why the explicit values matter (library behaviour without them)", () => {
+describe("library behaviour without applyBetaUpdates", () => {
   it("beta build, nothing applied: takes the next beta although nobody turned betas on", async () => {
     const u = new TestUpdater(BETA);
     const r = await check(u, FEED_BETA_NEWEST);

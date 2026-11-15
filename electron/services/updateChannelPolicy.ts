@@ -10,7 +10,7 @@
  *   electron-updater AppUpdater.js:218); the preference wins both ways.
  * - Every apply sets `allowPrerelease` AND `allowDowngrade = false`.
  * - `channel` is never assigned (its setter sets `allowDowngrade = true`,
- *   electron-updater AppUpdater.js:43-44).
+ *   electron-updater AppUpdater.js:44).
  * - main.ts applies the off value when the updater is configured, before any
  *   update check can run; the startup read then applies the stored value
  *   before the startup check (updateDownloadPolicy.runStartupUpdateCheck).
