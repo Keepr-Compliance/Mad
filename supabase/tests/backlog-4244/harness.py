@@ -187,7 +187,8 @@ def rls_off(table):
 PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_c7b_outdated_notice', 'p_deadlines', 'p_disabled', 'p_tokens', 'p_no_claims', 'p_withheld', 'p_removed',
           'p_unconfirmed', 'p_limits', 'p_paging', 'p_people_cap', 'p_masking', 'p_dates', 'p_fresh', 'p_saved_from', 'p_null_install',
           'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback', 'p_withheld_planted', 'p_people_cap_100', 'p_strip',
-          'p_mask_sweep', 'p_joiners', 'p_window_sweep', 'p_window_shrink', 'p_clean_timing', 'p_strip_tags', 'p_window_joiners']
+          'p_mask_sweep', 'p_joiners', 'p_window_sweep', 'p_window_shrink', 'p_clean_timing', 'p_strip_tags', 'p_window_joiners',
+          'p_ignorables']
 
 ROLLBACK_PROBE = ("CREATE FUNCTION pg_temp.p_rollback(rb text) RETURNS text LANGUAGE plpgsql AS $rbp$\n"
                   "DECLARE f0 text := (SELECT v FROM pg_temp.p4244_out WHERE k = 'fp_after_apply'); r text; gone boolean; chk text; e text := '';\n"
@@ -333,9 +334,10 @@ def mutants():
     b.append(fn_mutant('MASK_luhn_dropped', '_mcp_mask', "IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/",
                        "IF true THEN                                                         /*MASK:luhn*/", 'pg_temp.p_mask_sweep()'))
     # F-1, F-2, G-1, G-2, strip class
-    UNJ = "'(\\d[ -]?)[\\u00AD\\u034F\\u200C\\u200D\\uFE00-\\uFE0F]+(?=[ -]?\\d)'"
-    UNJ_OLD = "'(\\d[ -]?)[\\u200C\\u200D]+(?=[ -]?\\d)'"
-    RUN = "'\\d[\\d \\u00AD\\u034F\\u200C\\u200D\\uFE00-\\uFE0F-]*$'"
+    IGN = "\\u00AD\\u034F\\u115F\\u1160\\u180E\\u200C\\u200D\\u2061-\\u2064\\u3164\\uFE00-\\uFE0F\\uFFA0\\U000E0100-\\U000E01EF"
+    UNJ = "'([\\d -])[" + IGN + "]+(?=[\\d -])'"
+    UNJ_OLD = "'([\\d -])[\\u200C\\u200D]+(?=[\\d -])'"
+    RUN = "'\\d[\\d " + IGN + "-]*$'"
     b.append(fn_mutant('MASK_unjoin_removed', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ", '\\1', 'g');", "  v_x := p;", 'pg_temp.p_joiners()'))
     b.append(fn_mutant('MASK_unjoin_class_narrowed', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",", "  v_x := regexp_replace(p, " + UNJ_OLD + ",",
                        'pg_temp.p_joiners_more()'))
@@ -353,6 +355,16 @@ def mutants():
                        "public._mcp_mask(u.x)", 'pg_temp.p_clean_timing()'))
     b.append(fn_mutant('CLEAN_trailing_run_kept', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')", "left(u.x, p_max + 40)",
                        'pg_temp.p_window_shrink()'))
+    for tag, part in [('U3164', '\\u3164'), ('U2061_2064', '\\u2061-\\u2064'), ('UE0100_E01EF', '\\U000E0100-\\U000E01EF'), ('UFFA0', '\\uFFA0')]:
+        b.append(fn_mutant('MASK_ignorable_narrowed_' + tag, '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
+                           "  v_x := regexp_replace(p, " + UNJ.replace(part, '') + ",", 'pg_temp.p_ignorables()'))
+    b.append(fn_mutant('CLEAN_ignorable_narrowed_U180E', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
+                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace('\\u180E', '') + ",", 'pg_temp.p_ignorables()'))
+    b.append(fn_mutant('MASK_joiner_separator_joiner_dropped', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
+                       "  v_x := regexp_replace(p, " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",", 'pg_temp.p_ignorables()'))
+    b.append(fn_mutant('CLEAN_joiner_separator_joiner_dropped', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
+                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",",
+                       'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_drop_class_old', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')",
                        "regexp_replace(left(u.x, p_max + 40), '\\d+(?:[ -]\\d+)*[ -]?$', '')", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('STRIP_tags_kept', '_mcp_strip', '\\u061C\\U000E0000-\\U000E007F]', ']', 'pg_temp.p_strip_tags()'))
@@ -418,6 +430,22 @@ def timeout_control():
             "END\n$tmo4244$;\nSET LOCAL statement_timeout = 0;\n")
 
 
+BEFORE = os.environ.get('P4244_BEFORE')
+
+
+def before_copies():
+    """pg_temp.o_mcp_strip/txt/mask/clean: the helpers as in the file named by P4244_BEFORE (used by
+    OBS_ignorables to measure the earlier rule); the current ones when it is not set"""
+    src = open(BEFORE).read() if BEFORE else MIG
+    out = ''
+    for name in ('_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean'):
+        u = unit(src, name)[0]
+        u = u.split('$fn$;')[0] + '$fn$;\n'
+        u = u.replace('public._mcp_', 'pg_temp.o_mcp_').replace('pg_temp.o_mcp_' + name[5:], 'pg_temp.o_mcp_' + name[5:])
+        out += u.replace('pg_temp.o_mcp_', 'pg_temp.o' + '_mcp_')
+    return out
+
+
 def compose(with_mutants=True, only=None):
     head = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n"
             "CREATE TEMP TABLE p4244_out (k text, v text);\n"
@@ -467,6 +495,7 @@ def compose(with_mutants=True, only=None):
     b.append(block('OBS_false_positives', '    v := pg_temp.obs_false_positives();'))
     b.append(block('OBS_window', '    PERFORM pg_temp.p_window_sweep();\n    v := pg_temp.obs_window();'))
     b.append(block('OBS_timing', '    PERFORM pg_temp.p_clean_timing();\n    v := pg_temp.obs_timing();'))
+    b.append(block('OBS_ignorables', '    v := pg_temp.obs_ignorables();'))
     b.append(block('OBS_window_joiners', '    PERFORM pg_temp.p_window_joiners();\n    v := pg_temp.obs_window_joiners();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
     if with_mutants:
@@ -474,6 +503,7 @@ def compose(with_mutants=True, only=None):
         if only:
             ms = [m for m in ms if any(("'M_" + o) in m for o in only)]
         b += ms
+    text += before_copies()
     text += unit_decls()
     text += "DO $sw4244$\nDECLARE v text; t0 text;\nBEGIN\n" + ''.join(b) + "END\n$sw4244$;\n"
     if TIMEOUT:

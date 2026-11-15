@@ -66,8 +66,8 @@ $fn$;
 REVOKE ALL ON FUNCTION public._mcp_txt(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_txt(text, integer) TO mcp_reader;
 
--- Replaced by '[number hidden by Keepr]', after removing U+00AD, U+034F, U+200C, U+200D and
--- U+FE00-U+FE0F where they stand between two digits:
+-- Replaced by '[number hidden by Keepr]', after removing digit-context ignorables (see below) that have
+-- a digit, a space or a dash on both sides:
 -- - dashed SSN-shaped numbers (ddd-dd-dddd);
 -- - a run of digit groups (groups joined by one space or one dash) when any run of consecutive
 --   groups inside it holds 13 to 19 digits and passes the Luhn check; the whole run is replaced.
@@ -88,9 +88,11 @@ BEGIN
   IF p IS NULL THEN
     RETURN NULL;
   END IF;
-  -- soft hyphen U+00AD, combining grapheme joiner U+034F, joiners U+200C and U+200D and variation
-  -- selectors U+FE00-U+FE0F that stand between two digits (a separator may stand on either side) are removed
-  v_x := regexp_replace(p, '(\d[ -]?)[\u00AD\u034F\u200C\u200D\uFE00-\uFE0F]+(?=[ -]?\d)', '\1', 'g');                       /*MASK:unjoin*/
+  -- digit-context ignorables (U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064,
+  -- U+3164, U+FE00-U+FE0F, U+FFA0, U+E0100-U+E01EF) are removed wherever a run of them has a digit,
+  -- a space or a dash on both sides. After this no such character stands inside a run of digits joined
+  -- by spaces and dashes.
+  v_x := regexp_replace(p, '([\d -])[\u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF]+(?=[\d -])', '\1', 'g');                       /*MASK:unjoin*/
   v_x := regexp_replace(v_x, '\m\d{3}-\d{2}-\d{4}\M', '[number hidden by Keepr]', 'g');
   FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '(\d+(?:[ -]\d+)*)', 'g') AS r LOOP
     IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
@@ -134,22 +136,23 @@ GRANT EXECUTE ON FUNCTION public._mcp_mask(text) TO mcp_reader;
 
 -- typed text, shown in at most p_max characters:
 -- 1. invisible characters removed (_mcp_strip);
--- 2. the first 8 * (p_max + 40) characters kept; in them U+00AD, U+034F, U+200C, U+200D and
---    U+FE00-U+FE0F between two digits removed;
+-- 2. the first 8 * (p_max + 40) characters kept; in them every run of digit-context ignorables
+--    (U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064, U+3164, U+FE00-U+FE0F,
+--    U+FFA0, U+E0100-U+E01EF) with a digit, a space or a dash on both sides removed;
 -- 3. when the text is longer than p_max + 40 characters after step 2, or was longer than
 --    8 * (p_max + 40) in step 2: the first p_max + 40 characters kept, a trailing run of digits,
---    spaces, dashes and the characters of step 2 that starts with a digit removed, and '…' added;
+--    spaces, dashes and digit-context ignorables that starts with a digit removed, and '…' added;
 -- 4. masked (_mcp_mask) and cut to p_max (_mcp_txt).
 -- A card number of 19 digits with separators spans at most 37 characters after step 2, so one that
 -- starts before p_max is either inside the masked text or removed in step 3.
 CREATE OR REPLACE FUNCTION public._mcp_clean(p text, p_max integer)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
   SELECT public._mcp_txt(
-           public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), '\d[\d \u00AD\u034F\u200C\u200D\uFE00-\uFE0F-]*$', '')   /*CLEAN:window*/
+           public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), '\d[\d \u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF-]*$', '')   /*CLEAN:window*/
                                  ELSE u.x END)
            || CASE WHEN u.long THEN '…' ELSE '' END, p_max)
     FROM (SELECT v.x, v.cut OR char_length(v.x) > p_max + 40 AS long
-            FROM (SELECT regexp_replace(left(t.y, 8 * (p_max + 40)), '(\d[ -]?)[\u00AD\u034F\u200C\u200D\uFE00-\uFE0F]+(?=[ -]?\d)', '\1', 'g') AS x,   /*CLEAN:unjoin*/
+            FROM (SELECT regexp_replace(left(t.y, 8 * (p_max + 40)), '([\d -])[\u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF]+(?=[\d -])', '\1', 'g') AS x,   /*CLEAN:unjoin*/
                          char_length(t.y) > 8 * (p_max + 40) AS cut                                                  /*CLEAN:bound*/
                     FROM (SELECT public._mcp_strip(p) AS y) t) v) u
 $fn$;

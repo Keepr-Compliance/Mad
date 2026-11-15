@@ -772,3 +772,75 @@ END $h$;
 CREATE FUNCTION pg_temp.obs_window_joiners() RETURNS text LANGUAGE sql AS $h$
   SELECT jsonb_object_agg(outcome, c)::text FROM (SELECT outcome, sum(n) AS c FROM pg_temp.p4244_wj GROUP BY outcome) x
 $h$;
+
+-- Digit-context ignorables. For each character of the class, a card and an SSN with it (i) after the
+-- first digit, (ii) between every digit, (iii) on both sides of each separator, (iv) 50 of it in place of
+-- the first separator: through _mcp_clean (what the tools show) and through _mcp_mask alone.
+-- Returns one string per character: 8 marks per function, M masked, . not masked.
+CREATE FUNCTION pg_temp.ign_chars() RETURNS int[] LANGUAGE sql IMMUTABLE AS $h$
+  SELECT ARRAY[173, 847, 4447, 4448, 6158, 8204, 8205, 8289, 8290, 8291, 8292, 12644, 65024, 65039, 65440, 917760, 918000]
+$h$;
+CREATE FUNCTION pg_temp.ign_shapes(c text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
+  SELECT ARRAY[
+    'x 4' || c || '111 1111 1111 1111 y',
+    'x ' || array_to_string(regexp_split_to_array('4111111111111111', ''), c) || ' y',
+    'x 4111' || c || ' ' || c || '1111' || c || ' ' || c || '1111' || c || ' ' || c || '1111 y',
+    'x 4111' || repeat(c, 50) || '1111 1111 1111 y',
+    'x 1' || c || '23-45-6789 y',
+    'x ' || array_to_string(regexp_split_to_array('123', ''), c) || '-' || array_to_string(regexp_split_to_array('45', ''), c) || '-' || array_to_string(regexp_split_to_array('6789', ''), c) || ' y',
+    'x 123' || c || '-' || c || '45' || c || '-' || c || '6789 y',
+    'x 123' || repeat(c, 50) || '-45-6789 y']
+$h$;
+CREATE FUNCTION pg_temp.ign_marks(c text, use_clean boolean) RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE s text; o text; out text := '';
+BEGIN
+  FOREACH s IN ARRAY pg_temp.ign_shapes(c) LOOP
+    o := CASE WHEN use_clean THEN public._mcp_clean(s, 1000) ELSE public._mcp_mask(s) END;
+    out := out || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+  END LOOP;
+  RETURN out;
+END $h$;
+CREATE FUNCTION pg_temp.p_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE cp int; bad text := ''; cnt int := 0; m text; z text := chr(8205); legit text[]; l text;
+BEGIN
+  FOREACH cp IN ARRAY pg_temp.ign_chars() LOOP
+    m := pg_temp.ign_marks(chr(cp), true) || '/' || pg_temp.ign_marks(chr(cp), false);
+    cnt := cnt + 1;
+    IF m <> 'MMMMMMMM/MMMMMMMM' THEN bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m); END IF;
+  END LOOP;
+  -- mixed characters
+  IF position('[number' IN public._mcp_clean('x 4' || chr(173) || chr(8205) || '111' || chr(12644) || ' ' || chr(8291) || '1111 ' || chr(917760) || chr(6158) || '1111' || chr(65039) || ' ' || chr(847) || '1111 y', 1000)) = 0 THEN
+    bad := bad || 'mixed card; ';
+  END IF;
+  IF position('[number' IN public._mcp_clean('x 1' || chr(65440) || '23' || chr(4447) || '-' || chr(8290) || '45-' || chr(8204) || '6789 y', 1000)) = 0 THEN
+    bad := bad || 'mixed ssn; ';
+  END IF;
+  legit := ARRAY[
+    'family ' || chr(128104) || z || chr(128105) || z || chr(128103),
+    'keys ' || '1' || chr(65039) || chr(8419) || '2' || chr(65039) || chr(8419) || '3' || chr(65039) || chr(8419),
+    'word ' || chr(1605) || chr(1740) || chr(8204) || chr(1582) || chr(1608) || chr(1575) || chr(1607) || chr(1605),
+    'co' || chr(173) || 'operate',
+    chr(12644) || chr(4352) || chr(4449) || ' ' || chr(4447) || chr(4448) || ' end',
+    'love ' || chr(10084) || chr(65039) || ' 2 ' || chr(10084) || chr(65039),
+    'kanji ' || chr(33883) || chr(917760)];
+  FOREACH l IN ARRAY legit LOOP
+    IF public._mcp_clean(l, 1000) IS DISTINCT FROM l THEN bad := bad || 'changed: ' || l || '; '; END IF;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '' AND cnt = 17, 'characters ' || cnt || ' ' || bad);
+END $h$;
+-- the same matrix through the functions as they were before this change (pg_temp.o_mcp_*), and after
+CREATE FUNCTION pg_temp.obs_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE cp int; out jsonb := '{}'; s text; b text; a text; o text;
+BEGIN
+  FOREACH cp IN ARRAY pg_temp.ign_chars() LOOP
+    b := ''; a := '';
+    FOREACH s IN ARRAY pg_temp.ign_shapes(chr(cp)) LOOP
+      o := pg_temp.o_mcp_clean(s, 1000);
+      b := b || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+      o := public._mcp_clean(s, 1000);
+      a := a || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+    END LOOP;
+    out := out || jsonb_build_object('U+' || upper(lpad(to_hex(cp), 4, '0')), jsonb_build_object('before', b, 'after', a));
+  END LOOP;
+  RETURN out::text;
+END $h$;

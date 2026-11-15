@@ -50,17 +50,22 @@ Named controls:
 - `OBS_cursors` (C27): what `list_deals` returns for special and impossible cursor values. An
   observation, not pass/fail.
 
-Masking (`_mcp_mask`, `_mcp_clean`):
-- Soft hyphen U+00AD, combining grapheme joiner U+034F, joiners U+200C and U+200D and variation
-  selectors U+FE00-U+FE0F that stand between two digits are removed before masking; elsewhere (inside
-  words, inside emoji sequences, a keycap such as 1 + U+FE0F + U+20E3) they are kept. Digits written as
-  keycap emoji are not masked.
+Masking (`_mcp_mask`, `_mcp_clean`) guards against a card or Social Security number being shown by
+accident. It is not a guard against a person who hides a number on purpose.
+- Digit-context ignorables: U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064,
+  U+3164, U+FE00-U+FE0F, U+FFA0, U+E0100-U+E01EF. A run of them is removed when it has a digit, a space
+  or a dash on both sides, so none of them stands inside a run of digits joined by spaces and dashes
+  when the masker reads it. Elsewhere they are kept: inside words (soft hyphen, ZWNJ), inside emoji
+  sequences (ZWJ), after an emoji or a keycap digit (variation selectors), in Hangul text.
+  Digits written as keycap emoji (digit + U+FE0F + U+20E3) are not masked.
 - A run of digit groups joined by single spaces or dashes is replaced whole when any run of
   consecutive groups in it holds 13 to 19 digits and passes the Luhn check. Measured share of random
   digit runs replaced (`OBS_false_positives`): about 10% for 13-16 digits plain or grouped by 4, and for
   17-19 digits plain; about 27% for 17-19 digits grouped by 4.
-- Not replaced: groups joined by dots, by two spaces or by " - ", and a card with more digits glued on
-  without a separator (one unbroken run of 20 or more digits).
+- Not replaced (measured): groups joined by dots, by two spaces or by " - " (also when an ignorable
+  stands between two separators, which leaves two spaces); a card with more digits glued on without a
+  separator (one unbroken run of 20 or more digits); digits written as keycap emoji; digits separated by
+  any other visible character.
 - `_mcp_clean` removes invisible characters from the whole field, then works on its first
   8 * (p_max + 40) characters: removes the characters above where they stand between digits, masks the
   first p_max + 40 characters and cuts to p_max.
@@ -77,6 +82,9 @@ Masking (`_mcp_mask`, `_mcp_clean`):
 Known behaviour: `address_contains` searches the stored address, while the address in the output is
 masked, so a search can match digits that the output shows as `[number hidden by Keepr]` (the person's
 own data only).
+
+`OBS_ignorables` compares the helpers with those in the file named by the environment variable
+`P4244_BEFORE` (the migration as at an earlier commit); without it both columns show the current helpers.
 
 Results: `results-2026-11-14.txt` (ids replaced by `<id:n>`).
 
