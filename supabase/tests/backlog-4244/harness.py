@@ -321,7 +321,7 @@ def mutants():
     b.append(fn_mutant('MASK_no_luhn', '_mcp_mask', 'IF v_sum % 10 = 0 THEN', 'IF true THEN', 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_no_cut', '_mcp_txt', 'CASE WHEN char_length(s.x) > p_max THEN', 'CASE WHEN false THEN', 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_no_strip_before_mask', '_mcp_clean', '(SELECT public._mcp_strip(p) AS y) t', '(SELECT p AS y) t', 'pg_temp.p_strip()'))
-    b.append(fn_mutant('STRIP_controls_only', '_mcp_strip', "|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'", "", 'pg_temp.p_strip()'))
+    b.append(fn_mutant('STRIP_controls_only', '_mcp_strip', "|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'", "'", 'pg_temp.p_strip()'))
     b.append(fn_mutant('STRIP_kept_not_excluded', '_mcp_strip', "|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'",
                        "|[' || public._mcp_ign() || ']'", 'pg_temp.p_ign_legit()'))
     b.append(fn_mutant('MASK_whole_run_luhn_only', '_mcp_mask',

@@ -507,6 +507,8 @@ BEGIN
   SELECT it INTO i8 FROM jsonb_array_elements(c -> 'checklists') cl, jsonb_array_elements(cl -> 'items') it WHERE (it ->> 'item_id')::uuid = pg_temp.id('IT8');
   RETURN pg_temp.all_of(
     pg_temp.pass(i8 ->> 'title' = 'Visibletxt', 'title ' || coalesce(i8 ->> 'title', '-')),
+    pg_temp.pass(public._mcp_clean('Pay 4111' || chr(7) || '1111 1111 1111', 1000) = 'Pay [number hidden by Keepr]',
+                 'control character between digits ' || public._mcp_clean('Pay 4111' || chr(7) || '1111 1111 1111', 1000)),
     pg_temp.pass(i8 ->> 'note' = 'Pay [number hidden by Keepr]; ' || 'שלום מרחבא مرحبا ' || chr(128104) || chr(8205) || chr(128105) || chr(8205) || chr(128103) || ' ok.',
                  'note ' || coalesce(i8 ->> 'note', '-')),
     pg_temp.pass(public._mcp_strip((SELECT string_agg(chr(k.cp), '') FROM unnest(pg_temp.ign_codepoints()) AS k(cp)
@@ -788,6 +790,15 @@ CREATE FUNCTION pg_temp.ign_codepoints() RETURNS int[] LANGUAGE sql AS $h$
                  LATERAL (SELECT ARRAY[NULL, m0[1], m0[2], m0[3]]) AS mm(m)) r,
          generate_series(r.lo, r.hi) g
 $h$;
+-- the reference set, held here and independent of _mcp_ign(): Default_Ignorable_Code_Point as
+-- ICU 78.3 (Unicode 17.0) reports it, 4,174 code points
+CREATE FUNCTION pg_temp.ign_reference() RETURNS int[] LANGUAGE sql IMMUTABLE AS $h$
+  SELECT array_agg(g ORDER BY g)
+    FROM (VALUES (173, 173), (847, 847), (1564, 1564), (4447, 4448), (6068, 6069), (6155, 6159), (8203, 8207), (8234, 8238),
+                 (8288, 8303), (12644, 12644), (65024, 65039), (65279, 65279), (65440, 65440), (65520, 65528), (113824, 113827),
+                 (119155, 119162), (917504, 921599)) r(lo, hi),
+         generate_series(r.lo, r.hi) g
+$h$;
 CREATE FUNCTION pg_temp.ign_shapes(c text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT ARRAY[
     'x 4' || c || '111 1111 1111 1111 y',
@@ -822,7 +833,7 @@ CREATE TEMP TABLE p4244_ign (k text, v int);
 CREATE FUNCTION pg_temp.p_ignorables_range(lo int, hi int, with_mask boolean DEFAULT true) RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE cp int; bad text := ''; nbad int := 0; cnt int := 0; m text;
 BEGIN
-  FOREACH cp IN ARRAY pg_temp.ign_codepoints() LOOP
+  FOREACH cp IN ARRAY pg_temp.ign_reference() LOOP
     CONTINUE WHEN cp < lo OR cp > hi;
     m := pg_temp.ign_marks(chr(cp), true) || '/' || CASE WHEN with_mask THEN pg_temp.ign_marks(chr(cp), false) ELSE 'MMMMMMMM' END;
     cnt := cnt + 1;
@@ -852,7 +863,7 @@ BEGIN
   IF position('[number' IN public._mcp_clean('x 1' || chr(65440) || '23' || chr(4447) || '-' || chr(8290) || '45-' || chr(8204) || '6789 y', 1000)) = 0 THEN
     bad := bad || 'mixed ssn; ';
   END IF;
-  RETURN pg_temp.pass(bad = '' AND n = 4174, 'class size ' || n || ' ' || bad);
+  RETURN pg_temp.pass(bad = '' AND n = 4174 AND pg_temp.ign_codepoints() = pg_temp.ign_reference(), 'class size ' || n || ' ' || bad);
 END $h$;
 -- legitimate text: kept as written where it uses only kept characters; the rest of the class removed
 CREATE FUNCTION pg_temp.p_ign_legit() RETURNS text LANGUAGE plpgsql AS $h$
@@ -882,14 +893,18 @@ END $h$;
 CREATE FUNCTION pg_temp.p_digits() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE ar text := (SELECT string_agg(chr(1632 + d::int), '') FROM regexp_split_to_table('4111111111111111', '') d);
         fw text := (SELECT string_agg(chr(65296 + d::int), '') FROM regexp_split_to_table('4111111111111111', '') d);
-        o1 text; o2 text; e text := '';
+        o1 text; o2 text; o3 text; o4 text; e text := '';
 BEGIN
   BEGIN o1 := public._mcp_clean('card ' || ar || ' x', 1000); o2 := public._mcp_clean('card ' || fw || ' x', 1000);
+        o3 := public._mcp_clean('card 4111 1111 1111 1111 ' || chr(1635) || ' x', 1000);
+        o4 := public._mcp_clean('card ' || chr(1635) || ' 4111 1111 1111 1111 x', 1000);
   EXCEPTION WHEN OTHERS THEN e := SQLERRM; END;
   DELETE FROM pg_temp.p4244_ign WHERE k LIKE 'digit %';
   INSERT INTO pg_temp.p4244_ign VALUES ('digit arabic-indic matches \d', (chr(1635) ~ '\d')::int), ('digit full-width matches \d', (chr(65299) ~ '\d')::int),
     ('digit arabic-indic matches [0-9]', (chr(1635) ~ '[0-9]')::int), ('digit full-width matches [0-9]', (chr(65299) ~ '[0-9]')::int);
-  RETURN pg_temp.pass(e = '' AND o1 = 'card ' || ar || ' x' AND o2 = 'card ' || fw || ' x', 'error ' || e || ' / ' || coalesce(o1, '-') || ' / ' || coalesce(o2, '-'));
+  RETURN pg_temp.pass(e = '' AND o1 = 'card ' || ar || ' x' AND o2 = 'card ' || fw || ' x'
+                      AND o3 = 'card [number hidden by Keepr] ' || chr(1635) || ' x' AND o4 = 'card ' || chr(1635) || ' [number hidden by Keepr] x',
+                      'error ' || e || ' / ' || coalesce(o1, '-') || ' / ' || coalesce(o2, '-') || ' / ' || coalesce(o3, '-') || ' / ' || coalesce(o4, '-'));
 END $h$;
 CREATE FUNCTION pg_temp.obs_ign() RETURNS text LANGUAGE sql AS $h$
   SELECT jsonb_object_agg(k, v)::text FROM pg_temp.p4244_ign
