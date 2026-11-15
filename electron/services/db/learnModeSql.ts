@@ -65,6 +65,44 @@ export const USER_SUPPRESS_CANDIDATES_SQL = sql`
 `;
 
 /**
+ * BACKLOG-4212 PR3: the Settings list. Same counting and veto as
+ * USER_SUPPRESS_CANDIDATES_SQL, but a sender with a live "Stop hiding" row is
+ * KEPT and marked `overridden = 1`, so the user can choose "Hide again".
+ * Bound: user id, N.
+ */
+export const USER_SUPPRESS_SETTINGS_ROWS_SQL = sql`
+  SELECT b.sender_key AS sender_key,
+         SUM(CASE WHEN b.answer = 'newsletter_spam' THEN 1 ELSE 0 END) AS newsletter_count,
+         EXISTS (
+           SELECT 1 FROM learn_sender_overrides o
+           WHERE o.user_id = b.user_id AND o.sender_key = b.sender_key AND o.deleted_at IS NULL
+         ) AS overridden
+  FROM learn_bulk_answers b
+  WHERE b.user_id = ? AND b.deleted_at IS NULL AND b.answer IS NOT NULL AND b.sender_key IS NOT NULL
+  GROUP BY b.sender_key
+  HAVING SUM(CASE WHEN b.answer = 'newsletter_spam' THEN 1 ELSE 0 END) >= ?
+     AND SUM(CASE WHEN b.answer = 'real_estate' THEN 1 ELSE 0 END) = 0
+  ORDER BY b.sender_key
+`;
+
+/**
+ * BACKLOG-4212 PR3: "Stop hiding". One live row per (user, sender) through the
+ * partial unique index; a repeat is a no-op.
+ * Bound: id, user id, sender_key, created_at, updated_at.
+ */
+export const INSERT_SENDER_OVERRIDE_SQL = sql`
+  INSERT INTO learn_sender_overrides (id, user_id, sender_key, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, sender_key) WHERE deleted_at IS NULL DO NOTHING
+`;
+
+/** BACKLOG-4212 PR3: "Hide again" = soft-remove the live row. Bound: deleted_at, updated_at, user id, sender_key. */
+export const SOFT_DELETE_SENDER_OVERRIDE_SQL = sql`
+  UPDATE learn_sender_overrides SET deleted_at = ?, updated_at = ?
+  WHERE user_id = ? AND sender_key = ? AND deleted_at IS NULL
+`;
+
+/**
  * The user's own addresses: connected mailboxes and the sign-in address.
  * Raw values; the caller normalises them. Bound: user id, user id.
  */

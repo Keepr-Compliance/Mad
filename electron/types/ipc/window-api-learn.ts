@@ -97,6 +97,21 @@ export type LearnListAnswersResult = { success: true; answers: LearnAnswerRow[] 
 
 export type LearnDeleteAnswerResult = { success: true } | LearnFailure;
 
+/**
+ * BACKLOG-4212 PR3: one sender in "Senders you marked as newsletters".
+ * `hidden`: Keepr skips this sender's mail now (false = the user chose Stop
+ * hiding). Shown to the user only; never logged.
+ */
+export interface LearnSuppressedSender {
+  senderKey: string;
+  newsletterCount: number;
+  hidden: boolean;
+}
+
+export type LearnListSuppressedResult = { success: true; senders: LearnSuppressedSender[] } | LearnFailure;
+
+export type LearnSetOverrideResult = { success: true; hidden: boolean } | LearnFailure;
+
 export interface LearnPreviewAttachment {
   id: string;
   filename: string;
@@ -162,6 +177,10 @@ export interface WindowApiLearn {
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
   listAnswers: () => Promise<LearnListAnswersResult>;
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => Promise<LearnDeleteAnswerResult>;
+  /** BACKLOG-4212: the caller's newsletter senders (own rows only). */
+  listSuppressed: () => Promise<LearnListSuppressedResult>;
+  /** BACKLOG-4212: hide = false is "Stop hiding", hide = true is "Hide again". */
+  setOverride: (args: { senderKey: string; hide: boolean }) => Promise<LearnSetOverrideResult>;
   preview: (args: LearnPreviewArgs) => Promise<LearnPreviewResult>;
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) => Promise<LearnAttachmentOpenResult>;
 }
