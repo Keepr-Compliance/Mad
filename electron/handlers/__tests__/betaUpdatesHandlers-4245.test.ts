@@ -250,10 +250,11 @@ describe("E1 E3 E4 eligibility at apply time", () => {
     ["unknown", () => resolveState.mockResolvedValue("unknown")],
     ["the reader throws", () => resolveState.mockRejectedValue(new Error("boom"))],
     ["the session user cannot be read", () => { memoryUser = null; }],
-  ])("E3 %s -> false", async (_l, arrange) => {
+  ])("E3 %s -> false, recorded as unknown", async (_l, arrange) => {
     arrange();
     await turnOn();
     expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(getBetaUpdatesInputs().eligibility).toEqual({ userId: USER, state: "unknown" });
   });
 
   it("E3 the read times out -> false, and the read is bounded", async () => {

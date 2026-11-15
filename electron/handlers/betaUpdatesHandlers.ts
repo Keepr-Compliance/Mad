@@ -156,12 +156,14 @@ function withTimeout(p: Promise<BetaEligibilityState>, ms: number): Promise<Beta
   });
 }
 
-async function readEligibility(d: BetaUpdatesDeps): Promise<{ userId: string | null; state: BetaEligibilityState }> {
+/** Reports the session user as soon as it is known, so a later throw or timeout is recorded for that user. */
+async function readEligibility(d: BetaUpdatesDeps, onUser: (userId: string) => void): Promise<BetaEligibilityState> {
   const userId = await d.sessionFileUserId();
-  if (!userId) return { userId: null, state: "unknown" };
+  if (!userId) return "unknown";
+  onUser(userId);
   const memoryUser = await d.memorySessionUserId();
-  if (memoryUser !== userId) return { userId, state: "unknown" };
-  return { userId, state: await d.resolveState() };
+  if (memoryUser !== userId) return "unknown";
+  return d.resolveState();
 }
 
 function syncRetryTimer(): void {
@@ -211,9 +213,8 @@ export function refreshBetaEligibility(
     let userId: string | null = null;
     let state: BetaEligibilityState = "unknown";
     try {
-      const read = readEligibility(d).then((r) => {
-        userId = r.userId;
-        return r.state;
+      const read = readEligibility(d, (id) => {
+        userId = id;
       });
       state = await withTimeout(read, timeoutMs);
     } catch {
