@@ -79,3 +79,13 @@ export const LearnDeleteAnswerArgsSchema = z.strictObject({
   kind: z.enum(["deal", "bulk"]),
   id: RowIdSchema,
 });
+
+/**
+ * BACKLOG-4212 PR3: learn:set-override ("Stop hiding" / "Hide again"). The
+ * sender is an address as listed by learn:list-suppressed; main normalises it
+ * again. Strict: no user id or any other field is accepted from the renderer.
+ */
+export const LearnSetOverrideArgsSchema = z.strictObject({
+  senderKey: z.string().min(3).max(320),
+  hide: z.boolean(),
+});

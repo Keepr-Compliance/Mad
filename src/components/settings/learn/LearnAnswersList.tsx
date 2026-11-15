@@ -17,7 +17,7 @@ const ANSWER_TEXT: Record<string, string> = {
   yes: "Yes, my deal",
   no: "No",
   real_estate: "Real estate",
-  newsletter_spam: "Newsletter or spam",
+  newsletter_spam: "Automated or mass mail",
   skip: "Skipped",
 };
 
@@ -77,7 +77,7 @@ function AnswerRow({
             type="button"
             disabled={deleting}
             onClick={() => void onConfirm()}
-            className="rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+            className="whitespace-nowrap rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
           >
             Delete
           </button>
@@ -85,7 +85,7 @@ function AnswerRow({
             type="button"
             disabled={deleting}
             onClick={() => setConfirming(false)}
-            className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="whitespace-nowrap rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             Cancel
           </button>
@@ -97,7 +97,7 @@ function AnswerRow({
             setError(null);
             setConfirming(true);
           }}
-          className="flex-none rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          className="whitespace-nowrap flex-none rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
           Delete
         </button>

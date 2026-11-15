@@ -46,7 +46,7 @@ import {
   UPSERT_DEAL_ANSWER_SQL,
   UPSERT_LEARN_MODE_ENABLED_SQL,
 } from "./learnModeSql";
-import type { BulkAnswer, DealAnswer } from "../learn/learnRules";
+import { LEARN_RULE_VERSION, type BulkAnswer, type DealAnswer } from "../learn/learnRules";
 import { fromAddress } from "../../utils/senderFilter/senderFilter";
 
 export interface LearnEmailRow {
@@ -317,15 +317,20 @@ export function nextUnansweredBulk(userId: string): BulkSampleRow | null {
  * normalises it, and sets the answer and `sender_key` in ONE UPDATE, so an
  * answer never exists without the sender it was given for. `sender_key` is
  * NULL when the message is not cached (that answer then never counts toward
- * hiding). A re-answer re-snapshots.
+ * hiding). A re-answer re-snapshots. `rule_version` is stamped at answer time.
  */
-export function answerBulk(userId: string, rowId: string, answer: BulkAnswer): boolean {
+export function answerBulk(
+  userId: string,
+  rowId: string,
+  answer: BulkAnswer,
+  ruleVersion: number = LEARN_RULE_VERSION,
+): boolean {
   const now = nowIso();
   return dbTransaction(() => {
     const row = dbGet<{ sender: string | null }>(BULK_ROW_SENDER_SQL, [userId, rowId]);
     if (!row) return false;
     const senderKey = fromAddress(row.sender);
-    return dbRun(ANSWER_BULK_SQL, [answer, now, now, senderKey, userId, rowId]).changes > 0;
+    return dbRun(ANSWER_BULK_SQL, [answer, now, now, senderKey, ruleVersion, userId, rowId]).changes > 0;
   });
 }
 

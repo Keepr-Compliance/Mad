@@ -38,7 +38,7 @@ const HEADERS: Array<[string, TipKey]> = [
   ['Minimum linked emails', 'minCensusLinkedEmails'],
   ['Report interval (hours)', 'reportSendIntervalHours'],
   ['Report rows (max 500)', 'reportMaxRows'],
-  ['Newsletter answers to skip a sender', 'userSuppressMinAnswers'],
+  ['Automated answers to skip a sender', 'userSuppressMinAnswers'],
 ];
 
 function renderCard(readOnly: boolean) {

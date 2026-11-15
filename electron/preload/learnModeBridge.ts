@@ -52,6 +52,10 @@ export const learnModeBridge: WindowApiLearn = {
   listAnswers: () => ipcRenderer.invoke("learn:list-answers"),
   /** Delete one saved answer; the item can be asked again. */
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => ipcRenderer.invoke("learn:delete-answer", args),
+  /** BACKLOG-4212: senders the user marked as newsletters (own rows only). */
+  listSuppressed: () => ipcRenderer.invoke("learn:list-suppressed"),
+  /** BACKLOG-4212: "Stop hiding" (hide: false) / "Hide again" (hide: true). */
+  setOverride: (args: { senderKey: string; hide: boolean }) => ipcRenderer.invoke("learn:set-override", args),
   preview: (args: LearnPreviewArgs) => ipcRenderer.invoke("learn:preview", args),
   /** Open (downloading first if needed) the one attachment the question is about. */
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) =>

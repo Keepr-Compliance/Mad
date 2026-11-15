@@ -29,6 +29,7 @@
  *
  * Synthetic data only: Canarytest / Testville / ZZ / 00000, @example.test.
  */
+import { LEARN_RULE_VERSION } from "../../services/learn/learnRules";
 import * as nodePath from "path";
 import * as fs from "fs";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1424,7 +1425,7 @@ describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
     expect(score.seedLinkedToDeals).toBe(1);
     expect(score.senderCensus.minCensusLinkedEmails).toBe(3);
     expect(score.senderCensus.dealLinkedSuppressed.map((m) => [m.full.k, m.n])).toEqual([[2, 2]]);
-    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v4; sender rules v7, source: download)");
+    expect(String(r.copyBlock).split("\n")[0]).toBe(`Keepr Learn mode score (rules v${LEARN_RULE_VERSION}; sender rules v7, source: download)`);
   });
 
   it("RS18a a refused download over a newer cache: source: cache (download rejected)", async () => {
