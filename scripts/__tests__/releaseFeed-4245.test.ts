@@ -285,6 +285,12 @@ describe("BACKLOG-4245 feed-preflight --remote (beta and rehearsal builds)", () 
     expect(r.status).toBe(1);
   });
 
+  it("refuses a rehearsal version equal to Latest (boundary)", () => {
+    const r = remote("refs/heads/rehearsal/s1", "website", "90.0.0", { SCRATCH_FEED_REPO: SCRATCH, HAS_SCRATCH_TOKEN: "true" });
+    expect(r.out).toMatch(/version 90\.0\.0 is not newer than Latest v90\.0\.0/);
+    expect(r.status).toBe(1);
+  });
+
   it("refuses a real-feed name whose id is not the real feed's", () => {
     const r = remote(BETA_REF, "beta", "2.49.1-beta.1", { REAL_FEED_ID: "999" });
     expect(r.out).toMatch(/is not the real update feed/);
@@ -499,6 +505,16 @@ describe("BACKLOG-4245 beta publish on the real-feed model", () => {
     expect(f.out).toMatch(/was withdrawn/);
     expect(f.status).toBe(1);
     expect([...writes(s), ...writes(f)]).toEqual([]);
+  });
+
+  it("a resumed draft that still carries a file this release does not ship is refused at A3", () => {
+    const s = baseState();
+    s.releases![REAL].push({ tag_name: BTAG, draft: true, prerelease: true, assets: ["beta-mac.yml"], files: {} });
+    const r = stage(s, artifacts(BV));
+    expect(r.out).toMatch(/: resume/);
+    expect(r.out).toMatch(/A3 assets of v2\.49\.1-beta\.1: unexpected beta-mac\.yml/);
+    expect(r.status).toBe(1);
+    expect(rel(r.state, REAL, BTAG)).toMatchObject({ draft: true });
   });
 
   it("two releases on one tag are refused", () => {
