@@ -71,16 +71,11 @@ for mode in modes:
         st = subprocess.run([sys.executable, os.path.join(here, 'static.py')], capture_output=True, text=True)
         print('STATIC ' + ((st.stdout.strip().splitlines() or ['(crashed: ' + st.stderr.strip().splitlines()[-1] + ')'])[-1]))
         out = subprocess.run([os.path.join(here, 'run.sh')], capture_output=True, text=True)
-        o = out.stdout
-        try:
-            d = json.loads(o[o.index('{'):o.rindex('}') + 1])
-            print('RESULT total=%s pass=%s fail=%s reds=%s' % (d['total'], d['pass'], d['fail'], ','.join(sorted(d['reds']))))
-            for k in sorted(d['reds']):
-                print('   %s: %s' % (k, d['reds'][k][:160]))
-            if not d['total']:
-                print('ZERO CONTROLS RAN')
-        except Exception:
-            print('NO RESULT ' + o[:400].replace('\n', ' ') + out.stderr[:200])
+        # run.sh output is parse.py's filtered lines only (names, PASS/FAIL, SQLSTATE)
+        for line in out.stdout.splitlines():
+            if not line.endswith(' PASS'):
+                print('   ' + line)
+        print('   (%d PASS lines not shown)' % sum(1 for l in out.stdout.splitlines() if l.endswith(' PASS')))
     finally:
         sh('git', 'checkout', '--', *files)
         st = sh('git', 'status', '--porcelain', '--', *files).stdout.strip()

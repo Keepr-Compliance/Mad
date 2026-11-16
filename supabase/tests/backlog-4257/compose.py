@@ -65,7 +65,9 @@ S0_NARROW = ("      AND (SELECT count(*) FROM public.learn_pilot_reports WHERE u
              "      AND (SELECT count(*) FROM public.learn_pilot_reports) = current_setting('p4257.rows_before')::bigint\n")
 c19 = once(c19, S0_WHOLE, S0_NARROW)
 c19 = once(c19, "    'reds', (SELECT coalesce(",
-           "    'info', (SELECT i FROM pg_temp.p4257_result),\n    'reds', (SELECT coalesce(")
+           "    'info', (SELECT i FROM pg_temp.p4257_result),\n"
+           "    'all', (SELECT jsonb_object_agg(e.key, e.value = 'PASS') FROM jsonb_each_text(v_r) e),\n"
+           "    'reds', (SELECT coalesce(")
 
 pre = ("SELECT set_config('p4257.rows_before', (SELECT count(*) FROM public.learn_pilot_reports)::text, true),\n       set_config('p4257.before_md5', coalesce((SELECT md5(prosrc) FROM pg_proc WHERE oid = "
        "to_regprocedure('public._learn_pilot_report_invalid(jsonb)')), 'none'), true),\n"
