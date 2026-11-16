@@ -1,0 +1,142 @@
+/**
+ * Keepr Cloud test fixtures (BACKLOG-4243). The database is the real
+ * electron/database/schema.sql (what every install gets), then the trigger
+ * create step, exactly as runMigrations ends. Ids are all-zero-style fakes.
+ */
+import fs from "fs";
+import path from "path";
+import { ensureCloudSyncTriggers } from "../../../db/cloudSyncTriggers";
+import { openTestDb, type TestDb } from "./sqlite";
+
+export const SCHEMA_SQL = fs.readFileSync(
+  path.join(__dirname, "..", "..", "..", "..", "database", "schema.sql"),
+  "utf8",
+);
+
+export const USER_A = "user-a-4243";
+export const USER_B = "user-b-4243";
+export const PROJECT = "test-project.supabase.co";
+export const OTHER_PROJECT = "other-project.supabase.co";
+
+export function freshDb(opts: { triggers?: boolean } = {}): TestDb {
+  const db = openTestDb();
+  db.exec(SCHEMA_SQL);
+  db.pragma("foreign_keys = ON");
+  if (opts.triggers !== false) {
+    const r = ensureCloudSyncTriggers(db);
+    if (!r.ok || r.skipped.length > 0) throw new Error(`trigger setup failed: ${JSON.stringify(r)}`);
+  }
+  seedUser(db, USER_A, "a@example.test");
+  seedUser(db, USER_B, "b@example.test");
+  return db;
+}
+
+export function seedUser(db: TestDb, id: string, email: string): void {
+  db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', ?)").run(id, email, id);
+}
+
+let seq = 0;
+export function dealId(n?: number): string {
+  const v = n ?? ++seq + 100;
+  return `00000000-0000-0000-0000-${String(v).padStart(12, "0")}`;
+}
+
+export function insertDeal(
+  db: TestDb,
+  id: string,
+  userId: string = USER_A,
+  extra: Record<string, unknown> = {},
+): void {
+  const cols: Record<string, unknown> = {
+    id,
+    user_id: userId,
+    property_address: "12 Main St, Springfield",
+    property_city: "Springfield",
+    status: "active",
+    detection_status: "confirmed",
+    ...extra,
+  };
+  const keys = Object.keys(cols);
+  db.prepare(`INSERT INTO transactions (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(
+    ...keys.map((k) => cols[k]),
+  );
+}
+
+export function enableUser(
+  db: TestDb,
+  userId: string = USER_A,
+  project: string = PROJECT,
+  opts: { reconciledAt?: string | null } = {},
+): void {
+  db.prepare(
+    "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at, last_state_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z', ?) ON CONFLICT (project_ref, user_id) DO UPDATE SET enabled = 1, local_confirmed_at = excluded.local_confirmed_at",
+  ).run(project, userId, opts.reconciledAt === undefined ? RECONCILED_AT : opts.reconciledAt);
+}
+
+/** The harness clock's "now": a reconcile recorded then is not due again in these suites. */
+export const RECONCILED_AT = "2026-11-14T12:00:00.000Z";
+
+export function dirty(db: TestDb): Array<{ transaction_id: string; generation: number; attempts: number; next_attempt_at: string | null; last_error_code: string | null }> {
+  return db.prepare("SELECT transaction_id, generation, attempts, next_attempt_at, last_error_code FROM cloud_sync_dirty ORDER BY transaction_id").all() as never;
+}
+
+export function dirtyCount(db: TestDb): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_dirty").get() as { n: number }).n;
+}
+
+export function triggerNames(db: TestDb): string[] {
+  return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_cloud_sync_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+}
+
+// ---------------------------------------------------------------- PR-3 child fixtures (invented)
+
+export function insertContact(
+  db: TestDb,
+  id: string,
+  userId: string = USER_A,
+  extra: Record<string, unknown> = {},
+): void {
+  const cols: Record<string, unknown> = { id, user_id: userId, display_name: `Person ${id}`, source: "manual", ...extra };
+  const keys = Object.keys(cols);
+  db.prepare(`INSERT INTO contacts (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(...keys.map((k) => cols[k]));
+}
+
+export function insertParty(db: TestDb, id: string, dealIdValue: string, contactId: string, extra: Record<string, unknown> = {}): void {
+  const cols: Record<string, unknown> = { id, transaction_id: dealIdValue, contact_id: contactId, role: "buyer", role_category: "client", ...extra };
+  const keys = Object.keys(cols);
+  db.prepare(`INSERT INTO transaction_contacts (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(
+    ...keys.map((k) => cols[k]),
+  );
+}
+
+export function insertEmail(db: TestDb, id: string, contactId: string, email: string, primary = 0): void {
+  db.prepare("INSERT INTO contact_emails (id, contact_id, email, is_primary) VALUES (?, ?, ?, ?)").run(id, contactId, email, primary);
+}
+
+export function insertPhone(db: TestDb, id: string, contactId: string, e164: string, primary = 0): void {
+  db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display, is_primary) VALUES (?, ?, ?, ?, ?)").run(
+    id,
+    contactId,
+    e164,
+    e164,
+    primary,
+  );
+}
+
+export function insertSourceLink(db: TestDb, id: string, contactId: string, sourceType: string, userId: string = USER_A): void {
+  db.prepare(
+    "INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method) VALUES (?, ?, ?, ?, ?, 'source_id')",
+  ).run(id, userId, contactId, sourceType, `rec-${id}`);
+}
+
+export function insertChecklist(db: TestDb, id: string, dealIdValue: string, templateId = "tpl-1"): void {
+  db.prepare("INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES (?, ?, ?, 'List')").run(
+    id,
+    dealIdValue,
+    templateId,
+  );
+}
+
+export function insertItem(db: TestDb, id: string, checklistId: string, title = "Task"): void {
+  db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES (?, ?, ?)").run(id, checklistId, title);
+}

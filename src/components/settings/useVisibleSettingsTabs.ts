@@ -35,7 +35,11 @@ export interface VisibleSettingsTabs {
   learnAvailable: boolean;
 }
 
-export function useVisibleSettingsTabs(): VisibleSettingsTabs {
+/**
+ * @param cloudVisible BACKLOG-4243: main reports the Keepr Cloud section visible
+ *   (only the Settings page passes it; the account side panel lists no Cloud row).
+ */
+export function useVisibleSettingsTabs(cloudVisible: boolean = false): VisibleSettingsTabs {
   const session = useSessionSettingsReads();
   const hasProvider = session !== null;
   const [localPlan, setLocalPlan] = useState<SessionPlanFeatures | null>(null);
@@ -73,8 +77,8 @@ export function useVisibleSettingsTabs(): VisibleSettingsTabs {
   const learnAvailable = learn === "allowed";
 
   const tabs = useMemo(
-    () => (ready ? visibleSettingsTabs(hasAIAddon, learnAvailable) : null),
-    [ready, hasAIAddon, learnAvailable],
+    () => (ready ? visibleSettingsTabs(hasAIAddon, learnAvailable, cloudVisible) : null),
+    [ready, hasAIAddon, learnAvailable, cloudVisible],
   );
   return useMemo(() => ({ tabs, learnAvailable }), [tabs, learnAvailable]);
 }

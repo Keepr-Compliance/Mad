@@ -13,6 +13,7 @@ import { billingNavVisible } from '@/lib/billing/capabilities';
 import { listMyReports } from '@/lib/reports/report-gate';
 import { loadCaptureNotice } from '@/lib/domain/captureView';
 import CaptureNoticeBanner from '@/components/CaptureNoticeBanner';
+import { mcpEnabled } from '@/lib/mcp/config';
 
 export default async function DashboardLayout({
   children,
@@ -104,6 +105,7 @@ export default async function DashboardLayout({
       showBilling={showBilling}
       suspended={suspended}
       orgSuspended={orgSuspended}
+      mcpOn={mcpEnabled()}
     >
       {captureNotice && (
         <Suspense fallback={null}>

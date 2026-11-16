@@ -86,6 +86,8 @@ describe('kept', () => {
     '/dashboard?tab=1',
     '/dashboard#top',
     '/dashboard/billing?from=desktop',
+    // BACKLOG-4238: the consent page, with a request id of the real shape (22 base64url characters).
+    '/dashboard/account/ai-apps/connect/-_v7-_v7-_v7-_v7-_v7-w',
   ])('%s', (raw) => {
     expect(safeNextPath(raw)).toBe(raw);
   });

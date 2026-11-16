@@ -58,7 +58,11 @@ describe('instrumentation.ts', () => {
     await register({ NEXT_RUNTIME: 'edge', SENTRY_DSN: 'https://k@o1.ingest.sentry.io/2' });
     expect(mockInit).toHaveBeenCalledTimes(1);
     expect(mockInit.mock.calls[0][0]).toMatchObject({ enabled: true });
-    expect(mockInit.mock.calls[0][0].beforeSend).toBeUndefined();
+    // BACKLOG-4237: the edge config's only hooks are the /api/mcp and /oauth request scrub.
+    const opts = mockInit.mock.calls[0][0];
+    const event = { request: { url: 'https://portal.test/oauth/authorize', headers: { cookie: 'x' } } };
+    expect(opts.beforeSend(event).request.headers).toBeUndefined();
+    expect(opts.beforeSendTransaction).toEqual(expect.any(Function));
   });
 
   it('no runtime (build step) initialises nothing', async () => {

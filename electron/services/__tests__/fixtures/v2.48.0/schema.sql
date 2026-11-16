@@ -1,0 +1,2138 @@
+-- ============================================
+-- MAD - LOCAL SQLite DATABASE SCHEMA
+-- ============================================
+-- ===================================================================
+-- GENERATED — DO NOT HAND-EDIT (BACKLOG-2993)
+-- ===================================================================
+-- Produced by electron/services/__tests__/generateSchemaBaseline.gen.ts.
+-- Regeneration steps are in that file's header.
+--
+-- source commit : 0bd6703bbe957417f7e01a0446d34185d1c7094c
+-- generated     : 2026-08-30
+-- declared schema_version: 70
+-- producer      : OLD electron/database/schema.sql + the FULL migration
+--                 chain (v30..v69) run through the real runner, dumped
+--                 from sqlite_master and rewritten with IF NOT EXISTS.
+-- 
+-- This file is the POST-RESET BASELINE (BACKLOG-2993): the complete
+-- v69-chain shape, declared as version 70. The migration chain that
+-- carried v30..v69 was deleted in the same change. Fresh installs get
+-- this file and nothing else; databases below version 70 are REFUSED
+-- by the baseline fence in databaseService (they predate the reset and
+-- no upgrade path exists any more).
+-- 
+-- Hand-edits are caught by databaseService.schema-parity.test.ts,
+-- which diffs a fresh exec of this file against the frozen transcript
+-- fixtures/chain-v69-schema.sql.
+-- ===================================================================
+
+BEGIN TRANSACTION;
+
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  message_id TEXT,                       -- FK to messages (iMessage attachments) - nullable for email attachments
+  email_id TEXT,                         -- TASK-1775: FK to emails (Gmail/Outlook attachments)
+  external_message_id TEXT,              -- TASK-1110: macOS message GUID for stable linking
+
+  -- File Info
+  filename TEXT NOT NULL,
+  mime_type TEXT,
+  file_size_bytes INTEGER,
+  storage_path TEXT,                     -- Local file path
+  -- BACKLOG-2551: the provider's own id for this attachment (Outlook Graph
+  -- attachment id). Nullable: rows predating v71 have none, and Gmail rows
+  -- deliberately leave it NULL (Google documents no stability property for
+  -- Gmail's attachmentId, so it is not used as an identity key -- see
+  -- BACKLOG-3187). idx_attachments_email_provider is created by MIGRATION v71,
+  -- NOT here: a standalone CREATE INDEX naming this column aborts this file's
+  -- unconditional exec on every database that predates the column.
+  provider_attachment_id TEXT,
+
+  -- Extracted Content (for LLMs)
+  text_content TEXT,                     -- OCR / extracted text from PDFs
+
+  -- Document Classification
+  document_type TEXT,                    -- offer, inspection, disclosure, contract, appraisal, amendment, addendum, other
+  document_type_confidence REAL,
+  document_type_source TEXT CHECK (document_type_source IN ('pattern', 'llm', 'user')),
+
+  -- Analysis Results (JSON)
+  -- Contains extracted fields: dates, amounts, parties, etc.
+  analysis_metadata TEXT,
+
+  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
+  sync_session_id TEXT,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+  -- Note: CHECK (message_id IS NOT NULL OR email_id IS NOT NULL) enforced by service layer
+  -- because SQLite CREATE TABLE IF NOT EXISTS won't update existing tables
+  CHECK (message_id IS NOT NULL OR email_id IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS "audit_logs" (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            session_id TEXT,
+            action TEXT NOT NULL CHECK (action IN (
+              'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'SESSION_REFRESH',
+              'TRANSACTION_CREATE', 'TRANSACTION_UPDATE', 'TRANSACTION_DELETE',
+              'TRANSACTION_SUBMIT',
+              'CONTACT_CREATE', 'CONTACT_UPDATE', 'CONTACT_DELETE',
+              'DATA_ACCESS', 'DATA_EXPORT', 'DATA_DELETE',
+              'EXPORT_START', 'EXPORT_COMPLETE', 'EXPORT_FAIL',
+              'MAILBOX_CONNECT', 'MAILBOX_DISCONNECT',
+              'SETTINGS_CHANGE', 'SETTINGS_UPDATE', 'TERMS_ACCEPT'
+            )),
+            resource_type TEXT,
+            resource_id TEXT,
+            details TEXT,
+            metadata TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            success INTEGER DEFAULT 1,
+            error_message TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            synced_at DATETIME,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          );
+
+CREATE TABLE IF NOT EXISTS audit_packages (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+
+  -- Package Info
+  generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  format TEXT CHECK (format IN ('pdf', 'zip', 'json', 'excel')),
+  storage_path TEXT,                     -- Local file path to package
+
+  -- Content Summary
+  message_count INTEGER,
+  attachment_count INTEGER,
+  date_range_start DATETIME,
+  date_range_end DATETIME,
+
+  -- LLM-Generated Summary
+  summary TEXT,
+
+  -- Quality Score
+  completeness_score REAL,               -- 0.0 - 1.0, how complete is this audit
+
+  -- Version tracking (for regeneration)
+  version INTEGER DEFAULT 1,
+
+  -- Metadata
+  metadata TEXT,
+
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS classification_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+
+  -- What was corrected
+  message_id TEXT,
+  attachment_id TEXT,
+  transaction_id TEXT,
+  contact_id TEXT,
+
+  -- Feedback Type
+  feedback_type TEXT CHECK (feedback_type IN (
+    'message_relevance',                 -- Was this email transaction-related?
+    'transaction_link',                  -- Which transaction does this belong to?
+    'document_type',                     -- What type of document is this?
+    'contact_role',                      -- What role does this contact have?
+    'stage_hint'                         -- What stage is this message from?
+  )),
+
+  -- Values (stored as text for flexibility)
+  original_value TEXT,
+  corrected_value TEXT,
+  reason TEXT,                           -- Why the correction was made
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL,
+  FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE SET NULL,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+  FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT,                     -- Nullable: may link content before transaction exists
+
+  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
+  message_id TEXT,                         -- FK to messages (for texts)
+  email_id TEXT,                           -- FK to emails (for emails)
+  thread_id TEXT,                          -- For batch-linking all texts in a thread
+
+  -- Link metadata
+  link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
+  link_confidence REAL,
+  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, match_reason TEXT,
+
+  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
+  CHECK (
+    (message_id IS NOT NULL AND email_id IS NULL)
+    OR (email_id IS NOT NULL AND message_id IS NULL)
+    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
+  )
+);
+
+CREATE TABLE IF NOT EXISTS contact_emails (
+  id TEXT PRIMARY KEY,
+  contact_id TEXT NOT NULL,
+
+  email TEXT NOT NULL,
+  is_primary INTEGER DEFAULT 0,
+  label TEXT,                            -- work, personal, etc.
+  source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+  UNIQUE(contact_id, email)
+);
+
+CREATE TABLE IF NOT EXISTS contact_link_proposals (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    contact_id TEXT,
+    source_type TEXT CHECK (
+      source_type IS NULL OR
+      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+    ),
+    source_record_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+      status IN ('pending', 'confirmed', 'rejected')
+    ),
+    reason TEXT NOT NULL,
+    matched_on TEXT,
+    identity_assessment TEXT NOT NULL CHECK (
+      identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
+    ),
+    relationship_assessment TEXT NOT NULL CHECK (
+      relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
+    ),
+    cluster_key TEXT NOT NULL,
+    evidence_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    pair_kind TEXT NOT NULL DEFAULT 'record_contact' CHECK (
+      pair_kind IN ('record_contact', 'record_record', 'contact_contact')
+    ),
+    target_contact_id TEXT,
+    target_source_type TEXT CHECK (
+      target_source_type IS NULL OR
+      target_source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+    ),
+    target_source_record_id TEXT,
+    subject_side TEXT NOT NULL DEFAULT 'a' CHECK (subject_side IN ('a', 'b')),
+    pair_key TEXT GENERATED ALWAYS AS (
+      CASE pair_kind
+        WHEN 'record_contact' THEN
+          'c:' || contact_id || '|r:' || source_type || ':' || source_record_id
+        WHEN 'contact_contact' THEN
+          'c:' || min(contact_id, target_contact_id) ||
+          '|c:' || max(contact_id, target_contact_id)
+        WHEN 'record_record' THEN
+          min('r:' || source_type || ':' || source_record_id,
+              'r:' || target_source_type || ':' || target_source_record_id) ||
+          '|' ||
+          max('r:' || source_type || ':' || source_record_id,
+              'r:' || target_source_type || ':' || target_source_record_id)
+      END
+    ) STORED,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    CHECK (
+      (pair_kind = 'record_contact'
+        AND contact_id IS NOT NULL
+        AND source_type IS NOT NULL AND source_record_id IS NOT NULL
+        AND target_contact_id IS NULL
+        AND target_source_type IS NULL AND target_source_record_id IS NULL
+        AND subject_side = 'a')
+      OR (pair_kind = 'record_record'
+        AND contact_id IS NULL AND target_contact_id IS NULL
+        AND source_type IS NOT NULL AND source_record_id IS NOT NULL
+        AND target_source_type IS NOT NULL AND target_source_record_id IS NOT NULL
+        AND NOT (source_type = target_source_type
+                 AND source_record_id = target_source_record_id))
+      OR (pair_kind = 'contact_contact'
+        AND contact_id IS NOT NULL AND target_contact_id IS NOT NULL
+        AND contact_id <> target_contact_id
+        AND source_type IS NULL AND source_record_id IS NULL
+        AND target_source_type IS NULL AND target_source_record_id IS NULL)
+    ),
+    UNIQUE (user_id, contact_id, source_type, source_record_id),
+    UNIQUE (user_id, pair_key)
+  );
+
+CREATE TABLE IF NOT EXISTS contact_link_verdicts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    contact_id TEXT,
+    source_type TEXT CHECK (
+      source_type IS NULL OR
+      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+    ),
+    source_record_id TEXT,
+    identity_verdict TEXT NOT NULL CHECK (
+      identity_verdict IN ('same_person', 'possibly_same_person', 'different_people')
+    ),
+    relationship_verdict TEXT CHECK (
+      relationship_verdict IN ('connected', 'possibly_connected', 'no_known_connection')
+    ),
+    reason TEXT,
+    matched_on TEXT,
+    evidence_json TEXT,
+    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    decided_by TEXT NOT NULL DEFAULT 'user',
+    pair_kind TEXT NOT NULL DEFAULT 'record_contact' CHECK (
+      pair_kind IN ('record_contact', 'record_record', 'contact_contact')
+    ),
+    target_contact_id TEXT,
+    target_source_type TEXT CHECK (
+      target_source_type IS NULL OR
+      target_source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+    ),
+    target_source_record_id TEXT,
+    subject_side TEXT NOT NULL DEFAULT 'a' CHECK (subject_side IN ('a', 'b')),
+    pair_key TEXT GENERATED ALWAYS AS (
+      CASE pair_kind
+        WHEN 'record_contact' THEN
+          'c:' || contact_id || '|r:' || source_type || ':' || source_record_id
+        WHEN 'contact_contact' THEN
+          'c:' || min(contact_id, target_contact_id) ||
+          '|c:' || max(contact_id, target_contact_id)
+        WHEN 'record_record' THEN
+          min('r:' || source_type || ':' || source_record_id,
+              'r:' || target_source_type || ':' || target_source_record_id) ||
+          '|' ||
+          max('r:' || source_type || ':' || source_record_id,
+              'r:' || target_source_type || ':' || target_source_record_id)
+      END
+    ) STORED,
+    CHECK (
+      (pair_kind = 'record_contact'
+        AND contact_id IS NOT NULL
+        AND source_type IS NOT NULL AND source_record_id IS NOT NULL
+        AND target_contact_id IS NULL
+        AND target_source_type IS NULL AND target_source_record_id IS NULL
+        AND subject_side = 'a')
+      OR (pair_kind = 'record_record'
+        AND contact_id IS NULL AND target_contact_id IS NULL
+        AND source_type IS NOT NULL AND source_record_id IS NOT NULL
+        AND target_source_type IS NOT NULL AND target_source_record_id IS NOT NULL
+        AND NOT (source_type = target_source_type
+                 AND source_record_id = target_source_record_id))
+      OR (pair_kind = 'contact_contact'
+        AND contact_id IS NOT NULL AND target_contact_id IS NOT NULL
+        AND contact_id <> target_contact_id
+        AND source_type IS NULL AND source_record_id IS NULL
+        AND target_source_type IS NULL AND target_source_record_id IS NULL)
+    )
+  );
+
+CREATE TABLE IF NOT EXISTS contact_phones (
+  id TEXT PRIMARY KEY,
+  contact_id TEXT NOT NULL,
+
+  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
+  phone_display TEXT,                    -- Display format: (415) 555-0102
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key. BACKLOG-2630: E.164 digits via libphonenumber (was last 10 digits); migration v64 re-keys existing rows
+  is_primary INTEGER DEFAULT 0,
+  label TEXT,                            -- mobile, home, work, etc.
+  source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+  UNIQUE(contact_id, phone_e164)
+);
+
+CREATE TABLE IF NOT EXISTS "contact_source_links" (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK (
+      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync',
+                      'manual', 'email', 'sms', 'inferred')
+    ),
+    source_record_id TEXT NOT NULL,
+    external_uuid TEXT,
+    match_method TEXT NOT NULL CHECK (
+      match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored', 'origin')
+    ),
+    confidence REAL,
+    matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    evidence_ref TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    UNIQUE (user_id, source_type, source_record_id)
+  );
+
+CREATE TABLE IF NOT EXISTS "contacts" (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            company TEXT,
+            title TEXT,
+            source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
+            last_inbound_at DATETIME,
+            last_outbound_at DATETIME,
+            total_messages INTEGER DEFAULT 0,
+            tags TEXT,
+            is_imported INTEGER DEFAULT 1,
+            default_role TEXT,
+            metadata TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, removed_at DATETIME, removed_reason TEXT,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          );
+
+CREATE TABLE IF NOT EXISTS data_clear_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
+  account_id TEXT,
+  counts_json TEXT,
+  app_version TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  cloud_synced_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS email_participants (
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+  position INTEGER NOT NULL,
+  participant_hash TEXT NOT NULL,      -- BACKLOG-1722: deterministic SHA-256 of email_id|role|position|email_address; stable cross-row dedup key + future embedding key
+  email_address TEXT NOT NULL,
+  display_name TEXT,
+  resolved_contact_id TEXT,
+  PRIMARY KEY (email_id, role, position),
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  raw_value TEXT,
+  reason TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_sync_state (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
+  phase TEXT NOT NULL DEFAULT 'active' CHECK (phase IN ('active', 'cleared', 'invalid')),
+  cursor TEXT,
+  newest_cached_at DATETIME,
+  oldest_cached_at DATETIME,
+  last_reconciled_at DATETIME,
+  last_error TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS email_tombstones (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  message_id_header TEXT,
+  reason TEXT NOT NULL CHECK (reason IN ('server_gone', 'user_clear', 'reconcile')),
+  deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id, external_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS emails (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+
+  -- Source identification
+  external_id TEXT,                    -- Gmail/Outlook message ID
+  source TEXT CHECK (source IN ('gmail', 'outlook')),
+  account_id TEXT,                     -- Which email account
+
+  -- Direction
+  direction TEXT CHECK (direction IN ('inbound', 'outbound')),
+
+  -- Content
+  subject TEXT,
+  body_plain TEXT,                     -- Plain text version
+  body_html TEXT,                      -- HTML version
+
+  -- Participants
+  sender TEXT,                         -- From address
+  recipients TEXT,                     -- To addresses (comma-separated)
+  cc TEXT,
+  bcc TEXT,
+
+  -- Threading
+  thread_id TEXT,                      -- Email thread/conversation ID
+  in_reply_to TEXT,                    -- Message-ID of parent
+  references_header TEXT,              -- References header for threading
+
+  -- Timestamps
+  -- BACKLOG-2571: sent_at is the SENDER-ASSERTED send time (Gmail `Date:`
+  -- header, Outlook `sentDateTime`); received_at is when the server took
+  -- delivery. They were the same value on every row until BACKLOG-2571, because
+  -- both derived from the provider's receive timestamp. A difference between
+  -- them is now meaningful — it is the send↔receive delta.
+  --
+  -- Rows written BEFORE that fix still hold a receive time in sent_at, and
+  -- nothing on disk distinguishes them: the send time was never stored (Outlook's
+  -- sentDateTime reached only the content hash; Gmail's `Date:` header was not
+  -- read at all), so there is nothing to backfill from. A provider re-sync
+  -- rewrites them; no marker column records the difference, by founder decision
+  -- 2026-08-09 — the only rows affected were one developer's test data.
+  sent_at DATETIME,
+  received_at DATETIME,
+
+  -- Attachments
+  has_attachments INTEGER DEFAULT 0,
+  attachment_count INTEGER DEFAULT 0,
+
+  -- Deduplication
+  message_id_header TEXT,              -- RFC 5322 Message-ID
+  content_hash TEXT,                   -- SHA-256 for dedup
+
+  -- Metadata
+  labels TEXT,                         -- JSON: Gmail labels, Outlook categories
+  classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
+  -- BACKLOG-2513: retained bulk-mail headers as JSON (List-Unsubscribe,
+  -- List-Unsubscribe-Post, Precedence, Auto-Submitted, Authentication-Results).
+  -- Negative-filter input for auto-detection (BACKLOG-2500 s4.2). No reader
+  -- today, by design: raw facts are stored, classification is deferred.
+  --
+  -- Kept in sync with migration v62 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. This declaration is a
+  -- READABILITY convention (matching validated_at/ingest_source below), NOT a
+  -- parity requirement: schema-parity exec's schema.sql on BOTH of its paths,
+  -- so the migration alone would satisfy it (cf. v56's tombstone columns, which
+  -- are declared on neither table and still converge). It is safe here only
+  -- because `emails` is never positionally copied by any migration.
+  --
+  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql
+  -- is exec'd BEFORE the migration chain, so an index on a not-yet-added column
+  -- throws "no such column" on every real upgrade (BACKLOG-2298/2300).
+  bulk_mail_headers TEXT,
+
+  -- Lifecycle provenance (BACKLOG-1801, Phase 2 "Validated Evidence Cache").
+  -- Kept byte-for-byte in sync with migration v46 (ALTER TABLE ... ADD COLUMN).
+  validated_at TEXT,                   -- when a $search-sourced row was existence-confirmed server-side (NULL = not validated)
+  ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual')),
+
+  -- Derivation provenance (BACKLOG-2857). validated_at/ingest_source above stamp
+  -- HOW a row was produced; this stamps WHICH VERSION of the derivation logic
+  -- produced it, so a later mapper fix can find and repair its own history
+  -- instead of needing a human to remember the fix exists.
+  --
+  -- An INTEGER, not a boolean: a bit can only say "stale", and once the first
+  -- reprocess flips it a SECOND fix cannot tell rows that already received fix #1
+  -- from rows still on the original. An integer records exactly which
+  -- transformations a row has seen, so two fixes months apart compose and only
+  -- the missing steps run. Per ROW, not per account, because that is what makes
+  -- a reprocess resumable: kill the app mid-pass and every row's stamp is still
+  -- accurate, so the next run continues rather than restarting.
+  --
+  -- DEFAULT 0 is load-bearing. Every row written before this column existed is BY
+  -- DEFINITION at version 0 (the pre-BACKLOG-2855 body_plain derivation), which is
+  -- exactly the set the reprocess pass must find. Do NOT backfill it to CURRENT —
+  -- that would declare every legacy row already repaired and silently strand the
+  -- truncated bodies this exists to fix.
+  --
+  -- Kept in sync with migration v67 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install, matching the v46
+  -- validated_at/ingest_source and v62 bulk_mail_headers convention.
+  --
+  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql is
+  -- exec'd BEFORE the migration chain, so an index on a not-yet-added column throws
+  -- "no such column" on every real upgrade (BACKLOG-2298/2300/2750 — shipped broken
+  -- in July, caught only by founder live QA). The partial index serving
+  -- `WHERE derived_version < ?` ships INSIDE v67, which covers both paths: fresh
+  -- installs seed schema_version at BASELINE_VERSION and replay the chain.
+  derived_version INTEGER NOT NULL DEFAULT 0,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS external_contacts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT,
+  phones_json TEXT,
+  phones_normalized_json TEXT,           -- BACKLOG-1727: JSON array of lookup keys parallel to phones_json
+  emails_json TEXT,
+  company TEXT,
+  last_message_at DATETIME,
+  external_record_id TEXT,
+  source TEXT DEFAULT 'macos',
+  synced_at DATETIME,
+  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
+  sync_session_id TEXT, external_uuid TEXT, source_identity_json TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  UNIQUE(user_id, source, external_record_id)
+);
+
+CREATE TABLE IF NOT EXISTS extracted_transaction_data (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+
+  -- Extracted Field
+  field_name TEXT NOT NULL,              -- closing_date, sale_price, etc.
+  field_value TEXT,
+
+  -- Source
+  source_message_id TEXT,
+  extraction_method TEXT CHECK (extraction_method IN ('pattern', 'llm', 'user')),
+  confidence_score REAL,
+
+  -- Verification
+  manually_verified INTEGER DEFAULT 0,
+  verified_at DATETIME,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS failure_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+  operation TEXT NOT NULL,
+  error_message TEXT NOT NULL,
+  metadata TEXT,
+  acknowledged INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ignored_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
+  -- match incoming emails during scans. email_id below is the real reference.
+  email_subject TEXT,
+  email_sender TEXT,
+  email_sent_at TEXT,
+  email_thread_id TEXT,
+
+  -- BACKLOG-1560: Direct ID references for reliable suppression during auto-link
+  email_id TEXT,                          -- FK to emails table (for email suppression)
+  thread_id TEXT,                         -- Thread ID (for text message thread suppression)
+
+  -- Original communication reference (if available)
+  original_communication_id TEXT,
+
+  -- Reason for ignoring (optional user note)
+  reason TEXT,
+
+  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP, match_reason TEXT,
+
+  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
+  -- are cleaned up when their email is deleted.
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS llm_settings (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE,
+
+  -- Provider Config
+  openai_api_key_encrypted TEXT,         -- Encrypted OpenAI API key
+  anthropic_api_key_encrypted TEXT,      -- Encrypted Anthropic API key
+  preferred_provider TEXT DEFAULT 'openai' CHECK (preferred_provider IN ('openai', 'anthropic')),
+  openai_model TEXT DEFAULT 'gpt-4o-mini',
+  anthropic_model TEXT DEFAULT 'claude-3-haiku-20240307',
+
+  -- Usage Tracking
+  tokens_used_this_month INTEGER DEFAULT 0,
+  budget_limit_tokens INTEGER,
+  budget_reset_date DATE,
+
+  -- Platform Allowance
+  platform_allowance_tokens INTEGER DEFAULT 0,
+  platform_allowance_used INTEGER DEFAULT 0,
+  use_platform_allowance INTEGER DEFAULT 0,
+
+  -- Feature Flags
+  -- BACKLOG-2313: auto-detect defaults OFF. The transaction auto-detect scan is
+  -- now gated on BOTH ai_detection entitlement AND this opt-in toggle (see
+  -- emailSyncHandlers.isAutoDetectAllowed), so fresh installs must not auto-create
+  -- transactions until the user explicitly opts in. Existing rows are unchanged
+  -- (no migration); only new rows created via createLLMSettings pick up this default.
+  enable_auto_detect INTEGER DEFAULT 0,
+  enable_role_extraction INTEGER DEFAULT 1,
+
+  -- Consent (Security Option C)
+  llm_data_consent INTEGER DEFAULT 0,
+  llm_data_consent_at DATETIME,
+
+  -- Timestamps
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3343: iPhone sync sessions that started and have not finished (or rolled back).
+CREATE TABLE IF NOT EXISTS iphone_sync_open_sessions (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS message_import_state (
+  user_id TEXT PRIMARY KEY,
+  last_import_at DATETIME,
+  last_expansion_at DATETIME,
+  deepest_import_start DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658: Google Messages for Web cache state, per user, on THIS device.
+-- opted_in_at: the user agreed to keep a local copy of recent chats (local only).
+-- last_cache_finished_at: the last cache Sync that finished (next one starts 1 day before).
+-- own_number: the user's own number, once 3+ chats agreed (left out of chat keys).
+-- extension_*: what the extension last reported (POST /hello).
+CREATE TABLE IF NOT EXISTS rcs_cache_state (
+  user_id TEXT PRIMARY KEY,
+  opted_in_at DATETIME,
+  last_cache_finished_at DATETIME,
+  own_number TEXT,
+  extension_version TEXT,
+  extension_seen_at DATETIME,
+  paired_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658: the cache Sync's staging area. A cache job COLLECTS every
+-- chat here first; only a finished job commits it to messages (one database
+-- transaction, limited by the user's months / max-messages settings).
+-- Cancel, error, a user switch or app quit discards the job's rows. Rows
+-- exist only while a job runs (any found when a new job starts are stale).
+-- Images are staged as files under <userData>/rcs-cache-staging/<job id>/.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chats (
+  job_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,               -- rcsChatHash of the Details numbers
+  conversation_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  people_json TEXT NOT NULL,             -- RcsChatPeople
+  staged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_messages (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  sent_at TEXT NOT NULL,                 -- ISO-8601, as the page sent it
+  seq INTEGER NOT NULL,                  -- position in the chat as sent
+  message_json TEXT NOT NULL,            -- RcsIncomingMessage, reactions included
+  PRIMARY KEY (job_id, chat_hash, msg_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_cache_staging_messages_sent ON rcs_cache_staging_messages(job_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  temp_path TEXT NOT NULL,
+  PRIMARY KEY (job_id, chat_hash, msg_id, idx)
+);
+
+-- 3671 P3 (SR 2026-10-03): per-chat commits. A cache job's own record, kept
+-- with its staging so a run a crash cut short can still save its finished
+-- chats at the next start (same user, started within 7 days): the user, the
+-- start time, the limits (JSON) and the read (JSON). Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_jobs (
+  job_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  limits_json TEXT NOT NULL,             -- CacheLimits (chat floors excluded)
+  read_json TEXT NOT NULL                -- { fullRead, floorISO, mediaPending }
+);
+
+-- 3671 P3: what the page said of each staged chat — its own floor (a live
+-- deal), the floor it was asked to read down to, whether it got there, and
+-- when it was read. Chat hashes only. Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chat_meta (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  chat_floor_ms INTEGER,
+  read_floor_ms INTEGER,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+-- 3671 P3: when each saved chat was last read, and whether down to its floor
+-- (chat hash, never a conversation id). "Try again" after a failed run skips
+-- a chat read at or after that run's start that reached its floor.
+CREATE TABLE IF NOT EXISTS rcs_chat_reads (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- 3671 P3: the user's last cache run FAILED (its finished chats were saved);
+-- the next run is "Try again". Cleared by a fully finished run and by Force
+-- re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_failed_run (
+  user_id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 (SR S2): files a cache commit moves into message-attachments,
+-- journaled before the move and cleared once the commit is done. A
+-- row left behind (a crash) names a file the next sweep deletes when no
+-- attachments row uses it.
+CREATE TABLE IF NOT EXISTS rcs_cache_placed_files (
+  path TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  placed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- BACKLOG-3658 P3b: the user's consent to the Google Messages cache, and its
+-- options. Keepr's record is the ONLY gate for a cache Sync: a consent_version
+-- below the current one blocks the NEXT Sync (re-consent). contacts_only
+-- (feature flag, off) keeps only chats with a transaction contact;
+-- auto_delete_days (off = NULL; 90 when on) deletes chats linked to nothing
+-- whose last message is older than that. A new table (not a column) so this
+-- branch needs no versioned migration; it folds into one at merge.
+CREATE TABLE IF NOT EXISTS rcs_consent (
+  user_id TEXT PRIMARY KEY,
+  consent_at DATETIME,
+  consent_version INTEGER,
+  contacts_only INTEGER NOT NULL DEFAULT 0,
+  auto_delete_days INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 P3c: chats the user switched off ("Don't sync") with the eye on
+-- their row in Google Messages. conversation_id is what the page knows; the
+-- chat's hash (gmweb2 key) is recorded at the next /match so the exclusion
+-- survives a re-pair. Nothing already imported is deleted.
+CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT,
+  conversation_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
+
+-- Live (0.3.15): chats switched back ON. The next cache Sync reads them in
+-- full whatever their age; each row is cleared once its chat is saved.
+CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT,
+  chat_hash TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
+
+-- BACKLOG-3666: the extension paired with this Keepr (SPAKE2, pair-protocol.js).
+-- key_hex: the session key (HMAC-SHA256), in this encrypted database only.
+-- One pairing per user: a re-pair replaces it; sign-out removes it.
+CREATE TABLE IF NOT EXISTS rcs_extension_pairings (
+  pair_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  key_hex TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M (2026-10-02): Google Messages media options, per user, on THIS device.
+-- photos_all_chats: keep photos of every chat in the window (default ON), not
+-- only chats with a transaction contact; videos_all_chats likewise (default
+-- OFF; videos are counted, not downloaded, until the video bubble is traced).
+-- last_*_seen: the bubbles the last Sync counted (the video storage estimate).
+CREATE TABLE IF NOT EXISTS rcs_media_options (
+  user_id TEXT PRIMARY KEY,
+  photos_all_chats INTEGER NOT NULL DEFAULT 1,
+  videos_all_chats INTEGER NOT NULL DEFAULT 0,
+  last_photos_seen INTEGER,
+  last_videos_seen INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M: a media toggle was switched ON: the next cache Sync reads every chat
+-- down to the floor so existing chats get their media; cleared by its commit.
+CREATE TABLE IF NOT EXISTS rcs_pending_media (
+  user_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
+-- Google Messages chat Keepr stored, with the name the phone's address book
+-- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never
+-- sent anywhere. Read as contact suggestions (number = the key, never the
+-- name); cleared with the texts by both Android Force re-imports and auto-delete.
+CREATE TABLE IF NOT EXISTS rcs_chat_people (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  number_e164 TEXT NOT NULL,
+  name TEXT,
+  last_message_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash, number_e164),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_people_number ON rcs_chat_people(user_id, number_e164);
+
+-- BACKLOG-3658 L2: the last finished Google Messages cache run per user (its
+-- floor, full read or not, how the list scan stopped, whether it reached its
+-- floor, and how many chats it could not confirm complete). Backfills the
+-- coverage; drives "N chats may be incomplete". Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_runs (
+  user_id TEXT PRIMARY KEY,
+  floor_iso DATETIME NOT NULL,
+  full_read INTEGER NOT NULL DEFAULT 0,
+  list_stop TEXT,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  not_settled_chats INTEGER NOT NULL DEFAULT 0,
+  finished_at DATETIME NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3663: how far back each text source's import is known to reach
+-- ("covered since"), per user. General (any source); today written by the
+-- Google Messages cache — in its commit transaction, and only when that run
+-- read down to its floor. Mac reads message_import_state; iPhone and the
+-- Android companion fall back to MIN(sent_at) ("approximate") until their
+-- importers write here (follow-up).
+-- SR (2026-10-02): per-chat coverage of Google Messages, keyed by the CHAT
+-- HASH (never a conversation id). A chat on a live deal may be read further
+-- back than the months setting (to the deal's audit start); the source row
+-- below keeps its meaning (every chat down to the settings floor) and is
+-- never raised by such a chat. Written in the cache commit's transaction,
+-- only for a chat whose history reached its floor. A chat with no row is
+-- covered as far as the source row says. Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_chat_coverage (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS message_source_coverage (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,                   -- iphone | mac | android_companion | google_messages
+  covered_since DATETIME,
+  last_sync_at DATETIME,
+  PRIMARY KEY (user_id, source),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: iPhone text coverage, PER PHONE (udid). An iPhone sync reads
+-- only the texts lookback (plus deal chats back to the deal start), so the oldest
+-- stored iPhone text no longer says how far back the phone was read; these rows
+-- do. Written by iPhone sync persistence, in one transaction at its commit point,
+-- only for a run with no failed sms.db read, from the floors the run APPLIED.
+-- One interval per phone: [covered_since, last_sync_at]. A run reading [F, T]
+-- merges with the prior interval only when last_sync_at >= F; otherwise
+-- covered_since restarts at F. last_sync_at = when the run started (before its
+-- backup). approximate = the interval was seeded from stored texts (an upgrader's
+-- first sync after this change). The phone with the latest last_sync_at is the
+-- user's current phone. No row = iPhone coverage unknown ("never").
+CREATE TABLE IF NOT EXISTS iphone_device_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  last_sync_at DATETIME NOT NULL,
+  approximate INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one iPhone chat (sms.db chat ROWID, per phone: a replacement
+-- phone reuses ROWIDs) read further back than the lookback, to covered_since,
+-- by the run that started at scanned_at.
+CREATE TABLE IF NOT EXISTS iphone_chat_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  chat_rowid INTEGER NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, chat_rowid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one deal contact's handle (iphoneChatFloors.handleKeys: E.164,
+-- last 10 digits, or lowercased email) whose chats were read back to covered_since
+-- by the run that started at scanned_at — written even when the handle has no chat.
+CREATE TABLE IF NOT EXISTS iphone_handle_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  handle_key TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, handle_key),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 W3b: the oldest text one phone holds (sms.db MIN(message.date)),
+-- recorded by each completed sync of that phone. A phone's coverage never starts
+-- before it: texts older than this phone's oldest are on a previous phone (or its
+-- backup), never on this one. No row = not known yet (no cap).
+CREATE TABLE IF NOT EXISTS iphone_device_span (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  oldest_text_at DATETIME NOT NULL,
+  recorded_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS message_thread_names (
+  user_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
+  -- BACKLOG-2839: the non-blank rule, previously only a comment here and a JS
+  -- .trim() in two writers. This charset is a FLOOR, not parity with JS .trim():
+  -- U+2000-U+200A, U+3000 and U+FEFF pass it and are empty to .trim(). SQLite's
+  -- trim() takes a character set, not a Unicode class, so parity is unreachable
+  -- in SQL. normalizeChatDisplayName (importHelpers.ts) and getThreadDisplayName
+  -- (MessageThreadCard.tsx) remain canonical; this is a backstop against writers
+  -- that do not go through them. Applied to existing databases by MIGRATION v71
+  -- (a rebuild -- CREATE TABLE IF NOT EXISTS cannot add a CHECK).
+  display_name TEXT NOT NULL
+    CHECK (length(trim(display_name, ' '||char(9)||char(10)||char(13)||char(11)||char(12)||char(160))) > 0),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (user_id, thread_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+
+  -- Channel/Source Info
+  channel_account_id TEXT,               -- Which mailbox/phone sent/received this
+  external_id TEXT,                      -- Provider ID (Gmail, Outlook, iMessage)
+
+  -- Type & Direction
+  channel TEXT CHECK (channel IN ('email', 'sms', 'imessage')),
+  direction TEXT CHECK (direction IN ('inbound', 'outbound')),
+
+  -- Content
+  subject TEXT,                          -- Email subject (null for SMS)
+  body_html TEXT,                        -- Original HTML (email only)
+  body_text TEXT,                        -- Normalized plain text - what LLMs see
+
+  -- Participants (JSON for flexibility)
+  -- Format: {"from": "email/phone", "to": [...], "cc": [...], "bcc": [...]}
+  participants TEXT,
+  participants_flat TEXT,                -- Denormalized: "from, to1, to2, cc1" for search
+
+  -- Threading
+  thread_id TEXT,                        -- Email thread ID or SMS conversation ID
+
+  -- Timestamps
+  sent_at DATETIME,
+  received_at DATETIME,
+
+  -- Attachments (count, actual files in attachments table)
+  has_attachments INTEGER DEFAULT 0,
+
+  -- Classification Results (LLM/Pattern outputs)
+  is_transaction_related INTEGER,        -- 1 = yes, 0 = no, NULL = not classified
+  classification_confidence REAL,        -- 0.0 - 1.0
+  classification_method TEXT CHECK (classification_method IN ('pattern', 'llm', 'user')),
+  classified_at DATETIME,
+
+  -- False Positive Tracking
+  is_false_positive INTEGER DEFAULT 0,
+  false_positive_reason TEXT CHECK (false_positive_reason IN ('signature', 'promotional', 'unrelated', 'other')),
+
+  -- Stage Hint (for future timeline features)
+  -- Values: intro, showing, offer, inspections, escrow, closing, post_closing
+  stage_hint TEXT,
+  stage_hint_source TEXT CHECK (stage_hint_source IN ('pattern', 'llm', 'user')),
+  stage_hint_confidence REAL,
+
+  -- Transaction Link
+  transaction_id TEXT,
+  transaction_link_confidence REAL,      -- How sure we are about this link
+  transaction_link_source TEXT CHECK (transaction_link_source IN ('pattern', 'llm', 'user')),
+
+  -- Deduplication (TASK-905)
+  message_id_header TEXT,                -- RFC 5322 Message-ID header for cross-provider dedup
+  content_hash TEXT,                     -- SHA-256 hash of normalized content for fallback dedup
+  duplicate_of TEXT,                     -- ID of original message if this is a duplicate
+
+  -- Message Type (Migration 28, TASK-1799)
+  message_type TEXT CHECK (message_type IS NULL OR message_type IN ('text', 'voice_message', 'location', 'attachment_only', 'system', 'unknown')),
+
+  -- Reactions / Tapbacks (Migration 52, BACKLOG-2280)
+  -- Apple raw tapback code: 2000-2005 add, 3000-3005 remove; NULL for normal messages.
+  associated_message_type INTEGER,
+  -- Normalized guid of the message this reaction targets (matches parent external_id); NULL for normal messages.
+  associated_message_guid TEXT,
+
+  -- LLM Analysis (Migration 11)
+  llm_analysis TEXT,                     -- Full LLM analysis response stored as JSON string
+
+  -- Metadata (provider-specific data)
+  metadata TEXT,                         -- JSON: labels, flags, etc.
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
+  sync_session_id TEXT,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
+  purpose TEXT NOT NULL CHECK (purpose IN ('authentication', 'mailbox')),
+
+  -- Token Data (encrypted using Electron safeStorage)
+  access_token TEXT,
+  refresh_token TEXT,
+  token_expires_at DATETIME,
+  scopes_granted TEXT,
+
+  -- Mailbox Specific
+  connected_email_address TEXT,
+  mailbox_connected INTEGER DEFAULT 0,
+  permissions_granted_at DATETIME,
+
+  -- Token Health
+  token_last_refreshed_at DATETIME,
+  token_refresh_failed_count INTEGER DEFAULT 0,
+  last_sync_at DATETIME,
+  last_sync_error TEXT,
+
+  -- Status
+  is_active INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  UNIQUE(user_id, provider, purpose)
+);
+
+CREATE TABLE IF NOT EXISTS pending_review_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Exactly one of these is set: email_id for mail, thread_id for text threads
+  -- (which is how text links are stored — see createThreadCommunicationReference).
+  email_id TEXT,
+  thread_id TEXT,
+
+  found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  CHECK (
+    (email_id IS NOT NULL AND thread_id IS NULL)
+    OR (thread_id IS NOT NULL AND email_id IS NULL)
+  )
+);
+
+-- BACKLOG-3925: WHY an email is in Needs Review ('address' | 'contact' | 'folder'; 'folder' is
+-- used by BACKLOG-3926). Keyed by (deal, email), not by the queue row, so the reason
+-- survives reject -> restore (which queues a NEW row). No row = 'contact'.
+-- A new table, so this file's exec on every open creates it on fresh and existing
+-- databases alike; no migration entry.
+CREATE TABLE IF NOT EXISTS pending_review_match_reasons (
+  transaction_id TEXT NOT NULL,
+  email_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('address', 'contact', 'folder')),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, email_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+-- The foreign-key check on every email delete looks rows up by email_id; without this
+-- index it scans the table once per deleted email.
+CREATE INDEX IF NOT EXISTS idx_pending_review_match_reasons_email ON pending_review_match_reasons(email_id);
+
+-- BACKLOG-3926: which Outlook folder / Gmail labels each fetched message sits in.
+-- Keyed by the PROVIDER message id (emails.external_id), not by emails.id, so it is
+-- written for every fetched message (new, already cached, or staged by a force
+-- re-cache) and survives the force re-cache swap untouched. A message's rows are
+-- replaced by its current set each time it is fetched. New table: this file's exec on
+-- every open creates it on fresh and existing databases alike; no migration entry.
+CREATE TABLE IF NOT EXISTS mail_folder_refs (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL,
+  PRIMARY KEY (account_id, external_id, folder_id),
+  FOREIGN KEY (account_id) REFERENCES oauth_tokens(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mail_folder_refs_folder ON mail_folder_refs(account_id, folder_id);
+-- The read-time label lookup (getReviewState) goes email -> its refs by external_id.
+CREATE INDEX IF NOT EXISTS idx_mail_folder_refs_external ON mail_folder_refs(external_id);
+
+-- BACKLOG-3926: folder / label id -> name, per mailbox account. Refreshed after a
+-- fetch (throttled). is_system = Inbox/Sent/Archive/Spam/Trash/Drafts/CATEGORY_* etc.,
+-- which never count as a match. display_path is "Parent / Child" for nested Outlook
+-- folders and the label name ("Parent/Child") for Gmail. User data: never logged.
+CREATE TABLE IF NOT EXISTS mail_folder_names (
+  account_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('gmail', 'outlook')),
+  folder_id TEXT NOT NULL,
+  display_path TEXT NOT NULL,
+  segments TEXT NOT NULL,              -- JSON array of the path's matchable (non-system) names
+  is_system INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, folder_id),
+  FOREIGN KEY (account_id) REFERENCES oauth_tokens(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mail_folder_names_user ON mail_folder_names(user_id);
+
+CREATE TABLE IF NOT EXISTS phone_last_message (
+  phone_normalized TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  last_message_at DATETIME NOT NULL,
+  PRIMARY KEY (phone_normalized, user_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS schema_version (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+, migrated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  session_token TEXT NOT NULL UNIQUE,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transaction_contacts (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+  contact_id TEXT NOT NULL,
+
+  -- Role information
+  role TEXT,
+  role_category TEXT,
+  specific_role TEXT,
+  is_primary INTEGER DEFAULT 0,
+  notes TEXT,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, removed_at DATETIME, removed_reason TEXT,
+
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+  UNIQUE(transaction_id, contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS transaction_participants (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+  contact_id TEXT NOT NULL,
+
+  -- Role (standardized enum for consistency)
+  role TEXT CHECK (role IN (
+    'buyer', 'seller',
+    'buyer_agent', 'listing_agent',
+    'lender', 'loan_officer',
+    'escrow_officer', 'title_officer',
+    'inspector', 'appraiser',
+    'attorney', 'tc',
+    'other', 'unknown'
+  )),
+
+  -- Confidence & Source
+  confidence REAL,                       -- 0.0 - 1.0
+  role_source TEXT CHECK (role_source IN ('pattern', 'llm', 'user')),
+
+  is_primary INTEGER DEFAULT 0,          -- Primary contact for this role
+  notes TEXT,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+  UNIQUE(transaction_id, contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS transaction_stage_history (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+
+  stage TEXT NOT NULL,
+  source TEXT CHECK (source IN ('pattern', 'llm', 'user')),
+  confidence REAL,
+  changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Optional: what triggered this change
+  trigger_message_id TEXT,
+
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (trigger_message_id) REFERENCES messages(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS transaction_unlocks_cache (
+            local_transaction_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            funding_source TEXT,
+            cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (local_transaction_id, user_id)
+          );
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+
+  -- Property Information
+  property_address TEXT NOT NULL,        -- Full canonical address
+  property_street TEXT,
+  property_city TEXT,
+  property_state TEXT,
+  property_zip TEXT,
+  property_coordinates TEXT,             -- JSON: {"lat": ..., "lng": ...}
+
+  -- Transaction Type & Status
+  transaction_type TEXT CHECK (transaction_type IN ('purchase', 'sale', 'other')),
+  status TEXT DEFAULT 'active' CHECK (status IN ('pending', 'active', 'closed', 'rejected')),
+
+  -- Key Dates
+  started_at DATETIME,                   -- Representation start / first contact
+  closed_at DATETIME,                    -- Closing date
+  last_activity_at DATETIME,             -- Last message/update
+  representation_start_date DATE,        -- Migration 2: Representation start date
+  closing_date_verified INTEGER DEFAULT 0, -- Migration 2: Whether closing date was verified
+
+  -- Date Confidence (Migration 2)
+  representation_start_confidence INTEGER,
+  closing_date_confidence INTEGER,
+
+  -- Confidence (how sure we are this is a real transaction cluster)
+  confidence_score REAL,
+
+  -- Stage (for future timeline/agent features)
+  -- Values: intro, showing, offer, inspections, escrow, closing, post_closing
+  stage TEXT,
+  stage_source TEXT CHECK (stage_source IN ('pattern', 'llm', 'user', 'import')),
+  stage_confidence REAL,
+  stage_updated_at DATETIME,
+
+  -- Financial Data (auto-extracted or user-entered)
+  listing_price REAL,
+  sale_price REAL,
+  earnest_money_amount REAL,
+
+  -- Commission Figures (BACKLOG-3519, M2 -- figures only, no charges/split
+  -- amount; see the v73 migration entry for the full design note). Percentage
+  -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
+  -- computed and rounded to whole dollars once by the writer, not derived on read.
+  -- Figures only: no split is stored or resolved by this feature, locally or
+  -- in the cloud submission record.
+  commission_offered_rate REAL,
+  commission_actual_rate REAL,
+  commission_gross_amount REAL,
+  commission_adjustment_reason TEXT,
+
+  -- Key Dates (auto-extracted)
+  mutual_acceptance_date DATE,
+  inspection_deadline DATE,
+  financing_deadline DATE,
+  closing_deadline DATE,
+
+  -- Stats
+  message_count INTEGER DEFAULT 0,
+  attachment_count INTEGER DEFAULT 0,
+  text_thread_count INTEGER DEFAULT 0,    -- BACKLOG-396: Stored thread count for consistent display
+
+  -- Export Tracking
+  export_status TEXT DEFAULT 'not_exported' CHECK (export_status IN ('not_exported', 'exported', 're_export_needed')),
+  export_format TEXT CHECK (export_format IN ('pdf', 'csv', 'json', 'txt_eml', 'excel', 'folder')),
+  export_count INTEGER DEFAULT 0,
+  last_exported_at DATETIME,             -- Declared but NOT written by the export path; prefer last_exported_on
+  last_exported_on DATETIME,             -- The column the export handlers actually write + list SELECT returns; use this for "last exported" (BACKLOG-2109)
+  first_exported_at DATETIME,            -- BACKLOG-2013: freeze boundary — set once on first successful export; write-once (only when NULL); cleared by admin unfreeze
+
+  -- AI Detection Fields (Migration 11)
+  detection_source TEXT DEFAULT 'manual' CHECK (detection_source IN ('manual', 'auto', 'hybrid')),
+  detection_status TEXT DEFAULT 'confirmed' CHECK (detection_status IN ('pending', 'confirmed', 'rejected')),
+  detection_confidence REAL,
+  detection_method TEXT,
+  suggested_contacts TEXT,               -- JSON array of suggested contact assignments
+  reviewed_at DATETIME,
+  rejection_reason TEXT,
+
+  -- Agent/Contact References (Migration 2)
+  buyer_agent_id TEXT,
+  seller_agent_id TEXT,
+  escrow_officer_id TEXT,
+  inspector_id TEXT,
+  other_contacts TEXT,                   -- JSON array of additional contact IDs
+
+  -- B2B Submission Tracking (BACKLOG-390)
+  submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected')),
+  submission_id TEXT,                    -- UUID reference to transaction_submissions in Supabase cloud
+  submitted_at DATETIME,
+  last_review_notes TEXT,
+
+  -- Email Auto-Link Settings (BACKLOG-1364)
+  skip_address_filter INTEGER DEFAULT 0, -- 1 = link ALL emails from contacts, 0 = filter by property address
+
+  -- Metadata
+  metadata TEXT,                         -- JSON for additional data
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- BACKLOG-2791: delta watermark for the Needs-Review sync, which runs on EVERY
+  -- transaction open. Holds the time of the last on-open scan; the next one only
+  -- examines rows INGESTED since (emails.created_at / messages.created_at, NOT
+  -- sent_at — a backfill writes an OLD sent_at with a NEW created_at). Without
+  -- it the scan re-examines every record that already lost, on every open, which
+  -- is the BACKLOG-2620 non-convergence shape.
+  --
+  -- Kept in sync with migration v65 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. NEVER add a standalone
+  -- CREATE INDEX on it here: schema.sql is exec'd BEFORE the migration chain, so
+  -- an index on a not-yet-added column throws on every real upgrade
+  -- (BACKLOG-2298/2300). `transactions` is never positionally copied by any
+  -- migration, so a trailing declaration is safe.
+  last_pending_scan_at DATETIME,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS users_local (
+  -- Core Identity (synced from cloud)
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  first_name TEXT,
+  last_name TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+
+  -- OAuth Reference
+  oauth_provider TEXT NOT NULL CHECK (oauth_provider IN ('google', 'microsoft')),
+  oauth_id TEXT NOT NULL,
+
+  -- Subscription (synced from cloud)
+  subscription_tier TEXT DEFAULT 'free' CHECK (subscription_tier IN ('free', 'pro', 'enterprise')),
+  subscription_status TEXT DEFAULT 'trial' CHECK (subscription_status IN ('trial', 'active', 'cancelled', 'expired')),
+  trial_ends_at DATETIME,
+
+  -- Account Status
+  is_active INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_login_at DATETIME,
+
+  -- Legal compliance
+  terms_accepted_at DATETIME,
+  terms_version_accepted TEXT,
+  privacy_policy_accepted_at DATETIME,
+  privacy_policy_version_accepted TEXT,
+
+  -- Preferences (local, synced to cloud)
+  timezone TEXT DEFAULT 'America/Los_Angeles',
+  theme TEXT DEFAULT 'light' CHECK (theme IN ('light', 'dark', 'auto')),
+  notification_preferences TEXT DEFAULT '{}',
+  company TEXT,
+  job_title TEXT,
+  mobile_phone_type TEXT CHECK (mobile_phone_type IN ('iphone', 'android')),
+
+  -- License (BACKLOG-426, synced from cloud)
+  license_type TEXT DEFAULT 'individual' CHECK (license_type IN ('individual', 'team', 'enterprise')),
+  ai_detection_enabled INTEGER DEFAULT 0,
+  organization_id TEXT,
+
+  -- Email onboarding (Migration 1)
+  email_onboarding_completed_at DATETIME,
+
+  -- Sync tracking
+  last_cloud_sync_at DATETIME,
+
+  UNIQUE(oauth_provider, oauth_id)
+);
+
+CREATE VIEW IF NOT EXISTS contact_lookup AS
+          SELECT
+            c.id as contact_id,
+            c.user_id,
+            c.display_name,
+            ce.email,
+            cp.phone_e164 as phone
+          FROM contacts c
+          LEFT JOIN contact_emails ce ON c.id = ce.contact_id
+          LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
+
+CREATE VIEW IF NOT EXISTS transaction_summary AS
+SELECT
+  t.id,
+  t.user_id,
+  t.property_address,
+  t.transaction_type,
+  t.status,
+  t.stage,
+  t.started_at,
+  t.closed_at,
+  t.message_count,
+  t.attachment_count,
+  t.confidence_score,
+  (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id) as participant_count,
+  (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
+FROM transactions t;
+
+CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs(resource_type);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_session_id ON audit_logs(session_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_synced ON audit_logs(synced_at);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_packages_transaction ON audit_packages(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_packages_user ON audit_packages(user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id);
+
+CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id);
+
+CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id);
+
+CREATE INDEX IF NOT EXISTS idx_communications_user_id ON communications(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
+
+CREATE INDEX IF NOT EXISTS idx_contact_emails_email_lower ON contact_emails(LOWER(email));
+
+CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
+    ON contact_link_proposals(user_id, status, cluster_key);
+
+CREATE INDEX IF NOT EXISTS idx_contact_link_verdicts_pair
+    ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized);
+
+CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
+
+CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
+    ON contact_source_links(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);
+
+CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
+  ON email_participants(email_address, role);
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_address
+  ON email_participants(email_address);
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
+  ON email_participants(email_id);
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_lower_address
+  ON email_participants(LOWER(email_address));
+
+CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
+             ON emails(derived_version) WHERE derived_version < 1;
+
+CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
+
+CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
+
+CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_emails_thread_id ON emails(thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_emails_user_id ON emails(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_external_contacts_source ON external_contacts(user_id, source);
+
+CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_extracted_data_field ON extracted_transaction_data(field_name);
+
+CREATE INDEX IF NOT EXISTS idx_extracted_data_transaction ON extracted_transaction_data(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
+
+CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_message ON classification_feedback(message_id);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_type ON classification_feedback(feedback_type);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON classification_feedback(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction ON ignored_communications(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_llm_settings_user ON llm_settings(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
+  ON message_thread_names(thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid ON messages(associated_message_guid) WHERE associated_message_type IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
+
+CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
+
+CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
+
+CREATE INDEX IF NOT EXISTS idx_messages_external_id ON messages(external_id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
+
+CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
+
+CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
+
+CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
+-- BACKLOG-3884: the Texts tab pages one conversation newest-first; without this a
+-- page read every row of the thread to sort it.
+CREATE INDEX IF NOT EXISTS idx_messages_thread_sent ON messages(thread_id, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_external_id ON messages(user_id, external_id) WHERE external_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_provider ON oauth_tokens(user_id, provider, purpose);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_email
+             ON pending_review_communications(transaction_id, email_id)
+           WHERE email_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
+             ON pending_review_communications(transaction_id, thread_id)
+           WHERE thread_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_phone_last_msg_user ON phone_last_message(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_stage_history_changed_at ON transaction_stage_history(changed_at);
+
+CREATE INDEX IF NOT EXISTS idx_stage_history_transaction ON transaction_stage_history(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_category ON transaction_contacts(role_category);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_contact ON transaction_contacts(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_primary ON transaction_contacts(is_primary);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_role ON transaction_contacts(role);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_specific_role ON transaction_contacts(specific_role);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_contacts_transaction ON transaction_contacts(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_participants_contact ON transaction_participants(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_participants_role ON transaction_participants(role);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_participants_transaction ON transaction_participants(transaction_id);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_unlocks_cache_user
+            ON transaction_unlocks_cache(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_export_status ON transactions(export_status);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_property_address ON transactions(property_address);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_stage ON transactions(stage);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_users_local_email ON users_local(email);
+
+CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type);
+
+CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id);
+
+CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
+BEFORE INSERT ON communications
+FOR EACH ROW
+WHEN NEW.email_id IS NOT NULL
+  AND NULLIF(NEW.thread_id, '') IS NULL
+  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
+          BEFORE DELETE ON audit_logs
+          BEGIN
+            SELECT RAISE(ABORT, 'Audit logs cannot be deleted');
+          END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_audit_update
+          BEFORE UPDATE ON audit_logs
+          BEGIN
+            SELECT RAISE(ABORT, 'Audit logs cannot be modified');
+          END;
+
+CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
+          AFTER UPDATE ON contacts
+          BEGIN
+            UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+          END;
+
+CREATE TRIGGER IF NOT EXISTS update_llm_settings_timestamp
+AFTER UPDATE ON llm_settings
+BEGIN
+  UPDATE llm_settings SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_oauth_tokens_timestamp
+AFTER UPDATE ON oauth_tokens
+BEGIN
+  UPDATE oauth_tokens SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_transaction_contacts_timestamp
+AFTER UPDATE ON transaction_contacts
+BEGIN
+  UPDATE transaction_contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_transaction_participants_timestamp
+AFTER UPDATE ON transaction_participants
+BEGIN
+  UPDATE transaction_participants SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_transactions_timestamp
+AFTER UPDATE ON transactions
+BEGIN
+  UPDATE transactions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_users_local_timestamp
+AFTER UPDATE ON users_local
+BEGIN
+  UPDATE users_local SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- BACKLOG-3366: texts a user has hidden from THIS transaction's export.
+-- One row per (transaction, message). The text itself, its communications link
+-- and every count are untouched; the shared conversation read projects a
+-- `hidden_from_export` marker from this table and never filters on it.
+--   message_external_id  the provider id (messages.external_id) copied from the
+--                        message at the moment of hiding. A macOS force re-import
+--                        deletes and re-inserts message rows with NEW ids, so a
+--                        row keyed on message_id alone would stop matching and
+--                        the text would silently return to the export.
+--   message_id           no FK on purpose: ON DELETE CASCADE would erase the
+--                        user's decision when a re-import deletes the old row.
+--   hidden_by            users_local.id, no FK on purpose: the legacy user-id
+--                        migration deletes the old users_local row, and a
+--                        cascading FK would wipe every hidden row with it.
+CREATE TABLE IF NOT EXISTS transaction_hidden_texts (
+  transaction_id      TEXT NOT NULL,
+  message_id          TEXT NOT NULL,
+  message_external_id TEXT,
+  hidden_by           TEXT NOT NULL,
+  hidden_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, message_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
+  ON transaction_hidden_texts(transaction_id, message_external_id)
+  WHERE message_external_id IS NOT NULL;
+
+-- ===========================================================================
+-- BACKLOG-3475 BEGIN — transaction checklists (local half)
+-- ===========================================================================
+-- A checklist is a broker template copied ONTO one transaction at the moment
+-- the user picks it. Four tables, all IF NOT EXISTS: schema.sql's
+-- unconditional exec on every launch creates them on fresh and existing
+-- installs alike (the same delivery as BACKLOG-3366's transaction_hidden_texts).
+-- BACKLOG-3476 changed transaction_checklists' shape after it had reached dev
+-- databases, so migration v72 rebuilds a table that still has the old shape;
+-- any later change to these four tables' DDL needs its own migration. Every
+-- divergence key is recorded in ALLOWED_EVOLUTION in
+-- databaseService.schema-parity.test.ts.
+--
+-- The BEGIN/END markers are load-bearing: checklistSchemaUpgrade-3475.test.ts
+-- strips this block to synthesise a pre-3475 database and prove the upgrade
+-- path delivers the tables.
+--
+--   transaction_checklists        several per transaction, each from a
+--                                 different template (UNIQUE (transaction_id,
+--                                 template_id)); `sort_order` is the display
+--                                 order the user built. `template_id` is the
+--                                 source template's cloud id and is
+--                                 PROVENANCE ONLY — no read joins
+--                                 through it — with ONE reserved value:
+--                                 'keepr:my-items' marks the agent's private
+--                                 per-deal checklist (BACKLOG-3966), which
+--                                 every broker-facing reader leaves out
+--                                 (electron/services/db/checklistPrivacy.ts).
+--                                 The titles, required flags and
+--                                 document types below are COPIES, so editing
+--                                 or deleting the broker template never
+--                                 rewrites a checklist already in use.
+--   transaction_checklist_items   the copied rows. `checked_at` is the record
+--                                 of a toggle; the paired CHECK makes it
+--                                 structurally impossible for it to disagree
+--                                 with `is_checked`.
+--   transaction_checklist_links   one row per evidence GROUP; its id is the
+--                                 stable key. UNIQUE (id, kind) exists so a
+--                                 member can carry a composite FK and cannot
+--                                 disagree with its group's kind.
+--   ..._link_members              the emails, attachments or texts in that
+--                                 group (texts: BACKLOG-3968, migration v78,
+--                                 `message_id` -> messages.id). An
+--                                 email link is the SET of member email_ids; a
+--                                 single email is a group of one. There is no
+--                                 thread_id column anywhere — thread_id is
+--                                 nullable at both producers (Gmail writes
+--                                 `threadId || ""` -> NULL), and the UI groups
+--                                 by subject while the DB keys on thread_id,
+--                                 so a thread-keyed link would silently miss.
+--
+-- No user_id and no FK to users_local, on purpose: the legacy user-id
+-- migration re-points a hard-coded table list and then deletes the old
+-- users_local row with FK ON, so a cascading user FK not on that list would be
+-- wiped. Ownership comes through transactions.user_id. Same reasoning as
+-- transaction_hidden_texts.hidden_by above.
+--
+-- Members cascade from `emails`, `attachments` and `messages` BY DECISION: an email Force
+-- Re-cache and a macOS/Android message re-import delete those rows and
+-- re-insert them under new ids, and a checklist link dies with them exactly as
+-- a transaction link does — one force button, one behaviour. The AFTER DELETE
+-- trigger then removes a group whose last member is gone, so a group never
+-- survives empty and would never render as an evidence chip pointing at
+-- nothing.
+-- No standalone CREATE INDEX may name `sort_order` (or any column the pre-v72
+-- shape lacks) here: this file runs BEFORE the versioned migrations, against
+-- the old table, and such an index throws and stops every upgraded open. The
+-- composite UNIQUE's autoindex already serves lookups by transaction_id.
+CREATE TABLE IF NOT EXISTS transaction_checklists (
+  id             TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+  template_id    TEXT NOT NULL,
+  template_name  TEXT NOT NULL CHECK (length(trim(template_name)) BETWEEN 1 AND 200),
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  selected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (transaction_id, template_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_items (
+  id                     TEXT PRIMARY KEY,
+  checklist_id           TEXT NOT NULL,
+  title                  TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+  description            TEXT CHECK (description IS NULL OR length(description) <= 2000),
+  is_required            INTEGER NOT NULL DEFAULT 0 CHECK (is_required IN (0, 1)),
+  expected_document_type TEXT CHECK (expected_document_type IS NULL OR expected_document_type IN
+                           ('offer', 'inspection', 'disclosure', 'contract', 'appraisal',
+                            'amendment', 'addendum', 'title', 'closing', 'other')),
+  is_checked             INTEGER NOT NULL DEFAULT 0 CHECK (is_checked IN (0, 1)),
+  checked_at             DATETIME,
+  note                   TEXT,
+  sort_order             INTEGER NOT NULL DEFAULT 0,
+  created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((is_checked = 0) = (checked_at IS NULL)),
+  FOREIGN KEY (checklist_id) REFERENCES transaction_checklists(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_items_checklist
+  ON transaction_checklist_items(checklist_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_links (
+  id         TEXT PRIMARY KEY,
+  item_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email', 'text')),
+  label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- BACKLOG-3764 (migration v75 adds it to existing databases): 1 when the
+  -- agent chose to send this group although its evidence is dated outside the
+  -- deal's audit dates. No index/trigger/view may name it here (see v75).
+  include_outside_dates INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (id, kind),
+  FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_links_item
+  ON transaction_checklist_links(item_id);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_link_members (
+  id            TEXT PRIMARY KEY,
+  link_id       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  attachment_id TEXT,
+  email_id      TEXT,
+  message_id    TEXT,
+  CHECK ((kind = 'attachment' AND attachment_id IS NOT NULL AND email_id IS NULL AND message_id IS NULL)
+      OR (kind = 'email' AND email_id IS NOT NULL AND attachment_id IS NULL AND message_id IS NULL)
+      OR (kind = 'text' AND message_id IS NOT NULL AND attachment_id IS NULL AND email_id IS NULL)),
+  UNIQUE (link_id, attachment_id),
+  UNIQUE (link_id, email_id),
+  UNIQUE (link_id, message_id),
+  FOREIGN KEY (link_id, kind) REFERENCES transaction_checklist_links(id, kind) ON DELETE CASCADE,
+  FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_members_attachment
+  ON transaction_checklist_link_members(attachment_id) WHERE attachment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_checklist_members_email
+  ON transaction_checklist_link_members(email_id) WHERE email_id IS NOT NULL;
+-- BACKLOG-3968: the partial index on message_id is NOT created here. This file
+-- runs BEFORE the versioned migrations, against a pre-v78 members table that
+-- has no message_id column, so the statement would throw and stop every
+-- upgraded open. Migration v78 creates idx_checklist_members_message on every
+-- database, fresh installs included (they run v78 too).
+
+CREATE TRIGGER IF NOT EXISTS trg_checklist_link_members_drop_empty_link
+AFTER DELETE ON transaction_checklist_link_members
+WHEN NOT EXISTS (SELECT 1 FROM transaction_checklist_link_members m WHERE m.link_id = OLD.link_id)
+BEGIN
+  DELETE FROM transaction_checklist_links WHERE id = OLD.link_id;
+END;
+-- ===========================================================================
+-- BACKLOG-3475 END
+-- ===========================================================================
+
+-- BACKLOG-3965: when each deal was last opened on THIS device (the Dashboard's
+-- Recent panel). One row per deal. Local only: not synced, not exported.
+-- A table, not a column on transactions: the AFTER UPDATE trigger
+-- update_transactions_timestamp would bump transactions.updated_at on every
+-- open. IF NOT EXISTS on both: this file runs on every open, so existing
+-- databases gain the table with no migration version.
+CREATE TABLE IF NOT EXISTS transaction_opens (
+  transaction_id TEXT PRIMARY KEY,
+  opened_at      TEXT NOT NULL,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_transaction_opens_opened_at
+  ON transaction_opens(opened_at, transaction_id);
+
+-- ===========================================================================
+-- BACKLOG-4120 BEGIN — "Help Keepr learn" (Learn mode) local answers
+-- ===========================================================================
+-- Local only: never synced, never exported, read by no sync or export path.
+-- IF NOT EXISTS throughout: this file runs on every open, so existing
+-- databases gain the tables with no migration version (transaction_opens
+-- precedent above).
+--
+-- Every row: UUID text id, created_at + updated_at, deleted_at for soft
+-- removal. "Delete my answers" sets deleted_at; it never removes a row. The
+-- natural keys are PARTIAL unique indexes (WHERE deleted_at IS NULL), so a
+-- re-answer after a soft removal is allowed. Keys are user + provider id or
+-- normalized address, never a local emails.id. Answer rows carry the
+-- rule_version of the learn rules that produced the question.
+--
+-- CHECK constraints here are invisible to the schema-parity fingerprint
+-- (PRAGMA table_info); learnModeDb-4120.test.ts (C10) guards them.
+
+-- Learn mode switch, one live row per user. A missing row means OFF.
+CREATE TABLE IF NOT EXISTS learn_mode_settings (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  enabled    INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  -- BACKLOG-4219 (v79): "Help improve Keepr" (default OFF), a withdraw
+  -- still owed to the server, {sender_rules_version: last_sent_at} JSON (max 5),
+  -- and when a submit timed out without settling.
+  pilot_report           INTEGER NOT NULL DEFAULT 0 CHECK (pilot_report IN (0, 1)),
+  pilot_pending_withdraw INTEGER NOT NULL DEFAULT 0 CHECK (pilot_pending_withdraw IN (0, 1)),
+  pilot_sent_versions    TEXT,
+  pilot_unsettled_at     TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_mode_settings_user_live
+  ON learn_mode_settings(user_id) WHERE deleted_at IS NULL;
+
+-- Cleanup pass answers: "is this a real deal?" for a detection that matched
+-- no hand-entered transaction. Never creates a transaction.
+CREATE TABLE IF NOT EXISTS learn_deal_answers (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL,
+  run_id           TEXT NOT NULL,
+  address_key      TEXT NOT NULL,
+  property_address TEXT NOT NULL,
+  answer           TEXT NOT NULL CHECK (answer IN ('yes', 'no')),
+  answered_at      TEXT NOT NULL,
+  rule_version     INTEGER NOT NULL,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  deleted_at       TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_deal_answers_user_key_live
+  ON learn_deal_answers(user_id, address_key) WHERE deleted_at IS NULL;
+
+-- Bulk sample: messages drawn once (answer NULL until answered), keyed by the
+-- provider's own id so the sample survives a force re-cache.
+CREATE TABLE IF NOT EXISTS learn_bulk_answers (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  source       TEXT NOT NULL CHECK (source IN ('gmail', 'outlook')),
+  external_id  TEXT NOT NULL,
+  sampled_at   TEXT NOT NULL,
+  answer       TEXT CHECK (answer IS NULL OR answer IN ('real_estate', 'newsletter_spam', 'skip')),
+  answered_at  TEXT,
+  rule_version INTEGER NOT NULL,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  deleted_at   TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_bulk_answers_user_msg_live
+  ON learn_bulk_answers(user_id, source, external_id) WHERE deleted_at IS NULL;
+-- ===========================================================================
+-- BACKLOG-4120 END
+-- ===========================================================================
+
+-- Initialize schema version if not exists.
+-- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
+-- v69-chain shape, declared as version 70 so that the baseline fence in
+-- databaseService accepts only databases built from this file — and refuses
+-- every database the deleted migration chain ever touched.
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 70);
+
+COMMIT;

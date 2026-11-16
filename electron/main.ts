@@ -238,6 +238,7 @@ import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 // BACKLOG-4120: Learn mode ("Help Keepr learn"). Separate from AI detection.
 import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
+import { installCloudSync } from "./handlers/cloudSyncHandlers";
 import { registerLearnSuppressHandlers } from "./handlers/learnSuppressHandlers";
 import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
@@ -1974,6 +1975,15 @@ app.whenReady().then(async () => {
   // BACKLOG-4212 PR3: "Senders you marked as newsletters" (own file: R5).
   registerLearnSuppressHandlers();
   startLearnPilotReportService(learnPilotReport);
+  // BACKLOG-4243: Keepr Cloud channels and engine root. Makes no network call
+  // and starts no timer unless Keepr Cloud is on for a user of this computer.
+  // installCloudSync never throws (it logs and returns null); guarded here too
+  // so nothing in it can stop the registrations below.
+  try {
+    installCloudSync();
+  } catch {
+    log.warn("[CloudSync] install threw");
+  }
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();

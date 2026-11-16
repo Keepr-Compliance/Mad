@@ -25,6 +25,8 @@ import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { LearnSettings } from "./settings/learn/LearnSettings";
+import { KeeprCloudSettings } from "./settings/cloudSync/KeeprCloudSettings";
+import { useKeeprCloudSettings } from "./settings/cloudSync/useKeeprCloudSettings";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
@@ -66,7 +68,10 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   // BACKLOG-4174: the tab list is null until the plan read and the strict
   // autodetect_eval read have both settled, so no tab shows and then vanishes.
   // BACKLOG-4120: learnAvailable is the strict (fail-closed) read.
-  const { tabs: settledTabs, learnAvailable } = useVisibleSettingsTabs();
+  // BACKLOG-4243: main decides whether the Keepr Cloud section (and its tab) is shown.
+  const cloud = useKeeprCloudSettings();
+  const cloudVisible = !!cloud.view && cloud.view.status !== "hidden";
+  const { tabs: settledTabs, learnAvailable } = useVisibleSettingsTabs(cloudVisible);
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
   const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
@@ -343,6 +348,9 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
             {/* BACKLOG-4120: "Help Keepr learn". Outside the AI add-on gate on
                 purpose: Learn mode never uses AI. */}
             {learnAvailable && <LearnSettings onStart={onStartLearn} onSeeScore={onSeeLearnScore} />}
+
+            {/* BACKLOG-4243: Keepr Cloud and the AI apps row. Hidden unless main says otherwise. */}
+            <KeeprCloudSettings cloud={cloud} />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}
             <FeatureGate requires="ai_addon">

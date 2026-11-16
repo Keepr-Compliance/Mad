@@ -169,6 +169,11 @@ jest.mock('@sentry/nextjs', () => ({
   addBreadcrumb: jest.fn(),
 }));
 jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
+// BACKLOG-4238: the consent page, the AI apps page and their actions read the
+// raw Cookie header through this module (next/headers throws outside a request
+// scope). Only this module is replaced; nothing else in this file reads it.
+const mockReadAccountRequest = jest.fn(async () => ({ impersonating: false, binding: null as string | null }));
+jest.mock('@/lib/mcp/account/request', () => ({ readAccountRequest: () => mockReadAccountRequest() }));
 // BACKLOG-3851: a pass-through spy on the plan view every billing action acts
 // on, so a case can assert WHICH organization it resolved (the real function
 // runs; nothing is stubbed).
@@ -547,6 +552,25 @@ const REPORTS_ADMITTED = {
   'brokerage it_admin': [brokerageMembership('it_admin')],
 } as const;
 
+/**
+ * BACKLOG-4238: the AI apps pages. Every portal user may connect an AI app, so
+ * no persona is refused by role; the gate is MCP_ENABLED (+ MCP_PUBLIC_ORIGIN).
+ * With MCP off both pages are notFound() for every persona, before any read.
+ */
+const MCP_GATED_PAGES: Record<string, PageEntry> = {
+  'app/dashboard/account/ai-apps/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/account/ai-apps/page')).default(),
+    refused: { notFound: true },
+  },
+  'app/dashboard/account/ai-apps/connect/[requestId]/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/account/ai-apps/connect/[requestId]/page')).default({
+        params: Promise.resolve({ requestId: 'A'.repeat(22) }),
+      }),
+    refused: { notFound: true },
+  },
+};
+
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
@@ -878,6 +902,30 @@ const BILLING_ACTIONS: Record<string, ActionEntry> = {
 };
 const BILLING_ACTION_REFUSED: Outcome = { returned: { error: 'Billing is not available for this account.' } };
 
+/**
+ * BACKLOG-4238: the consent and AI apps actions. Open to every signed-in person
+ * while MCP is on (the database checks auth.uid()); with MCP off each refuses
+ * with no database call.
+ */
+const mcpAccount = () => import('@/lib/mcp/account/actions');
+const MCP_GATED_ACTIONS: Record<string, ActionEntry> = {
+  'lib/mcp/account/actions.ts#approveAiApp': act(mcpAccount, 'approveAiApp', 'A'.repeat(22), 'N'.repeat(43)),
+  'lib/mcp/account/actions.ts#denyAiApp': act(mcpAccount, 'denyAiApp', 'A'.repeat(22), 'N'.repeat(43)),
+  'lib/mcp/account/actions.ts#disconnectAiApp': act(
+    mcpAccount,
+    'disconnectAiApp',
+    '00000000-0000-4000-8000-000000423801' // pii-allow-uuid: invented fixture id
+  ),
+  'lib/mcp/account/actions.ts#disconnectAllAiApps': act(mcpAccount, 'disconnectAllAiApps'),
+};
+const MCP_OFF_MESSAGE = 'AI app connections are turned off right now.';
+const MCP_GATED_ACTION_OFF: Record<string, Outcome> = {
+  'lib/mcp/account/actions.ts#approveAiApp': { returned: { kind: 'refused', message: MCP_OFF_MESSAGE } },
+  'lib/mcp/account/actions.ts#denyAiApp': { returned: { kind: 'refused', message: MCP_OFF_MESSAGE } },
+  'lib/mcp/account/actions.ts#disconnectAiApp': { returned: { ok: false, message: MCP_OFF_MESSAGE } },
+  'lib/mcp/account/actions.ts#disconnectAllAiApps': { returned: { ok: false, message: MCP_OFF_MESSAGE } },
+};
+
 /** Helpers exported from a 'use server' file; the org-scoped callers above decide. */
 const HELPER_ACTIONS = [
   'lib/actions/users.ts#getCurrentUserMembership',
@@ -919,6 +967,11 @@ const KNOWN_ROUTE_HANDLERS = [
   // request-supplied ids. Claims and their organizations come from the due query.
   'app/api/cron/domain-recheck/route.ts',
   'app/api/cron/email-retry/route.ts',
+  // BACKLOG-4237: POST only; MCP_ENABLED, Origin and a Bearer token with a client_id
+  // claim are checked first; one tool that reads no user data.
+  'app/api/mcp/route.ts',
+  // BACKLOG-4237: GET only; static protected-resource metadata, no session.
+  'app/api/mcp/resource-metadata/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
   'app/api/email/internal-invite/route.ts',
@@ -953,6 +1006,19 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/auth/impersonate/route.ts',
   'app/auth/logout/route.ts',
   'app/auth/setup/callback/route.ts',
+  // BACKLOG-4238: GET only; checks the authorization request, one anon RPC
+  // (mcp_authorize_begin) that checks the portal secret inside, then a redirect
+  // to the consent page with a binding cookie. No session read.
+  'app/oauth/authorize/route.ts',
+  // BACKLOG-4238: GET/HEAD only; static authorization server metadata from
+  // MCP_PUBLIC_ORIGIN, no session, no database call.
+  'app/oauth/metadata/route.ts',
+  // BACKLOG-4238: POST only; JSON client registration, no session; one anon
+  // RPC (mcp_register_client) that checks the portal secret inside.
+  'app/oauth/register/route.ts',
+  // BACKLOG-4238: POST only; form-encoded token request, no session; one anon
+  // RPC (mcp_exchange_code or mcp_refresh) that checks the portal secret inside.
+  'app/oauth/token/route.ts',
   'app/setup/consent/callback/route.ts',
 ];
 
@@ -1103,7 +1169,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(22); // BACKLOG-3513 PR-3b: + reports/d/[id]; BACKLOG-3962: + settings/domain; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(24); // base 19; BACKLOG-4238: + account/ai-apps, account/ai-apps/connect/[requestId]; BACKLOG-3513 PR-3b: + reports/d/[id]; BACKLOG-3962: + settings/domain; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1122,7 +1188,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(30); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session; BACKLOG-3962: + cron/domain-recheck, cron/domain-capture-switch
+    expect(handlers.length).toBe(36); // base 28; BACKLOG-4238: + oauth/authorize, oauth/token; + oauth/metadata, oauth/register; BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3962: + cron/domain-recheck, cron/domain-capture-switch; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -1142,7 +1208,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(67); // BACKLOG-3962 PR4a: + setBlockSoloSignups, desktopJitJoin; BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(71); // base 58; BACKLOG-4238: + approveAiApp, denyAiApp, disconnectAiApp, disconnectAllAiApps; BACKLOG-3962 PR4a: + setBlockSoloSignups, desktopJitJoin; BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
@@ -1176,6 +1242,7 @@ describe('set completeness', () => {
       ...Object.keys(PLAN_GATED_PAGES),
       ...Object.keys(BILLING_PAGES),
       ...Object.keys(REPORTS_PAGES),
+      ...Object.keys(MCP_GATED_PAGES),
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(discoverDashboardPages()).toEqual([...classified].sort());
@@ -1189,8 +1256,10 @@ describe('set completeness', () => {
       ...FLOOR_ACTIONS,
       ...HELPER_ACTIONS,
       ...Object.keys(BILLING_ACTIONS),
+      ...Object.keys(MCP_GATED_ACTIONS),
     ];
     expect(new Set(classified).size).toBe(classified.length);
+    expect(Object.keys(MCP_GATED_ACTION_OFF).sort()).toEqual(Object.keys(MCP_GATED_ACTIONS).sort());
     expect(Object.keys(REFUSALS).sort()).toEqual(Object.keys(REFUSED_ACTIONS).sort());
     expect(Object.keys(OWN_GATE_REFUSALS).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
     expect(Object.keys(AGENT_ACTION_OUTCOMES).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
@@ -1795,5 +1864,71 @@ describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
     givenWithPersonalOrg(REVERTED_ROWS[persona]);
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(solo.outcome);
     expect(writesNoClock()).toEqual(solo.writes);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4238: AI apps pages and actions, gated by MCP_ENABLED
+// ---------------------------------------------------------------------------
+
+describe('MCP-gated pages and actions (BACKLOG-4238)', () => {
+  const MCP_ENV = ['MCP_ENABLED', 'MCP_PUBLIC_ORIGIN'] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeAll(() => {
+    for (const k of MCP_ENV) saved[k] = process.env[k];
+  });
+  afterEach(() => {
+    for (const k of MCP_ENV) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+  const mcpOff = () => {
+    for (const k of MCP_ENV) delete process.env[k];
+  };
+  const mcpOn = () => {
+    process.env.MCP_ENABLED = 'true';
+    process.env.MCP_PUBLIC_ORIGIN = 'https://portal.test';
+  };
+  const everyone = { ...PERSONAS, 'brokerage admin': ADMIN } as Record<string, readonly Row[]>;
+  const mcpRpcCalls = () => mockRpc.mock.calls.filter(([name]) => String(name).startsWith('mcp_'));
+
+  const pageCases = Object.entries(MCP_GATED_PAGES).flatMap(([page, entry]) =>
+    Object.keys(everyone).map((persona) => [page, persona, entry] as const)
+  );
+  it.each(pageCases)('MCP off: %s is notFound for the %s, before any read', async (_page, persona, entry) => {
+    mcpOff();
+    given(everyone[persona]);
+    expect(await run(entry.invoke)).toEqual({ notFound: true });
+    expect(mockReadAccountRequest).not.toHaveBeenCalled();
+    expect(mcpRpcCalls()).toEqual([]);
+    expect(tablesRead()).toEqual([]);
+  });
+
+  const actionCases = Object.keys(MCP_GATED_ACTIONS).flatMap((name) =>
+    Object.keys(everyone).map((persona) => [name, persona] as const)
+  );
+  it.each(actionCases)('MCP off: %s refuses the %s with no database call', async (name, persona) => {
+    mcpOff();
+    given(everyone[persona]);
+    expect(await run(MCP_GATED_ACTIONS[name])).toEqual(MCP_GATED_ACTION_OFF[name]);
+    expect(mockReadAccountRequest).not.toHaveBeenCalled();
+    expect(mcpRpcCalls()).toEqual([]);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(pageCases)('MCP on: %s renders for the %s', async (_page, persona, entry) => {
+    mcpOn();
+    given(everyone[persona]);
+    const outcome = await run(entry.invoke);
+    expect(outcome).toHaveProperty('element');
+  });
+
+  it.each(actionCases)('MCP on: %s is past the MCP gate for the %s', async (name, persona) => {
+    mcpOn();
+    given(everyone[persona]);
+    const outcome = await run(MCP_GATED_ACTIONS[name]);
+    expect(outcome).toHaveProperty('returned');
+    expect(outcome).not.toEqual(MCP_GATED_ACTION_OFF[name]);
   });
 });

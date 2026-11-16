@@ -46,6 +46,19 @@ const nextConfig = {
     ];
   },
 
+  // BACKLOG-4238: OAuth discovery documents at their well-known addresses.
+  // Exact sources only; beforeFiles so they win over any page.
+  async rewrites() {
+    return {
+      beforeFiles: [
+        { source: '/.well-known/oauth-authorization-server', destination: '/oauth/metadata' },
+        { source: '/.well-known/oauth-protected-resource/api/mcp', destination: '/api/mcp/resource-metadata' },
+      ],
+      afterFiles: [],
+      fallback: [],
+    };
+  },
+
   async headers() {
     const cspDirectives = [
       "default-src 'self'",
