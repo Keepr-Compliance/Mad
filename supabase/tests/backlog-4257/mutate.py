@@ -66,7 +66,7 @@ for mode in modes:
         for l in changed:
             print('  %s %s' % (l[0], l[1:].strip()[:150]))
         st = subprocess.run([sys.executable, os.path.join(here, 'static.py')], capture_output=True, text=True)
-        print('STATIC ' + st.stdout.strip().splitlines()[-1])
+        print('STATIC ' + ((st.stdout.strip().splitlines() or ['(crashed: ' + st.stderr.strip().splitlines()[-1] + ')'])[-1]))
         out = subprocess.run([os.path.join(here, 'run.sh')], capture_output=True, text=True)
         o = out.stdout
         try:

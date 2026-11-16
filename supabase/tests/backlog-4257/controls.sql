@@ -193,6 +193,8 @@ BEGIN
         AND (SELECT count(*) FROM public.learn_pilot_reports WHERE user_id = u1) = 0,
         'n=' || n || ' submit=' || s || ' bad=' || left(bad, 250)));
 
+      DELETE FROM public.learn_pilot_reports WHERE user_id = u1;
+
       -- ===== S2: a schema 2 still gets every schema-1 check on the rest of the report =====
       bad := '';
       FOR k, p IN SELECT * FROM (VALUES
@@ -212,10 +214,14 @@ BEGIN
       r := r || jsonb_build_object('4257_S2_schema2_base_checked', pg_temp.k_pass(
         bad = '' AND s = 'ERR 22023 DETAIL=report keys', 'bad=' || bad || ' submit=' || s));
 
+      DELETE FROM public.learn_pilot_reports WHERE user_id = u1;
+
       -- ===== S3: a schema 1 carrying signals is refused on its keys =====
       s := pg_temp.k_det(u1, fixture1 || jsonb_build_object('signals', rep2->'signals'));
       r := r || jsonb_build_object('4257_S3_schema1_with_signals_refused', pg_temp.k_pass(
         s = 'ERR 22023 DETAIL=report keys', s));
+
+      DELETE FROM public.learn_pilot_reports WHERE user_id = u1;
 
       -- ===== S4: only signals_version 1 is known; missing 'signals' is refused =====
       bad := '';
@@ -278,6 +284,8 @@ BEGIN
       r := r || jsonb_build_object('4257_C9b_schema2_cap_65536', pg_temp.k_pass(
         s = 'ERR 22023 DETAIL=signals: keys' AND s2 = 'ERR 22023 DETAIL=too large' AND k = 'ERR 22023 DETAIL=too large',
         '40k=' || s || ' 70k=' || s2 || ' base33k=' || k));
+
+      DELETE FROM public.learn_pilot_reports WHERE user_id = u1;
 
       -- ===== R1b: the migration changed the validator; rollback-4257 puts back the 4219 text exactly
       --       (md5 = the 4219 file), the ACL as captured before the run, and removes the signals validator =====
