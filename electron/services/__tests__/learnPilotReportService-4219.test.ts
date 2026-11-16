@@ -51,7 +51,9 @@ jest.mock("../../handlers/featureGateHandlers", () => ({
 
 import { createLearnPilotReportService, type PilotServiceOptions } from "../learnPilotReportService";
 import { getPilotState, setLearnModeEnabled, setPilotOffPending, setPilotOn } from "../db/learnModeDbService";
-import type { LearnScore, SenderCensus } from "../learn/scoring";
+import { scoreFromFixture, syntheticSignals } from "./helpers/pilotFixtureScore-4257";
+import logService from "../logService";
+import type { SignalScore } from "../learn/signalScoring";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const FIXTURE = nodePath.join(__dirname, "..", "learn", "__tests__", "fixtures", "pilotReport-real-4219.json");
@@ -61,92 +63,6 @@ const H = 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 10, 10, 12);
 
 const run = (q: string, ...p: unknown[]) => db.prepare(q).run(...(p as never[]));
-
-/**
- * A LearnScore + detector census whose builder output is the REAL fixture's
- * report: the camelCase producer shape, mapped back from that file (not invented
- * numbers). Only senderRulesVersion varies per test.
- */
-function scoreFromFixture(version = 1): { score: LearnScore; detector: SenderCensus } {
-  const r = JSON.parse(fs.readFileSync(FIXTURE, "utf8")).report;
-  const rate = (x: { k: number; n: number }) => ({ k: x.k, n: x.n, interval: null });
-  const block = (c: typeof r.census.learn_questions): SenderCensus => ({
-    dealLinkedSuppressed: c.mailboxes.map((m: typeof c.mailboxes[number]) => ({
-      label: m.ordinal === 0 ? "unknown mailbox" : `mailbox ${m.ordinal}`,
-      provider: m.provider,
-      n: m.n,
-      full: { k: m.full.k, bySignal: m.full.by_signal },
-      minusContactKeeps: { k: m.minus_contact_keeps.k, bySignal: m.minus_contact_keeps.by_signal },
-      addressPassReady: m.address_pass_ready,
-      detectorReady: m.detector_ready,
-    })),
-    minCensusLinkedEmails: c.min_linked_emails,
-    bulkCaught: rate(c.bulk_caught),
-    realEstateSuppressed: rate(c.real_estate_suppressed),
-    foundDealsLost: { full: c.found_deals_lost.full, minusContactKeeps: c.found_deals_lost.minus },
-    cleanupYesLost: { full: c.cleanup_yes_lost.full, minusContactKeeps: c.cleanup_yes_lost.minus },
-    keptBy: c.kept_by,
-    keepConflicts: c.keep_conflicts,
-    coverage: c.coverage,
-  });
-  const score = {
-    ruleVersion: r.learn_rules_version,
-    windowMonths: r.window_months,
-    earliestDay: null,
-    latestDay: null,
-    rowsScanned: r.rows_scanned,
-    nullSentAt: r.null_sent_at,
-    labelsWithoutLocalMail: r.labels_without_local_mail,
-    buckets: r.deals_in_key,
-    detections: r.detections,
-    trueDetections: r.true_detections,
-    knownWrong: r.known_wrong,
-    matchedNeutral: r.matched_neutral,
-    unmatched: r.unmatched,
-    unmatchedDeals: r.unmatched_deals,
-    unaskable: r.unaskable,
-    cleanupYes: r.cleanup.yes,
-    // Not in the report; the fixture's one Yes is on a street with no deal in the key.
-    cleanupYesNotCounted: 0,
-    cleanupNo: r.cleanup.no,
-    cleanupUnanswered: r.cleanup.unanswered,
-    hiddenBySeed: r.hidden_by_seed,
-    seedLinkedToDeals: r.seed_linked_to_deals,
-    answersByRuleVersion: r.answers_by_rule_version.map((a: { rule_version: number; deal: number; bulk: number }) => ({
-      ruleVersion: a.rule_version,
-      deal: a.deal,
-      bulk: a.bulk,
-    })),
-    senderRulesVersion: version,
-    senderRulesSource: r.sender_rules_source,
-    senderRulesDownloadRejected: r.sender_rules_download_rejected,
-    senderCensus: block(r.census.learn_questions),
-    positives: r.positives,
-    legacyManualPositives: r.legacy_manual_positives,
-    legacyCutoffDay: "2026-01-01",
-    legacyCutoffIsMinimum: false,
-    found: r.found,
-    missed: r.missed,
-    recall: rate(r.recall),
-    recallWithCleanupYes: rate(r.recall_with_cleanup_yes),
-    recallExcludingLegacy: rate(r.recall_excluding_legacy),
-    recallWithCleanupYesExcludingLegacy: rate(r.recall_with_cleanup_yes_excluding_legacy),
-    precisionBeforeCleanup: rate(r.precision_before_cleanup),
-    precisionAfterCleanup: rate(r.precision_after_cleanup),
-    side: { correct: r.side.correct, wrong: r.side.wrong, notPredicted: r.side.not_predicted, skipped: r.side.skipped },
-    outcome: r.outcome,
-    bulk: {
-      answered: r.bulk.answered,
-      realEstate: r.bulk.real_estate,
-      newsletterSpam: r.bulk.newsletter_spam,
-      skip: r.bulk.skip,
-      notCached: r.bulk.not_cached,
-      newsletterFlagged: rate(r.bulk.newsletter_flagged),
-      realEstateFlagged: rate(r.bulk.real_estate_flagged),
-    },
-  } as LearnScore;
-  return { score, detector: block(r.census.detector) };
-}
 
 // ---- injected world ------------------------------------------------------------
 let clock = T0;
@@ -487,5 +403,195 @@ describe("UNS an unsettled submit gets one more withdraw 60 s after the next one
     await s.idle(A);
     expect(names()).toEqual(["submit", "withdraw", "withdraw"]);
     expect(getPilotState(A).unsettledAt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4257 PR B — signals (schema 2) in the submit job.
+//   C4  thunk absent / null / throws / rejects / complete:false / pending past
+//       the timeout -> the RPC payload is the schema-1 report (the REAL fixture)
+//   C6  sharing off / not due -> the thunk is never called; due -> once, schema 2
+//   C7  switch OFF while the thunk is pending -> no submit
+//   C8  22023 on schema 2 -> ONE schema-1 resend, recorded once; 42501 -> none;
+//       R7 (i) both refused -> exactly 2 calls, nothing recorded; (ii) switch OFF
+//       or another user between refusal and resend -> no resend; (iii) schema-2
+//       timeout -> no resend, the unsettled mark is set
+//   LOG the refusal logs its code and a key-name DETAIL only
+// ---------------------------------------------------------------------------
+describe("4257 signals in the submit job", () => {
+  const fixture = () => JSON.parse(fs.readFileSync(FIXTURE, "utf8")).report;
+  const schemaOf = (i: number) => (calls[i].report as { schema: number }).schema;
+  const sendWith = async (thunk: (() => Promise<SignalScore | null>) | undefined, extra: PilotServiceOptions = {}) => {
+    setPilotOn(A);
+    const s = service({ signalsTimeoutMs: 30, ...extra });
+    const { score, detector } = scoreFromFixture();
+    await s.maybeSend(A, score, detector, thunk);
+    return s;
+  };
+
+  describe("C4 no usable signals -> the schema-1 payload, JSON-identical", () => {
+    it.each([
+      ["absent", undefined],
+      ["null", async () => null],
+      ["throws", () => {
+        throw new Error("boom");
+      }],
+      ["rejects", async () => Promise.reject(new Error("boom"))],
+      ["complete:false", async () => syntheticSignals(1, { complete: false, stoppedBy: "time" })],
+      ["pending past the timeout", () => new Promise<SignalScore>(() => undefined)],
+      ["settles after the timeout", () => new Promise<SignalScore>((res) => setTimeout(() => res(syntheticSignals(1)), 120))],
+    ])("%s", async (_name, thunk) => {
+      await sendWith(thunk as (() => Promise<SignalScore | null>) | undefined);
+      expect(names()).toEqual(["submit"]);
+      expect(JSON.stringify(calls[0].report)).toBe(JSON.stringify(fixture()));
+      expect(Object.keys(getPilotState(A).sentVersions)).toEqual(["1"]);
+    });
+
+    it("a complete pass -> schema 2 whose base is the schema-1 payload", async () => {
+      const thunk = jest.fn(async () => syntheticSignals(2));
+      await sendWith(thunk);
+      expect(thunk).toHaveBeenCalledTimes(1);
+      expect(names()).toEqual(["submit"]);
+      expect(schemaOf(0)).toBe(2);
+      const { signals, ...rest } = calls[0].report as Record<string, unknown>;
+      expect(signals).toBeDefined();
+      expect(JSON.stringify({ ...rest, schema: 1 })).toBe(JSON.stringify(fixture()));
+    });
+  });
+
+  describe("R5 the signals race timer is cleared", () => {
+    it("a pass that settles in time leaves no timer behind", async () => {
+      jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] });
+      try {
+        setPilotOn(A);
+        const s = service({ signalsTimeoutMs: 25_000 });
+        const { score, detector } = scoreFromFixture();
+        await s.maybeSend(A, score, detector, async () => syntheticSignals(1));
+        expect(schemaOf(0)).toBe(2);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe("C6 the thunk runs only once a report is due", () => {
+    it("sharing off -> 0 calls; not due -> 0 calls; due -> 1", async () => {
+      const thunk = jest.fn(async () => syntheticSignals(1));
+      const s = service();
+      const { score, detector } = scoreFromFixture();
+      await s.maybeSend(A, score, detector, thunk);
+      expect(thunk).toHaveBeenCalledTimes(0);
+      setPilotOn(A);
+      await s.maybeSend(A, score, detector, thunk);
+      expect(thunk).toHaveBeenCalledTimes(1);
+      clock += H; // sent an hour ago: not due
+      await s.maybeSend(A, score, detector, thunk);
+      expect(thunk).toHaveBeenCalledTimes(1);
+      expect(names()).toEqual(["submit"]);
+    });
+  });
+
+  describe("C7 the switch re-read happens after the pass", () => {
+    it("OFF while the thunk is pending -> no submit", async () => {
+      setPilotOn(A);
+      let release!: (s: SignalScore) => void;
+      const s = service({ signalsTimeoutMs: 5_000 });
+      const { score, detector } = scoreFromFixture();
+      const sending = s.maybeSend(A, score, detector, () => new Promise<SignalScore>((res) => (release = res)));
+      await new Promise((r) => setImmediate(r));
+      expect(release).toBeDefined();
+      setPilotOffPending(A);
+      release(syntheticSignals(1));
+      await sending;
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("C8/R7 the 22023 fallback", () => {
+    const refuse = (first: string, then: string | null = null) => {
+      let n = 0;
+      answer = async () => {
+        n += 1;
+        const code = n === 1 ? first : then;
+        return { error: code === null ? null : { code, details: "signals: values.anchor" } };
+      };
+    };
+
+    it("22023 on schema 2 -> one schema-1 resend (the fixture), recorded once", async () => {
+      refuse("22023");
+      await sendWith(async () => syntheticSignals(1));
+      expect(names()).toEqual(["submit", "submit"]);
+      expect([schemaOf(0), schemaOf(1)]).toEqual([2, 1]);
+      expect(JSON.stringify(calls[1].report)).toBe(JSON.stringify(fixture()));
+      expect(Object.keys(getPilotState(A).sentVersions)).toEqual(["1"]);
+    });
+
+    it("42501 on schema 2 -> no resend, nothing recorded", async () => {
+      refuse("42501");
+      await sendWith(async () => syntheticSignals(1));
+      expect(names()).toEqual(["submit"]);
+      expect(getPilotState(A).sentVersions).toEqual({});
+    });
+
+    it("22023 on schema 1 (no signals) -> no resend", async () => {
+      refuse("22023");
+      await sendWith(undefined);
+      expect(names()).toEqual(["submit"]);
+      expect(getPilotState(A).sentVersions).toEqual({});
+    });
+
+    it("(i) the resend is refused too -> exactly 2 calls, nothing recorded", async () => {
+      refuse("22023", "22023");
+      await sendWith(async () => syntheticSignals(1));
+      expect(names()).toEqual(["submit", "submit"]);
+      expect(getPilotState(A).sentVersions).toEqual({});
+    });
+
+    it("(ii) switch OFF between the refusal and the resend -> no resend", async () => {
+      answer = async () => {
+        setPilotOffPending(A);
+        return { error: { code: "22023" } };
+      };
+      await sendWith(async () => syntheticSignals(1));
+      expect(names()).toEqual(["submit"]);
+    });
+
+    it("(ii) another user signed in between the refusal and the resend -> no resend", async () => {
+      answer = async () => {
+        authUser = B;
+        return { error: { code: "22023" } };
+      };
+      await sendWith(async () => syntheticSignals(1));
+      expect(names()).toEqual(["submit"]);
+    });
+
+    it("(iii) schema-2 timeout -> no resend, the unsettled mark is set", async () => {
+      answer = () => new Promise<Answer>(() => undefined);
+      await sendWith(async () => syntheticSignals(1), { timeoutMs: 20 });
+      expect(names()).toEqual(["submit"]);
+      expect(getPilotState(A).unsettledAt).not.toBeNull();
+      expect(getPilotState(A).sentVersions).toEqual({});
+    });
+
+    it("LOG code + a key-name DETAIL only; a DETAIL with a value shape is dropped", async () => {
+      const warn = logService.warn as jest.Mock;
+      warn.mockClear();
+      refuse("22023", "42501");
+      await sendWith(async () => syntheticSignals(1));
+      const refused = warn.mock.calls.filter((c) => c[0] === "Learn pilot submit refused").map((c) => c[2]);
+      expect(refused).toEqual([
+        { code: "22023", schema: 2, detail: "signals: values.anchor" },
+        { code: "42501", schema: 1 },
+      ]);
+      warn.mockClear();
+      calls.length = 0;
+      clock += 30 * H;
+      answer = async () => ({ error: { code: "22023", details: "seller@example.test" } });
+      await sendWith(undefined);
+      expect(warn.mock.calls.filter((c) => c[0] === "Learn pilot submit refused").map((c) => c[2])).toEqual([
+        { code: "22023", schema: 1 },
+      ]);
+    });
   });
 });

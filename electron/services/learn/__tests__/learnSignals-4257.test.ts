@@ -473,3 +473,40 @@ describe("S5 privacy", () => {
     expect(formatSignalLines(null)).toEqual(["Signals (measured only): not available"]);
   });
 });
+
+describe("R5 (4257 PR B) the time limit is checked inside a page, every MEASURE_CHUNK emails", () => {
+  it("one 200-email page, time moving only on yields: the pass stops after 100 emails, incomplete", async () => {
+    const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield, senderRules: BUNDLED_SENDER_RULES });
+    const rows = Array.from({ length: 200 }, (_, i) => ({
+      id: `e-r5-${String(i).padStart(3, "0")}`,
+      subject: "Status",
+      sender: "a@agent.example",
+      recipients: null,
+      body_plain: "Hello",
+      body_html: null,
+      bulk_mail_headers: null,
+    }));
+    let t = 0;
+    let pages = 0;
+    const s = await scoreSignals({
+      run: r,
+      keyRows: [],
+      dealAnswers: [],
+      ctx: { rules: BUNDLED_SENDER_RULES, keep: buildKeepSets([], BUNDLED_SENDER_RULES), vendorRoleDomains: new Set() },
+      loaders: {
+        bulkRows: () => [],
+        dealLinkedPage: () => (pages++ === 0 ? rows : []),
+        emailsByIds: () => [],
+        attachmentsByEmailIds: () => new Map(),
+      },
+      nowMs: () => t,
+      yieldFn: async () => {
+        t += 1_000;
+      },
+      timeLimitMs: 2_500,
+    });
+    // checks at 25 (t=0), 50 (1000), 75 (2000), 100 (3000 > 2500: stop)
+    expect(s.complete).toBe(false);
+    expect(s.emails.dealLinked).toBe(100);
+  });
+});
