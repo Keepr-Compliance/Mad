@@ -127,6 +127,19 @@ A beta is a prerelease on the update feed. Only installs with **Get beta updates
 
 **The workflow refuses, before signing:** a version that is not `X.Y.Z` on `main`; `channel=beta` anywhere but a `beta/` or `rehearsal/` branch; a beta branch not named `beta/<version>`; a beta version that is not newer than the feed's Latest; any beta to the feed while Latest is below v2.49.0.
 
+**One-time setup (founder):** the `feed-beta` Environment in Keepr-Compliance/Mad, before the first beta.
+
+- Required reviewer: the founder. Leave "Prevent self-review" off.
+- Deployment branches: **Selected branches**, one custom rule `beta/*`. The workflow refuses any other rule.
+- Environment secret `FEED_BETA_TOKEN`: a fine-grained token for `Keepr-Compliance/keepr-releases` only, Contents read/write, with an expiry. It exists **only** as a secret of this Environment, never as a repository secret.
+- Verify:
+
+  ```bash
+  gh secret list -R Keepr-Compliance/Mad | grep FEED_BETA_TOKEN                 # must print nothing
+  gh secret list -R Keepr-Compliance/Mad --env feed-beta | grep FEED_BETA_TOKEN  # must print it
+  gh api repos/Keepr-Compliance/Mad/environments/feed-beta/deployment-branch-policies --jq '[.branch_policies[].name]'   # ["beta/*"]
+  ```
+
 1. **Branch from the released stable tag, not from develop:**
 
    ```bash
@@ -174,7 +187,26 @@ A stable mirrored by hand uses no `--prerelease`, `--latest` or `--draft` flag, 
 
 ### Rehearsing the publish path
 
-`rehearsal/*` branches publish to the scratch feed named by the `SCRATCH_FEED_REPO` variable, never to the update feed. Versions are `90.x` and are cut from the branch under test. Each dispatch needs the founder's go. Run artifacts from these branches are kept 1 day; delete them after each step's checks. **Never install a rehearsal build anywhere.**
+`rehearsal/*` branches publish to the scratch feed named by the `SCRATCH_FEED_REPO` variable, never to the update feed. Versions are `90.x` and are cut from the branch under test. Each dispatch needs the founder's go. Run artifacts from these branches are kept 1 day; delete them once no re-run of that run is planned. **Never install a rehearsal build anywhere.**
+
+**Local runs of the publish script (R0)** use the scratch token and nothing else: never a stored `gh` login, never the feed token.
+
+```bash
+export GH_TOKEN=<scratch token> GH_CONFIG_DIR="$(mktemp -d)"
+export FEED_ROLE=rehearsal FEED_REPO=Keepr-Compliance/keepr-feed-rehearsal \
+       REAL_FEED_REPO=Keepr-Compliance/keepr-releases REAL_FEED_ID=1170941315
+node scripts/release/publish-feed.mjs --phase target --execute     # first; must print "checked: OK"
+```
+
+### When `create-release` changes
+
+`create-release` is pinned by hash (`CREATE_RELEASE_SHA256` in `scripts/ci/check-release-feed-flags.mjs`). Any edit to it turns **Package Config Guard** and **Test & Lint** (`checkReleaseFeedFlags-4245.test.ts`) red. After SR review of the edit:
+
+```bash
+node scripts/ci/check-release-feed-flags.mjs --print-pin   # the new hash
+```
+
+Put that value in `CREATE_RELEASE_SHA256`, in the same PR, and re-run `node scripts/ci/check-release-feed-flags.mjs`.
 
 ## Rules
 

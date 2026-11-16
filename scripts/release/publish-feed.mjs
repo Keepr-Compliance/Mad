@@ -163,7 +163,7 @@ function phaseTarget(gh) {
   const errors = [];
   if (!process.env.GH_TOKEN) {
     errors.push(role === "real"
-      ? `the feed token is empty: the token secret of the ${process.env.ENVIRONMENT_NAME || "beta"} Environment is not set (GitHub creates a missing Environment empty, with no reviewer)`
+      ? `the feed token is empty: the token secret of the ${process.env.ENVIRONMENT_NAME || "beta"} Environment is not set`
       : "the feed token is empty: the SCRATCH_FEED_TOKEN repository secret is not set");
   }
   const realFeedId = process.env.REAL_FEED_ID ?? "";
@@ -197,7 +197,18 @@ function phaseTarget(gh) {
       .flatMap((p) => p.reviewers ?? []);
     const envErrors = [];
     if (reviewers.length === 0) envErrors.push(`the ${envName} Environment has no required reviewer`);
-    if (!env.deployment_branch_policy) envErrors.push(`the ${envName} Environment admits every branch`);
+    if (!env.deployment_branch_policy) {
+      envErrors.push(`the ${envName} Environment admits every branch`);
+    } else if (env.deployment_branch_policy.custom_branch_policies !== true) {
+      envErrors.push(`the ${envName} Environment must use a custom branch policy`);
+    } else {
+      const pr = gh(["api", `repos/${repo}/environments/${encodeURIComponent(envName)}/deployment-branch-policies`], { token: process.env.REPO_TOKEN ?? "" });
+      if (pr.status !== 0) die([`could not read the ${envName} Environment's branch policies: ${pr.stderr.trim()}`]);
+      const policies = (JSON.parse(pr.stdout).branch_policies ?? []).map((b) => `${b.type ?? "branch"}:${b.name}`);
+      if (policies.length !== 1 || policies[0] !== "branch:beta/*") {
+        envErrors.push(`the ${envName} Environment's branch policy must be exactly beta/* (got ${policies.join(", ") || "none"})`);
+      }
+    }
     if (envErrors.length) die(envErrors);
   }
   console.log(`target: ${feed} (${role}) checked: OK`);

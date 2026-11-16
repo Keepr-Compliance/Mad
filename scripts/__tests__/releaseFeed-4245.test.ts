@@ -61,6 +61,7 @@ interface State {
   releases?: Record<string, Rel[]>;
   latest?: Record<string, string | null>;
   environments?: Record<string, unknown>;
+  branchPolicies?: Record<string, unknown[]>;
 }
 
 const REVIEWED_ENV = {
@@ -68,7 +69,7 @@ const REVIEWED_ENV = {
   protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "reviewer" } }] }],
   deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
 };
-/** The shape GitHub gives an Environment it created because a job named it. */
+/** An Environment with no protection: shape read from one of the repository's own Environments. */
 const AUTO_CREATED_ENV = { name: "feed-beta", protection_rules: [], deployment_branch_policy: null };
 
 function baseState(): State {
@@ -85,6 +86,8 @@ function baseState(): State {
     },
     latest: { [REAL]: "v2.49.0", [SCRATCH]: "v90.0.0" },
     environments: { [`${MAD}/feed-beta`]: REVIEWED_ENV },
+    // Shape from GitHub's REST docs for GET .../deployment-branch-policies; ids invented.
+    branchPolicies: { [`${MAD}/feed-beta`]: [{ id: 1, name: "beta/*", type: "branch" }] },
   };
 }
 
@@ -386,6 +389,7 @@ describe("BACKLOG-4245 publish-feed --phase target", () => {
   it("real: refuses when the Environment's token secret is empty", () => {
     const r = target(realEnv({ GH_TOKEN: "" }));
     expect(r.out).toMatch(/feed token is empty: the token secret of the feed-beta Environment is not set/);
+    expect(r.out).not.toMatch(/GitHub creates/);
     expect(r.status).toBe(1);
     expect(r.log).toEqual([]);
   });
@@ -398,12 +402,41 @@ describe("BACKLOG-4245 publish-feed --phase target", () => {
     expect(r.status).toBe(1);
   });
 
-  it("real: refuses an Environment GitHub created empty (no reviewer, every branch)", () => {
+  it("real: refuses an Environment with no reviewer and no branch rule", () => {
     const s = baseState();
     s.environments = { [`${MAD}/feed-beta`]: AUTO_CREATED_ENV };
     const r = target(realEnv(), s);
     expect(r.out).toMatch(/has no required reviewer/);
     expect(r.out).toMatch(/admits every branch/);
+    expect(r.status).toBe(1);
+  });
+
+  it.each([
+    ["a policy that admits every branch", [{ id: 1, name: "*", type: "branch" }], /must be exactly beta\/\* \(got branch:\*\)/],
+    ["two policies", [{ id: 1, name: "beta/*", type: "branch" }, { id: 2, name: "main", type: "branch" }], /must be exactly beta\/\*/],
+    ["a tag policy", [{ id: 1, name: "beta/*", type: "tag" }], /got tag:beta\/\*/],
+    ["no policy", [], /got none/],
+  ])("real: refuses an Environment branch rule with %s", (_l, policies, why) => {
+    const s = baseState();
+    s.branchPolicies = { [`${MAD}/feed-beta`]: policies };
+    const r = target(realEnv(), s);
+    expect(r.out).toMatch(why);
+    expect(r.status).toBe(1);
+  });
+
+  it("real: refuses protected-branches mode instead of a custom policy", () => {
+    const s = baseState();
+    s.environments = { [`${MAD}/feed-beta`]: { ...REVIEWED_ENV, deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } } };
+    const r = target(realEnv(), s);
+    expect(r.out).toMatch(/must use a custom branch policy/);
+    expect(r.status).toBe(1);
+  });
+
+  it("rehearsal: refuses a response with no permissions field", () => {
+    const s = baseState();
+    s.repos![REAL] = { id: REAL_ID, full_name: REAL };
+    const r = target(rehearsalEnv(), s);
+    expect(r.out).toMatch(/must not be able to push .*permissions\.push is undefined/);
     expect(r.status).toBe(1);
   });
 
@@ -578,6 +611,15 @@ describe("BACKLOG-4245 beta publish on the real-feed model", () => {
     });
     expect(r.out).toMatch(/A2: read 2: Latest is the beta v2\.49\.1-beta\.1/);
     expect(r.status).toBe(1);
+  });
+
+  it("finish refuses a release that is already a published stable, with no edit", () => {
+    const s = baseState();
+    s.releases![REAL].push({ tag_name: BTAG, draft: false, prerelease: false });
+    const r = finish(s);
+    expect(r.out).toMatch(/v2\.49\.1-beta\.1 is not a prerelease/);
+    expect(r.status).toBe(1);
+    expect(writes(r)).toEqual([]);
   });
 
   it("finish refuses when there is no release to publish", () => {

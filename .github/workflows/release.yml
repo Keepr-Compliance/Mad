@@ -831,10 +831,6 @@ jobs:
           node scripts/ci/check-packaged-secrets.mjs win release/win-unpacked
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
-      # uninstaller, finds every PE file by header, and requires
-      # Get-AuthenticodeSignature = Valid for each one. Prints one row per file
-      # (status, certificate-table size, path, signer) before failing.
       # BACKLOG-4245: the packaged app reads the update feed and no channel file.
       - name: Verify the app's update config (BACKLOG-4245)
         if: inputs.channel == 'beta' || startsWith(github.ref, 'refs/heads/beta/') || startsWith(github.ref, 'refs/heads/rehearsal/')
@@ -842,6 +838,10 @@ jobs:
           REAL_FEED_REPO: Keepr-Compliance/keepr-releases
         run: node scripts/release/feed-preflight.mjs --app-update release/win-unpacked/resources/app-update.yml
 
+      # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
+      # uninstaller, finds every PE file by header, and requires
+      # Get-AuthenticodeSignature = Valid for each one. Prints one row per file
+      # (status, certificate-table size, path, signer) before failing.
       - name: Verify every PE file is signed (BACKLOG-3533)
         shell: pwsh
         env:
@@ -1382,6 +1382,7 @@ jobs:
       # release is already public here, so this warns and never fails the job.
       - name: Check which release is Latest (report only, BACKLOG-4245)
         continue-on-error: true
+        timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           FEED_ROLE: real
@@ -1420,6 +1421,7 @@ jobs:
       REAL_FEED_REPO: Keepr-Compliance/keepr-releases
       REAL_FEED_ID: '1170941315'
       ENVIRONMENT_NAME: feed-beta
+      REPO_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -1439,7 +1441,6 @@ jobs:
       - name: Check the feed target
         env:
           GH_TOKEN: ${{ secrets.FEED_BETA_TOKEN }}
-          REPO_TOKEN: ${{ github.token }}
         run: node scripts/release/publish-feed.mjs --phase target --execute
 
       - name: Upload to the feed and check the release
@@ -1761,7 +1762,7 @@ jobs:
           fi
 
           echo ""
-          echo "All published release assets verified against their manifests (both repos)."
+          echo "All published release assets verified against their manifests."
 
       - name: Publish and check Latest
         env:
@@ -1794,6 +1795,7 @@ jobs:
       FEED_KIND: ${{ inputs.channel == 'beta' && 'beta' || 'stable' }}
       REAL_FEED_REPO: Keepr-Compliance/keepr-releases
       REAL_FEED_ID: '1170941315'
+      REPO_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -1813,7 +1815,6 @@ jobs:
       - name: Check the feed target
         env:
           GH_TOKEN: ${{ secrets.SCRATCH_FEED_TOKEN }}
-          REPO_TOKEN: ${{ github.token }}
         run: node scripts/release/publish-feed.mjs --phase target --execute
 
       - name: Upload to the feed and check the release
@@ -2135,7 +2136,7 @@ jobs:
           fi
 
           echo ""
-          echo "All published release assets verified against their manifests (both repos)."
+          echo "All published release assets verified against their manifests."
 
       - name: Publish and check Latest
         env:

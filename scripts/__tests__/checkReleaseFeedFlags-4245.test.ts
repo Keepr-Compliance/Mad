@@ -83,12 +83,12 @@ describe("BACKLOG-4245 check-release-feed-flags", () => {
     ],
     [
       "the rehearsal job reads the stable feed token",
-      () => mutate(`          GH_TOKEN: ${SCRATCH}\n          REPO_TOKEN:`, "          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}\n          REPO_TOKEN:"),
+      () => mutate(`          GH_TOKEN: ${SCRATCH}\n        run: node scripts/release/publish-feed.mjs --phase target`, "          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}\n        run: node scripts/release/publish-feed.mjs --phase target"),
       /rehearse-feed: reads PUBLIC_RELEASE_TOKEN/,
     ],
     [
       "the rehearsal job reads the beta token",
-      () => mutate(`          GH_TOKEN: ${SCRATCH}\n          REPO_TOKEN:`, `          GH_TOKEN: ${BETA}\n          REPO_TOKEN:`),
+      () => mutate(`          GH_TOKEN: ${SCRATCH}\n        run: node scripts/release/publish-feed.mjs --phase target`, `          GH_TOKEN: ${BETA}\n        run: node scripts/release/publish-feed.mjs --phase target`),
       /rehearse-feed: reads FEED_BETA_TOKEN without environment: feed-beta/,
     ],
     [
@@ -98,7 +98,7 @@ describe("BACKLOG-4245 check-release-feed-flags", () => {
     ],
     [
       "a token is chosen by && / ||",
-      () => mutate(`          GH_TOKEN: ${SCRATCH}\n          REPO_TOKEN:`, "          GH_TOKEN: ${{ startsWith(github.ref, 'refs/heads/rehearsal/') && secrets.SCRATCH_FEED_TOKEN || secrets.FEED_BETA_TOKEN }}\n          REPO_TOKEN:"),
+      () => mutate(`          GH_TOKEN: ${SCRATCH}\n        run: node scripts/release/publish-feed.mjs --phase target`, "          GH_TOKEN: ${{ startsWith(github.ref, 'refs/heads/rehearsal/') && secrets.SCRATCH_FEED_TOKEN || secrets.FEED_BETA_TOKEN }}\n        run: node scripts/release/publish-feed.mjs --phase target"),
       /mixes a secret with && or \|\|/,
     ],
     [
@@ -145,6 +145,37 @@ describe("BACKLOG-4245 check-release-feed-flags", () => {
       /keep rehearsal runs 1 day/,
     ],
     [
+      "publish-beta no longer sets REPO_TOKEN (its stage and finish steps read it)",
+      () => {
+        const t = WORKFLOW;
+        const start = t.indexOf("  publish-beta:");
+        const end = t.indexOf("  rehearse-feed:");
+        const job = mutate("      REPO_TOKEN: ${{ github.token }}\n", "", 1, t.slice(start, end));
+        return t.slice(0, start) + job + t.slice(end);
+      },
+      /publish-beta \/ "Upload to the feed and check the release": REPO_TOKEN is read but not set/,
+    ],
+    [
+      "a publish step loses VERSION",
+      () => {
+        const t = WORKFLOW;
+        const start = t.indexOf("  rehearse-feed:");
+        const step = '          VERSION: ${{ steps.version.outputs.version }}\n        run: node scripts/release/publish-feed.mjs --phase finish';
+        return t.slice(0, start) + mutate(step, "        run: node scripts/release/publish-feed.mjs --phase finish", 1, t.slice(start));
+      },
+      /rehearse-feed \/ "Publish and check Latest": VERSION is read but not set/,
+    ],
+    [
+      "the remote preflight loses SCRATCH_FEED_REPO",
+      () => mutate("          SCRATCH_FEED_REPO: ${{ vars.SCRATCH_FEED_REPO }}\n", "", 2),
+      /SCRATCH_FEED_REPO is read but not set/,
+    ],
+    [
+      "the Latest step has no step timeout",
+      () => mutate("        continue-on-error: true\n        timeout-minutes: 2\n", "        continue-on-error: true\n"),
+      /must have timeout-minutes of 1-5/,
+    ],
+    [
       "the dispatch has no beta option",
       () => mutate("        options: [website, store, beta]\n", "        options: [website, store]\n"),
       /options must be \[website, store, beta\]/,
@@ -153,6 +184,12 @@ describe("BACKLOG-4245 check-release-feed-flags", () => {
     const r = check(make());
     expect(r.stderr).toMatch(why);
     expect(r.status).toBe(1);
+  });
+
+  it("--print-pin prints the pinned hash for the repo's release.yml", () => {
+    const r = spawnSync(process.execPath, [SCRIPT, "--print-pin"], { encoding: "utf8" });
+    expect(r.stdout.trim()).toBe(readFileSync(SCRIPT, "utf8").match(/CREATE_RELEASE_SHA256 = "([0-9a-f]{64})"/)![1]);
+    expect(r.status).toBe(0);
   });
 
   it("FAILS when the rehearsal's stable commands differ from the mirror's (title changed in the mirror only)", () => {

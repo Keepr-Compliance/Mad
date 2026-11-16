@@ -45,6 +45,18 @@ const SCRATCH_PRESENCE = "${{ secrets.SCRATCH_FEED_TOKEN != '' }}";
 const errors = [];
 const err = (m) => errors.push(m);
 
+if (args.includes("--print-pin")) {
+  const t = readFileSync(WORKFLOW, "utf8").replace(/\r\n/g, "\n");
+  const start = t.indexOf("\n  create-release:\n") + 1;
+  const cut = t.indexOf("\n\n      # BACKLOG-4245: report only.", start);
+  if (start <= 0 || cut < 0) {
+    console.error("create-release or its report-only step not found");
+    process.exit(1);
+  }
+  console.log(createHash("sha256").update(t.slice(start, cut + 1)).digest("hex"));
+  process.exit(0);
+}
+
 const text = readFileSync(WORKFLOW, "utf8").replace(/\r\n/g, "\n");
 const lines = text.split("\n");
 
@@ -123,12 +135,13 @@ if (!createRelease) {
     const reviewed = createRelease.slice(0, cut + 1);
     const hash = createHash("sha256").update(reviewed).digest("hex");
     if (hash !== CREATE_RELEASE_SHA256) {
-      err(`create-release differs from its reviewed text (sha256 ${hash}); a change to it needs review and a new pin`);
+      err(`create-release differs from its reviewed text (sha256 ${hash}). After SR review, set CREATE_RELEASE_SHA256 in scripts/ci/check-release-feed-flags.mjs to the new value: node scripts/ci/check-release-feed-flags.mjs --print-pin`);
     }
     const steps = stepsOf(createRelease);
     const last = steps[steps.length - 1] ?? "";
     if (stepName(last) !== LATEST_STEP_NAME) err(`create-release: the last step must be "${LATEST_STEP_NAME}"`);
     if (!/^ {8}continue-on-error: true$/m.test(last)) err("create-release: the Latest step must be continue-on-error: true");
+    if (!/^ {8}timeout-minutes: [1-5]$/m.test(last)) err("create-release: the Latest step must have timeout-minutes of 1-5");
     if (!/--report-only/.test(last)) err("create-release: the Latest step must pass --report-only");
     if (secretsIn(last).length) err("create-release: the Latest step must read no secret");
   }
@@ -263,7 +276,8 @@ if (beta && rehearse) {
       .replace('          PRIVATE_REPO="${GITHUB_REPOSITORY}"\n', "")
       .replace('          PUBLIC_REPO="Keepr-Compliance/keepr-releases"\n', '          PUBLIC_REPO="${FEED_REPO}"\n')
       .replace('          verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private"\n', "")
-      .replace('          strict_verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private" "false"\n', "");
+      .replace('          strict_verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private" "false"\n', "")
+      .replace("verified against their manifests (both repos).", "verified against their manifests.");
     const copy = stepsOf(beta).find((s) => stepName(s) === "Verify release asset integrity");
     if (stripComments(run(copy)) !== stripComments(expected)) err("publish-beta: the integrity step differs from create-release's (apart from FEED_REPO and the private legs)");
   }
@@ -273,6 +287,103 @@ const RETENTION = "          retention-days: ${{ startsWith(github.ref, 'refs/he
 if (text.split("\n").filter((l) => l === RETENTION).length !== 2) err("both build artifact uploads must keep rehearsal runs 1 day (retention-days expression)");
 
 if (!/^ {8}options: \[website, store, beta\]$/m.test(text)) err("workflow_dispatch channel options must be [website, store, beta]");
+
+// ── env contract: every variable a step's script reads is set by that step ──
+// The variable each script phase reads, by role. gh itself reads GH_TOKEN.
+// Runner-provided (GITHUB_*, RUNNER_*) and test-only (FEED_GH_BIN) names are not listed.
+const FEED_TARGET = ["GH_TOKEN", "FEED_ROLE", "FEED_REPO", "REAL_FEED_REPO", "REAL_FEED_ID"];
+export const ENV_CONTRACT = {
+  "publish-feed target real": [...FEED_TARGET, "ENVIRONMENT_NAME", "REPO_TOKEN"],
+  "publish-feed target rehearsal": FEED_TARGET,
+  // stage and finish run the target checks first
+  "publish-feed stage real": [...FEED_TARGET, "ENVIRONMENT_NAME", "REPO_TOKEN"],
+  "publish-feed stage rehearsal": FEED_TARGET,
+  "publish-feed finish real": [...FEED_TARGET, "ENVIRONMENT_NAME", "REPO_TOKEN"],
+  "publish-feed finish rehearsal": FEED_TARGET,
+  "publish-feed check-latest real": ["GH_TOKEN", "FEED_ROLE", "FEED_REPO"],
+  "feed-preflight local": ["CHANNEL"],
+  "feed-preflight remote": ["CHANNEL", "GH_TOKEN", "REAL_FEED_REPO", "REAL_FEED_ID", "SCRATCH_FEED_REPO", "HAS_SCRATCH_TOKEN"],
+  "feed-preflight app-update": ["REAL_FEED_REPO"],
+};
+const RUNNER_ENV = /^(GITHUB_|RUNNER_)/;
+const NOT_WORKFLOW_ENV = new Set(["FEED_GH_BIN"]);
+
+function envKeys(block, indent) {
+  const ls = block.split("\n");
+  const i = ls.findIndex((l) => l === `${" ".repeat(indent)}env:`);
+  const keys = new Map();
+  if (i < 0) return keys;
+  const re = new RegExp(`^ {${indent + 2}}([A-Za-z_][A-Za-z0-9_]*):\\s*(.*)$`);
+  for (let j = i + 1; j < ls.length; j++) {
+    if (!ls[j].startsWith(" ".repeat(indent + 2))) break;
+    const m = re.exec(ls[j]);
+    if (m) keys.set(m[1], m[2].replace(/^['"]|['"]$/g, ""));
+  }
+  return keys;
+}
+function jobLevelEnv(job) {
+  // job keys sit at 4 spaces; stop at "    steps:"
+  return envKeys(job.slice(0, job.indexOf("\n    steps:")), 4);
+}
+function scriptMode(run) {
+  let m = /scripts\/release\/publish-feed\.mjs --phase ([a-z-]+)/.exec(run);
+  if (m) return ["publish-feed", m[1]];
+  m = /scripts\/release\/feed-preflight\.mjs --(local|remote|app-update)/.exec(run);
+  if (m) return ["feed-preflight", m[1]];
+  return null;
+}
+function shellVarsUsed(run) {
+  const used = new Set([...run.matchAll(/\$\{([A-Z][A-Z0-9_]*)\}|\$([A-Z][A-Z0-9_]*)\b/g)].map((m) => m[1] || m[2]));
+  // NAME=value assigns; NAME=value cmd ... only sets NAME for that one command.
+  const assigned = new Set();
+  for (const line of run.split("\n")) {
+    for (const m of line.matchAll(/(?:^|[\s;(])(?:local\s+)?([A-Z][A-Z0-9_]*)=(\S*)(\s+[a-z]\S*)?/g)) {
+      if (!m[3] || /^\$\(/.test(m[2])) assigned.add(m[1]);
+    }
+  }
+  for (const m of run.matchAll(/for\s+([A-Z][A-Z0-9_]*)\s+in/g)) assigned.add(m[1]);
+  return [...used].filter((v) => !assigned.has(v) && !RUNNER_ENV.test(v));
+}
+let contractSteps = 0;
+for (const name of jobNames) {
+  const r = jobRange(name);
+  if (!r || r[0] < jobsStart) continue;
+  const job = jobText(name);
+  const jobEnv = jobLevelEnv(job);
+  for (const step of stepsOf(job)) {
+    const run = step.includes("        run:") ? step.slice(step.indexOf("        run:")) : "";
+    if (!run) continue;
+    const env = new Map([...jobEnv, ...envKeys(step, 8)]);
+    const mode = scriptMode(run);
+    const isPublishJob = ["publish-beta", "rehearse-feed", "create-release"].includes(name);
+    if (!mode && !isPublishJob) continue;
+    const need = new Set();
+    if (mode) {
+      const key = mode[0] === "publish-feed" ? `${mode.join(" ")} ${env.get("FEED_ROLE") ?? "?"}` : mode.join(" ");
+      const listed = ENV_CONTRACT[key];
+      if (!listed) {
+        err(`${name} / "${stepName(step)}": no env contract for ${key}`);
+        continue;
+      }
+      listed.forEach((v) => need.add(v));
+    }
+    if (isPublishJob && (mode || /BACKLOG-4245|FEED_REPO/.test(step))) shellVarsUsed(run).forEach((v) => need.add(v));
+    if (need.size === 0) continue;
+    contractSteps++;
+    for (const v of need) if (!env.has(v)) err(`${name} / "${stepName(step)}": ${v} is read but not set by the step or its job`);
+  }
+}
+if (contractSteps < 13) err(`env contract matched only ${contractSteps} steps; expected at least 13`);
+
+// Every variable the scripts read is in the contract (a new read must be wired here first).
+const contractNames = new Set(Object.values(ENV_CONTRACT).flat());
+for (const file of ["scripts/release/publish-feed.mjs", "scripts/release/feed-preflight.mjs", "scripts/release/feed-gh.mjs"]) {
+  const src = readFileSync(path.join(ROOT, file), "utf8");
+  for (const m of src.matchAll(/process\.env\.([A-Z_][A-Z0-9_]*)/g)) {
+    if (RUNNER_ENV.test(m[1]) || NOT_WORKFLOW_ENV.has(m[1])) continue;
+    if (!contractNames.has(m[1])) err(`${file} reads ${m[1]}, which no env contract lists`);
+  }
+}
 
 if (errors.length) {
   for (const e of errors) console.error(`::error::check-release-feed-flags: ${e}`);

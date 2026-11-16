@@ -108,6 +108,10 @@ if (cmd === "api") {
     const rel = tag && find(m[1], tag)[0];
     if (!rel) die("gh: Not Found (HTTP 404)");
     out({ tag_name: rel.tag_name, prerelease: !!rel.prerelease, draft: !!rel.draft });
+  } else if ((m = /^repos\/([^/]+\/[^/]+)\/environments\/([^/]+)\/deployment-branch-policies$/.exec(endpoint))) {
+    const policies = state.branchPolicies && state.branchPolicies[`${m[1]}/${decodeURIComponent(m[2])}`];
+    if (!policies) die("gh: Not Found (HTTP 404)");
+    out({ total_count: policies.length, branch_policies: policies });
   } else if ((m = /^repos\/([^/]+\/[^/]+)\/environments\/(.+)$/.exec(endpoint))) {
     const env = state.environments[`${m[1]}/${decodeURIComponent(m[2])}`];
     if (!env) die("gh: Not Found (HTTP 404)");
