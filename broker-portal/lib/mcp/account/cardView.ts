@@ -16,18 +16,15 @@ import type { AiAppsCardView } from './cardTypes';
 
 export async function loadAiAppsCard(impersonating: boolean): Promise<AiAppsCardView> {
   if (impersonating) return { kind: 'support' };
-  try {
-    const list = await listMyConnections();
-    if (list.kind !== 'ok') return { kind: 'failed' };
-    return {
-      kind: 'ok',
-      apps: list.connections.map((c) => ({
-        id: c.id,
-        providerLabel: PROVIDER_LABELS[c.provider],
-        lastUsed: c.lastUsedAt === null ? AI_APPS.notUsed : AI_APPS.lastUsed(formatDate(c.lastUsedAt)),
-      })),
-    };
-  } catch {
-    return { kind: 'failed' };
-  }
+  // listMyConnections() never throws: a failed or thrown call is 'transport'.
+  const list = await listMyConnections();
+  if (list.kind !== 'ok') return { kind: 'failed' };
+  return {
+    kind: 'ok',
+    apps: list.connections.map((c) => ({
+      id: c.id,
+      providerLabel: PROVIDER_LABELS[c.provider],
+      lastUsed: c.lastUsedAt === null ? AI_APPS.notUsed : AI_APPS.lastUsed(formatDate(c.lastUsedAt)),
+    })),
+  };
 }

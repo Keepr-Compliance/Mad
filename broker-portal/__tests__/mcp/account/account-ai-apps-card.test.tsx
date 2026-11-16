@@ -116,7 +116,7 @@ describe('connected apps on the card', () => {
     expect(screen.getByText('Session Management')).toBeInTheDocument();
   });
 
-  it('a thrown call: the load-failed text, no redirect', async () => {
+  it('a rejected RPC call: the load-failed text, no redirect', async () => {
     mockRpc.mockRejectedValue(new Error('boom'));
     await renderPage();
     expect(card()).toHaveTextContent(M_A.loadFailed);
