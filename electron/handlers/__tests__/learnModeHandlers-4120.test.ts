@@ -1771,3 +1771,85 @@ describe("R8 (4257) learn:score never runs the signal pass; learn:signals return
     expect(await invoke("learn:signals", { any: 1 })).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4257 PR B — the signal memo shared by learn:signals and the pilot
+// report (SR R4). C6: when both ask, ONE pass; R4: a new answer -> a new pass;
+// a failed pass is not reused; the TTL ends reuse. learn:score itself never
+// runs the pass (the thunk is lazy; R8 test above).
+// ---------------------------------------------------------------------------
+describe("4257 learn:score's signal thunk and learn:signals share one memoised pass", () => {
+  let clock = Date.UTC(2026, 10, 15, 12);
+  async function setup(maybeSend: jest.Mock): Promise<jest.SpyInstance> {
+    ipcHandlers.clear();
+    featureGateHandlers.registerFeatureGateHandlers();
+    handlers.registerLearnModeHandlers({
+      pilotReport: { maybeSend, queueWithdraw: jest.fn() },
+      signalMemo: { now: () => clock },
+    });
+    setToggle(true);
+    const e1 = seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: `Offer accepted on ${CANARY_ADDRESS}`, body: CANARY_BODY });
+    run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4257-m', ?, ?, 'active')`, USER, CANARY_ADDRESS);
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4257-m', ?, 't-4257-m', ?, 'th-4257-m')`, USER, e1);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const signalScoring = await import("../../services/learn/signalScoring");
+    return jest.spyOn(signalScoring, "scoreSignals");
+  }
+  const thunkOf = (m: jest.Mock): (() => Promise<unknown>) => {
+    const t = m.mock.calls[m.mock.calls.length - 1][3];
+    expect(typeof t).toBe("function");
+    return t;
+  };
+
+  it("C6 the pilot thunk then learn:signals -> one pass; the same result", async () => {
+    const maybeSend = jest.fn();
+    const pass = await setup(maybeSend);
+    expect((await invoke("learn:score")).success).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
+    const fromPilot = await thunkOf(maybeSend)();
+    const r = await invoke("learn:signals");
+    expect(pass).toHaveBeenCalledTimes(1);
+    expect(r.signals).toBe(fromPilot);
+  });
+
+  it("C6 concurrent: learn:signals while the pilot pass runs -> one pass", async () => {
+    const maybeSend = jest.fn();
+    const pass = await setup(maybeSend);
+    await invoke("learn:score");
+    const [a, b] = await Promise.all([thunkOf(maybeSend)(), invoke("learn:signals")]);
+    expect(pass).toHaveBeenCalledTimes(1);
+    expect(b.signals).toBe(a);
+  });
+
+  it("R4 a new answer -> a new pass", async () => {
+    const maybeSend = jest.fn();
+    const pass = await setup(maybeSend);
+    await invoke("learn:signals");
+    seedAnswers(USER, "4257-new");
+    await invoke("learn:score");
+    await thunkOf(maybeSend)();
+    expect(pass).toHaveBeenCalledTimes(2);
+  });
+
+  it("R4 a failed pass is not reused", async () => {
+    const maybeSend = jest.fn();
+    const pass = await setup(maybeSend);
+    pass.mockRejectedValueOnce(new Error("boom"));
+    expect((await invoke("learn:signals")).signals).toBeNull();
+    const r = await invoke("learn:signals");
+    expect(pass).toHaveBeenCalledTimes(2);
+    expect((r.signals as { complete: boolean }).complete).toBe(true);
+  });
+
+  it("R4 within the TTL -> reused; past it -> a new pass", async () => {
+    const maybeSend = jest.fn();
+    const pass = await setup(maybeSend);
+    await invoke("learn:signals");
+    clock += 10 * 60 * 1000 - 1;
+    await invoke("learn:signals");
+    expect(pass).toHaveBeenCalledTimes(1);
+    clock += 1;
+    await invoke("learn:signals");
+    expect(pass).toHaveBeenCalledTimes(2);
+  });
+});

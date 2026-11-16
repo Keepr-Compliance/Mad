@@ -311,6 +311,9 @@ export type BuildPilotReportResult =
   /** `reason` names a field path or "too large", never a value. */
   | { ok: false; reason: string };
 
+/** Without signals: exactly the BACKLOG-4219 result. */
+export type BuildSchema1Result = { ok: true; report: PilotReport } | { ok: false; reason: string };
+
 function gateCounts(v: SignalValueScore): z.infer<typeof SignalGate> {
   const g = v.gate;
   return {
@@ -332,12 +335,11 @@ function coverageCounts(c: SignalScore["textCoverage"]["newsletter"]) {
 
 /**
  * The signals block, field by field, or the reason it cannot be built (a fixed
- * name). The value list must be exactly PILOT_SIGNAL_VALUE_NAMES; the baseline
+ * name). An unknown signals_version is refused by the schema's literal (R3). The value list must be exactly PILOT_SIGNAL_VALUE_NAMES; the baseline
  * is per family (every value of a family measures the same newsletter mail).
  */
 export function buildPilotSignals(s: SignalScore): { ok: true; signals: unknown } | { ok: false; reason: string } {
   if (!s.complete) return { ok: false, reason: "incomplete" };
-  if (s.signalsVersion !== PILOT_SIGNALS_VERSION) return { ok: false, reason: "signals_version" };
   const byId = new Map<string, SignalValueScore>();
   for (const v of s.values) byId.set(v.id, v);
   const expected = PILOT_SIGNAL_FAMILIES.reduce((n, f) => n + PILOT_SIGNAL_VALUE_NAMES[f].length, 0);
@@ -399,6 +401,13 @@ export function pilotAppVersion(appVersion: string): string {
  * (scoreRunWithDetector). Returns ok:false (nothing to send) when the result
  * would not pass the server's schema.
  */
+export function buildPilotReport(score: LearnScore, detector: SenderCensus, appVersion: string): BuildSchema1Result;
+export function buildPilotReport(
+  score: LearnScore,
+  detector: SenderCensus,
+  appVersion: string,
+  signals: SignalScore | null | undefined,
+): BuildPilotReportResult;
 export function buildPilotReport(
   score: LearnScore,
   detector: SenderCensus,
@@ -422,11 +431,7 @@ export function buildPilotReport(
 }
 
 /** The schema-1 report (BACKLOG-4219), unchanged. */
-function buildSchema1(
-  score: LearnScore,
-  detector: SenderCensus,
-  appVersion: string,
-): { ok: true; report: PilotReport } | { ok: false; reason: string } {
+function buildSchema1(score: LearnScore, detector: SenderCensus, appVersion: string): BuildSchema1Result {
   const candidate = {
     schema: PILOT_REPORT_SCHEMA_VERSION,
     app_version: pilotAppVersion(appVersion),
