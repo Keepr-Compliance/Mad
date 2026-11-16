@@ -144,6 +144,18 @@ function readLatestWithRetry(gh, accept) {
   return { latest, errors };
 }
 
+/** A2: Latest must not move, so every one of `retries` reads must be clean. */
+function readLatestEveryTime(gh, accept) {
+  let latest = null;
+  for (let i = 0; i < Math.max(1, retries); i++) {
+    if (i > 0) sleep(retryDelayMs);
+    latest = readLatest(gh, feed);
+    const errors = accept(latest);
+    if (errors.length) return { latest, errors: errors.map((e) => `read ${i + 1}: ${e}`) };
+  }
+  return { latest, errors: [] };
+}
+
 // ── phases ────────────────────────────────────────────────────────────────
 
 function phaseTarget(gh) {
@@ -201,6 +213,7 @@ function phaseStage(gh) {
     console.log(JSON.stringify(plan, null, 2));
     return;
   }
+  phaseTarget(gh); // every write phase re-checks token and target itself
   const files = expandGlobs();
   const localErrors = assetSetErrors(files.map((f) => path.basename(f)), expectedAssetNames(version), "built files");
   if (localErrors.length) die(localErrors);
@@ -262,6 +275,7 @@ function phaseStage(gh) {
 }
 
 function phaseFinishBeta(gh) {
+  phaseTarget(gh); // every write phase re-checks token and target itself
   const decision = decideBetaFinish(listReleases(gh, feed), tag);
   if (decision.refuse) die([decision.refuse]);
   const previous = readLatest(gh, feed);
@@ -269,7 +283,7 @@ function phaseFinishBeta(gh) {
   ghOk(gh, BETA_PUBLISH(tag, feed), `publishing ${tag} as a prerelease`);
   const flags = flagErrors(viewRelease(gh), { isDraft: false, isPrerelease: true }, "A1'");
   if (flags.length) die(flags);
-  const { latest, errors } = readLatestWithRetry(gh, (l) => betaLatestErrors({ latest: l, tag, previousTag: previous.tag_name }));
+  const { latest, errors } = readLatestEveryTime(gh, (l) => betaLatestErrors({ latest: l, tag, previousTag: previous.tag_name }));
   if (errors.length) die(errors.map((e) => `A2: ${e}`));
   console.log(`finish: ${tag} is a public prerelease; Latest is still ${latest.tag_name}: OK`);
 }

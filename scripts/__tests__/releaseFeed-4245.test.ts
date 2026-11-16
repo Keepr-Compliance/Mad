@@ -74,7 +74,8 @@ const AUTO_CREATED_ENV = { name: "feed-beta", protection_rules: [], deployment_b
 function baseState(): State {
   return {
     repos: {
-      [REAL]: { id: REAL_ID, full_name: REAL, permissions: { push: true } },
+      // push: what the rehearsal token sees on the real feed (false = cannot write it)
+      [REAL]: { id: REAL_ID, full_name: REAL, permissions: { push: false } },
       [ALIAS]: { id: REAL_ID, full_name: REAL, permissions: { push: false } },
       [SCRATCH]: { id: SCRATCH_ID, full_name: SCRATCH, permissions: { push: true } },
     },
@@ -407,15 +408,15 @@ describe("BACKLOG-4245 publish-feed --phase target", () => {
   });
 
   it("rehearsal: passes when the scratch token cannot push to the real feed", () => {
-    const s = baseState();
-    s.repos![REAL] = { id: REAL_ID, full_name: REAL, permissions: { push: false } };
-    const r = target(rehearsalEnv(), s);
+    const r = target(rehearsalEnv());
     expect(r.out).toMatch(/\(rehearsal\) checked: OK/);
     expect(r.status).toBe(0);
   });
 
   it("rehearsal: refuses a token that can push to the real feed", () => {
-    const r = target(rehearsalEnv());
+    const s = baseState();
+    s.repos![REAL] = { id: REAL_ID, full_name: REAL, permissions: { push: true } };
+    const r = target(rehearsalEnv(), s);
     expect(r.out).toMatch(/must not be able to push/);
     expect(r.status).toBe(1);
   });
@@ -548,6 +549,37 @@ describe("BACKLOG-4245 beta publish on the real-feed model", () => {
     expect(rel(r.state, REAL, BTAG)).toMatchObject({ draft: true });
   });
 
+  it.each([
+    ["stage", ["--phase", "stage", "--kind", "beta", "--version", BV, "--root", "<root>", "--execute"]],
+    ["finish", ["--phase", "finish", "--kind", "beta", "--version", BV, "--execute"]],
+  ])("%s re-checks the target itself: a rehearsal pointed at the real feed is refused with no write", (_l, argv) => {
+    const root = artifacts(BV);
+    const r = run(PUBLISH, argv.map((a) => (a === "<root>" ? root : a)), null, rehearsalEnv({ FEED_REPO: ALIAS }));
+    expect(r.out).toMatch(/is the real update feed/);
+    expect(r.status).toBe(1);
+    expect(writes(r)).toEqual([]);
+  });
+
+  it.each([
+    ["stage", ["--phase", "stage", "--kind", "beta", "--version", BV, "--root", "<root>", "--execute"]],
+    ["finish", ["--phase", "finish", "--kind", "beta", "--version", BV, "--execute"]],
+  ])("%s refuses an empty feed token with no gh call", (_l, argv) => {
+    const root = artifacts(BV);
+    const r = run(PUBLISH, argv.map((a) => (a === "<root>" ? root : a)), null, realEnv({ GH_TOKEN: "" }));
+    expect(r.out).toMatch(/feed token is empty/);
+    expect(r.status).toBe(1);
+    expect(r.log).toEqual([]);
+  });
+
+  it("A2 needs every read clean: Latest moving to the beta on a later read is caught", () => {
+    const a = stage(null, artifacts(BV));
+    const r = run(PUBLISH, ["--phase", "finish", "--kind", "beta", "--version", BV, "--retries", "2", "--retry-delay-ms", "0", "--execute"], a.state, {
+      ...realEnv(), FAKE_GH_LATEST_AFTER_READS: `3:${BTAG}`,
+    });
+    expect(r.out).toMatch(/A2: read 2: Latest is the beta v2\.49\.1-beta\.1/);
+    expect(r.status).toBe(1);
+  });
+
   it("finish refuses when there is no release to publish", () => {
     const r = finish(baseState());
     expect(r.out).toMatch(/expected one release for v2\.49\.1-beta\.1, found 0/);
@@ -656,6 +688,15 @@ describe("BACKLOG-4245 stable Latest check", () => {
 });
 
 // ── dry run is the default ───────────────────────────────────────────────
+
+describe("BACKLOG-4245 the gh stand-in", () => {
+  it("is refused inside GitHub Actions", () => {
+    const r = run(PUBLISH, ["--phase", "target", "--execute"], null, { ...realEnv(), GITHUB_ACTIONS: "true" });
+    expect(r.out).toMatch(/FEED_GH_BIN is set inside GitHub Actions; refusing to run/);
+    expect(r.status).toBe(1);
+    expect(r.log).toEqual([]);
+  });
+});
 
 describe("BACKLOG-4245 publish-feed without --execute", () => {
   it.each([

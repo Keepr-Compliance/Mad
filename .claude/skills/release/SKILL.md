@@ -163,7 +163,14 @@ gh release edit vX.Y.Z-beta.N --repo Keepr-Compliance/keepr-releases --draft=tru
 
 It leaves the feed; installs that already took it stay on it (never downgraded). A re-run refuses to publish a withdrawn beta; ship the fix as `beta.N+1`, or ship the stable `X.Y.Z`.
 
-**Never mirror a beta by hand.** If a stable is ever mirrored by hand, use no `--prerelease`, `--latest` or `--draft` flag, exactly as the workflow does.
+**Mirroring by hand (founder's go only).** A beta mirrored by hand must use the workflow's flags, in two steps, never `gh release create` without them:
+
+```bash
+gh release create vX.Y.Z-beta.N --repo Keepr-Compliance/keepr-releases --draft --prerelease --title "Keepr vX.Y.Z-beta.N" --notes "..." <files>
+gh release edit vX.Y.Z-beta.N --repo Keepr-Compliance/keepr-releases --draft=false --prerelease --latest=false
+```
+
+A stable mirrored by hand uses no `--prerelease`, `--latest` or `--draft` flag, exactly as the workflow does.
 
 ### Rehearsing the publish path
 

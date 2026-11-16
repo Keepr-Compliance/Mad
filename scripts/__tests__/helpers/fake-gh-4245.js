@@ -11,6 +11,7 @@
 //  - `--latest` (true) makes the release Latest even when it is a prerelease, so a
 //    run that passes it is seen to move Latest.
 // Which of these GitHub really does is what the scratch-feed rehearsal proves.
+// FAKE_GH_LATEST_AFTER_READS simulates Latest moving between two reads.
 const fs = require("fs");
 const path = require("path");
 
@@ -98,6 +99,11 @@ if (cmd === "api") {
   } else if ((m = /^repos\/([^/]+\/[^/]+)\/releases\?per_page=100$/.exec(endpoint))) {
     out((state.releases[m[1]] || []).map((r) => ({ tag_name: r.tag_name, draft: !!r.draft, prerelease: !!r.prerelease, body: r.body || "" })));
   } else if ((m = /^repos\/([^/]+\/[^/]+)\/releases\/latest$/.exec(endpoint))) {
+    // FAKE_GH_LATEST_AFTER_READS="N:tag": from the Nth read on, Latest is `tag` (a move landing late).
+    state.latestReads = (state.latestReads || 0) + 1;
+    const late = /^(\d+):(.+)$/.exec(process.env.FAKE_GH_LATEST_AFTER_READS || "");
+    if (late && state.latestReads >= Number(late[1])) state.latest[m[1]] = late[2];
+    save();
     const tag = state.latest[m[1]];
     const rel = tag && find(m[1], tag)[0];
     if (!rel) die("gh: Not Found (HTTP 404)");

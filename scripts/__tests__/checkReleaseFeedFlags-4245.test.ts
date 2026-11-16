@@ -139,6 +139,11 @@ describe("BACKLOG-4245 check-release-feed-flags", () => {
       /integrity step differs from create-release's/,
     ],
     [
+      "rehearsal artifacts are kept 30 days",
+      () => mutate("          retention-days: ${{ startsWith(github.ref, 'refs/heads/rehearsal/') && 1 || 30 }}\n", "          retention-days: 30\n", 2),
+      /keep rehearsal runs 1 day/,
+    ],
+    [
       "the dispatch has no beta option",
       () => mutate("        options: [website, store, beta]\n", "        options: [website, store]\n"),
       /options must be \[website, store, beta\]/,

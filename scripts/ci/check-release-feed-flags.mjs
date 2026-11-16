@@ -269,6 +269,9 @@ if (beta && rehearse) {
   }
 }
 
+const RETENTION = "          retention-days: ${{ startsWith(github.ref, 'refs/heads/rehearsal/') && 1 || 30 }}";
+if (text.split("\n").filter((l) => l === RETENTION).length !== 2) err("both build artifact uploads must keep rehearsal runs 1 day (retention-days expression)");
+
 if (!/^ {8}options: \[website, store, beta\]$/m.test(text)) err("workflow_dispatch channel options must be [website, store, beta]");
 
 if (errors.length) {
