@@ -459,6 +459,22 @@ describe("4257 signals in the submit job", () => {
     });
   });
 
+  describe("R5 the signals race timer is cleared", () => {
+    it("a pass that settles in time leaves no timer behind", async () => {
+      jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] });
+      try {
+        setPilotOn(A);
+        const s = service({ signalsTimeoutMs: 25_000 });
+        const { score, detector } = scoreFromFixture();
+        await s.maybeSend(A, score, detector, async () => syntheticSignals(1));
+        expect(schemaOf(0)).toBe(2);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe("C6 the thunk runs only once a report is due", () => {
     it("sharing off -> 0 calls; not due -> 0 calls; due -> 1", async () => {
       const thunk = jest.fn(async () => syntheticSignals(1));
