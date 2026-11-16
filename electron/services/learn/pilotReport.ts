@@ -401,21 +401,29 @@ export function pilotAppVersion(appVersion: string): string {
  * (scoreRunWithDetector). Returns ok:false (nothing to send) when the result
  * would not pass the server's schema.
  */
-export function buildPilotReport(score: LearnScore, detector: SenderCensus, appVersion: string): BuildSchema1Result;
-export function buildPilotReport(
+export function buildPilotReport<S extends SignalScore | null | undefined = undefined>(
   score: LearnScore,
   detector: SenderCensus,
   appVersion: string,
-  signals: SignalScore | null | undefined,
-): BuildPilotReportResult;
-export function buildPilotReport(
+  signals?: S,
+): BuildPilotReportResultFor<S> {
+  return buildPilotReportWithSignals(score, detector, appVersion, signals ?? null) as BuildPilotReportResultFor<S>;
+}
+
+/**
+ * Without a signals argument the result is exactly the BACKLOG-4219 one. One
+ * signature, not overloads: the write-atomicity guard keys units `file::name`.
+ */
+export type BuildPilotReportResultFor<S> = [S] extends [undefined] ? BuildSchema1Result : BuildPilotReportResult;
+
+function buildPilotReportWithSignals(
   score: LearnScore,
   detector: SenderCensus,
   appVersion: string,
-  signals?: SignalScore | null,
+  signals: SignalScore | null,
 ): BuildPilotReportResult {
   const v1 = buildSchema1(score, detector, appVersion);
-  if (!v1.ok || signals === undefined || signals === null) return v1;
+  if (!v1.ok || signals === null) return v1;
   const block = buildPilotSignals(signals);
   if (!block.ok) return { ...v1, signalsLeftOut: block.reason };
   const parsed = PilotReportV2Schema.safeParse({ ...v1.report, schema: PILOT_REPORT_SCHEMA_V2, signals: block.signals });
