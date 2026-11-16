@@ -9,6 +9,7 @@
  * - missing, not a string, or longer than PROMPT_ADDRESS_LIMITS.rawMax UTF-16 units: refused;
  * - every Default_Ignorable_Code_Point is removed (the set of _mcp_ign() in the 4244 data-tools
  *   migration; none kept, an address search needs no joiners);
+ * - the typographic apostrophes U+2018 and U+2019 (phone keyboards type them) become ';
  * - every other character that is not a letter, mark, number, space or one of # , . - ' / & becomes
  *   a space (control characters and line breaks included), so no quote, backslash, angle bracket,
  *   backtick or line break can reach the message;
@@ -37,6 +38,7 @@ export const PROMPTS: Prompt[] = [
 ];
 
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const TYPOGRAPHIC_APOSTROPHE = /[\u2018\u2019]/g;
 const NOT_ALLOWED = /[^\p{L}\p{M}\p{N} #,.\-'/&]/gu;
 
 function invalid(): ProtocolError {
@@ -46,7 +48,7 @@ function invalid(): ProtocolError {
 /** The address text as it goes into the message, or null when it is refused. */
 export function cleanAddress(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw.length > PROMPT_ADDRESS_LIMITS.rawMax) return null;
-  const cleaned = raw.replace(IGNORABLE, '').replace(NOT_ALLOWED, ' ').replace(/ {2,}/g, ' ').trim();
+  const cleaned = raw.replace(IGNORABLE, '').replace(TYPOGRAPHIC_APOSTROPHE, "'").replace(NOT_ALLOWED, ' ').replace(/ {2,}/g, ' ').trim();
   // UTF-16 length, as list_deals measures address_contains
   const n = cleaned.length;
   return n >= PROMPT_ADDRESS_LIMITS.min && n <= PROMPT_ADDRESS_LIMITS.max ? cleaned : null;
