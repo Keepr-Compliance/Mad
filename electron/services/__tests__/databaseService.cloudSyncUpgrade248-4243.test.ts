@@ -737,16 +737,41 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
     const afterOpen = snapshot(db);
-    // A failure inside the enable transaction (creating one trigger) rolls back the flag, every trigger and every mark.
+    // A failure at ANY write step of the enable transaction (cloudSyncDbService.ts enableForUser: creating a
+    // trigger, the state reset, the marks) rolls back the flag, every trigger, the reset and every mark.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { DELETE_STATE_FOR_USER_SQL, MARK_ALL_ELIGIBLE_FOR_USER_SQL } = require("../db/cloudSyncSql") as typeof import("../db/cloudSyncSql");
     const realPrepare = db.prepare.bind(db);
-    (db as { prepare: unknown }).prepare = (sql: string) => {
-      if (sql.startsWith("CREATE TRIGGER trg_cloud_sync_item_insert")) throw Object.assign(new Error("disk"), { code: "SQLITE_FULL" });
-      return realPrepare(sql);
-    };
-    expect(() => enable(db)).toThrow();
-    (db as { prepare: unknown }).prepare = realPrepare;
-    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
-    expect(changedTables(db, afterOpen)).toEqual([]);
+    const steps: Array<[string, (sql: string) => boolean]> = [
+      ["trigger creation", (sql) => sql.startsWith("CREATE TRIGGER trg_cloud_sync_item_insert")],
+      ["state reset", (sql) => sql === DELETE_STATE_FOR_USER_SQL],
+      ["marks", (sql) => sql === MARK_ALL_ELIGIBLE_FOR_USER_SQL],
+    ];
+    // Every step is checked, then compared in one assertion, so a red names every step that leaked.
+    const outcomes: Array<{ step: string; threw: boolean; hit: boolean; triggers: string[]; changed: string[] }> = [];
+    for (const [step, failsAt] of steps) {
+      let hit = false;
+      (db as { prepare: unknown }).prepare = (sql: string) => {
+        if (failsAt(sql)) {
+          hit = true;
+          throw Object.assign(new Error("disk"), { code: "SQLITE_FULL" });
+        }
+        return realPrepare(sql);
+      };
+      let threw = false;
+      try {
+        enable(db);
+      } catch {
+        threw = true;
+      } finally {
+        (db as { prepare: unknown }).prepare = realPrepare;
+      }
+      outcomes.push({ step, threw, hit, triggers: names(db, "trigger", "trg_cloud_sync_%"), changed: changedTables(db, afterOpen) });
+      // Leave the next step a clean start even when this one leaked.
+      for (const t of CLOUD_SYNC_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${t.name}`);
+      db.exec("DELETE FROM cloud_sync_settings; DELETE FROM cloud_sync_dirty; DELETE FROM cloud_sync_state");
+    }
+    expect(outcomes).toEqual(steps.map(([step]) => ({ step, threw: true, hit: true, triggers: [], changed: [] })));
 
     enable(db);
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(ALL_TRIGGERS);
