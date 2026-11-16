@@ -16,10 +16,11 @@ import {
   type McpRequestContext,
 } from '@modelcontextprotocol/server';
 import type { CallToolResult } from '@modelcontextprotocol/server';
+import { getPrompt, PROMPTS } from './prompts';
 import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
 import { getDeal, GET_DEAL_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
-import { TOOL_MESSAGES } from './tools/text';
+import { SERVER_INSTRUCTIONS, TOOL_MESSAGES } from './tools/text';
 
 /** The tools, in the order tools/list returns them. */
 export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL];
@@ -43,10 +44,14 @@ export function createMcpServer(ctx: McpRequestContext): Server {
   // asks for the low-level one so tool registration stays explicit.
   const server = new Server(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {}, prompts: {} }, instructions: SERVER_INSTRUCTIONS }
   );
 
   server.setRequestHandler('tools/list', async () => ({ tools: TOOLS }));
+
+  // Prompts are text only: no tool and no database call (lib/mcp/prompts.ts).
+  server.setRequestHandler('prompts/list', async () => ({ prompts: PROMPTS }));
+  server.setRequestHandler('prompts/get', async (request) => getPrompt(request.params.name, request.params.arguments));
 
   const atDigest = () => ctx.authInfo?.extra?.atDigest;
   const calls = new Map<string, (_args: unknown) => Promise<CallToolResult>>([
