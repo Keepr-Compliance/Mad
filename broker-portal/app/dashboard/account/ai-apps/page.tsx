@@ -13,21 +13,11 @@ import { AI_APPS, CONSENT, M_A, PROVIDER_LABELS } from '@/lib/mcp/account/messag
 import { logAccount } from '@/lib/mcp/account/logging';
 import { readAccountRequest } from '@/lib/mcp/account/request';
 import { listMyConnections } from '@/lib/mcp/account/rpc';
+import { formatDate, formatDateTime } from '@/lib/mcp/account/format';
 import { ReplayOff } from '@/components/sentry/ReplayOff';
 import { AiAppsList, type AiAppRow } from './AiAppsList';
 
 export const dynamic = 'force-dynamic';
-
-const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' });
-const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' });
-
-function formatDate(iso: string): string {
-  return DATE_FORMAT.format(new Date(iso));
-}
-
-function formatDateTime(iso: string): string {
-  return DATE_TIME_FORMAT.format(new Date(iso));
-}
 
 function Shell({ email, children }: { email: string | null; children: React.ReactNode }) {
   return (

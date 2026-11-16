@@ -68,6 +68,7 @@ export const AI_APPS = {
   disconnectAll: 'Disconnect all AI apps',
   confirmAll: 'Disconnect every AI app? They lose access right away. What they already received is not deleted.',
   accountLink: 'AI apps',
+  more: (n: number) => `+${n} more`,
   allDevicesNote: 'This does not disconnect AI apps.',
 } as const;
 

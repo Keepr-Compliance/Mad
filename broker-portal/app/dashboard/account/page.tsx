@@ -23,6 +23,8 @@ import { createClient } from '@/lib/supabase/server';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getAccountView } from '@/lib/account/getAccountView';
 import { mcpEnabled } from '@/lib/mcp/config';
+import { readAccountRequest } from '@/lib/mcp/account/request';
+import { loadAiAppsCard } from '@/lib/mcp/account/cardView';
 import AccountClient from './AccountClient';
 
 export default async function AccountPage() {
@@ -43,6 +45,12 @@ export default async function AccountPage() {
 
   const account = await getAccountView();
 
-  // BACKLOG-4238: the AI apps entry exists only while MCP is on.
-  return <AccountClient account={account} mcpOn={mcpEnabled()} />;
+  // BACKLOG-4238: the AI apps card exists only while MCP is on. It lists the
+  // connected apps, read on the server; a support session (either signal, the
+  // same cookie rule as the AI apps page) lists nothing and reads nothing.
+  const mcpOn = mcpEnabled();
+  const aiApps = mcpOn
+    ? await loadAiAppsCard(!!impersonation || (await readAccountRequest()).impersonating)
+    : null;
+  return <AccountClient account={account} mcpOn={mcpOn} aiApps={aiApps} />;
 }
