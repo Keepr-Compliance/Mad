@@ -60,6 +60,7 @@ import type { RefObject } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Bot,
   ChevronLeft,
   BarChart3,
   ChevronRight,
@@ -77,11 +78,14 @@ import {
 import { AppMark, Drawer, Wordmark } from '@keepr/ui';
 import { resolveViewerName } from '@/lib/utils/userDisplay';
 import { mayUsePeople } from '@/lib/people-roles';
+import { AI_APPS } from '@/lib/mcp/account/messages';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Rendered indented, directly under its parent entry (BACKLOG-4238 AI apps). */
+  sub?: boolean;
 }
 
 const memberNavItems: NavItem[] = [
@@ -143,6 +147,13 @@ const personalNavItems: NavItem[] = [
   { label: 'My Account', href: '/dashboard/account', icon: UserCircle },
 ];
 
+/**
+ * BACKLOG-4238: AI apps, directly under My Account, only while MCP is on and
+ * never in a support session (the page refuses it). The sidebar has no nested
+ * menus, so this is a sibling entry rendered indented.
+ */
+const aiAppsNavItem: NavItem = { label: AI_APPS.accountLink, href: '/dashboard/account/ai-apps', icon: Bot, sub: true };
+
 function formatRole(role?: string): string {
   if (!role) return 'Member';
   return role.charAt(0).toUpperCase() + role.slice(1);
@@ -197,6 +208,8 @@ export interface SidebarProps {
   onMobileClose?: () => void;
   /** BACKLOG-3896: focused when the phone drawer closes (the shell's menu button). */
   mobileReturnFocusRef?: RefObject<HTMLElement | null>;
+  /** BACKLOG-4238: the layout passes mcpEnabled(); the AI apps entry shows only then. */
+  mcpOn?: boolean;
 }
 
 export function Sidebar({
@@ -218,6 +231,7 @@ export function Sidebar({
   mobileOpen = false,
   onMobileClose,
   mobileReturnFocusRef,
+  mcpOn = false,
 }: SidebarProps) {
   const pathname = usePathname();
   // BACKLOG-3080: the floor replaces the member and admin buckets entirely.
@@ -243,8 +257,13 @@ export function Sidebar({
   const name = resolveViewerName({ displayName, displayEmail }) || 'User';
   const initial = name.charAt(0).toUpperCase();
 
+  const showAiApps = mcpOn && !isImpersonating;
+  const personalItems = showAiApps ? [...personalNavItems, aiAppsNavItem] : personalNavItems;
+
   /** '/dashboard' is a prefix of every route, so it matches exactly only. */
   const exactMatchPaths = new Set(['/dashboard']);
+  // With AI apps listed under it, My Account is not also highlighted on the AI apps page.
+  if (showAiApps) exactMatchPaths.add('/dashboard/account');
 
   const renderNavItem = (item: NavItem, isCollapsed: boolean, variant: 'rail' | 'drawer') => {
     // The drawer gets 44px rows. It closes itself on any link tap (kit Drawer),
@@ -282,7 +301,7 @@ export function Sidebar({
         key={item.href}
         href={item.href}
         className={`flex items-center rounded-md text-sm font-medium transition-colors ${
-          isCollapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+          isCollapsed ? 'justify-center px-2 py-2' : item.sub ? 'gap-3 pl-9 pr-3 py-2' : 'gap-3 px-3 py-2'
         }${tall} ${
           isActive
             ? 'bg-gray-800 text-white'
@@ -303,7 +322,7 @@ export function Sidebar({
         <>
           {showBilling && r(billingNavItem)}
           {r(supportNavItem)}
-          {personalNavItems.map(r)}
+          {personalItems.map(r)}
         </>
       );
     }
@@ -312,7 +331,7 @@ export function Sidebar({
         <>
           {showBilling && r(billingNavItem)}
           {r(supportNavItem)}
-          {personalNavItems.map(r)}
+          {personalItems.map(r)}
           {!isCollapsed && (
             <p data-testid="org-suspended-nav-note" className="px-3 pt-3 text-xs leading-snug text-gray-400">
               {orgSuspendedNavNote(showBilling)}
@@ -330,7 +349,7 @@ export function Sidebar({
         {showBrokerSettings && r(settingsNavItem)}
         {showReports && !isImpersonating && r(reportsNavItem)}
         {showBilling && !isImpersonating && r(billingNavItem)}
-        {personalNavItems.map(r)}
+        {personalItems.map(r)}
       </>
     );
   };

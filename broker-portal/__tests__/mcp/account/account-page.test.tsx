@@ -45,7 +45,15 @@ describe('AccountClient', () => {
 describe('source checks', () => {
   it('the account page passes mcpOn from mcpEnabled()', () => {
     const src = readFileSync(path.join(ROOT, 'app/dashboard/account/page.tsx'), 'utf8');
+    expect(src).toContain('const mcpOn = mcpEnabled();');
+    expect(src).toContain('mcpOn={mcpOn}');
+  });
+
+  it('the dashboard layout passes mcpOn from mcpEnabled() to the shell (sidebar AI apps entry)', () => {
+    const src = readFileSync(path.join(ROOT, 'app/dashboard/layout.tsx'), 'utf8');
     expect(src).toContain('mcpOn={mcpEnabled()}');
+    const shell = readFileSync(path.join(ROOT, 'components/layout/DashboardShell.tsx'), 'utf8');
+    expect(shell).toContain('mcpOn={mcpOn}');
   });
 
   it('signOutAllDevices.ts calls no MCP function', () => {

@@ -24,7 +24,9 @@ import { AlertBanner } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { MyPhoneCard } from '@/components/account/MyPhoneCard';
 import Link from 'next/link';
-import { AI_APPS } from '@/lib/mcp/account/messages';
+import { ChevronRight } from 'lucide-react';
+import { AI_APPS, M_A } from '@/lib/mcp/account/messages';
+import type { AiAppsCardView } from '@/lib/mcp/account/cardTypes';
 
 const AI_APPS_PATH = '/dashboard/account/ai-apps';
 
@@ -32,6 +34,34 @@ export interface AccountClientProps {
   account: AccountView | null;
   /** BACKLOG-4238: MCP is on (passed from the server); the AI apps entries render only then. */
   mcpOn?: boolean;
+  /** The AI apps card's content, loaded on the server (null while MCP is off). */
+  aiApps?: AiAppsCardView | null;
+}
+
+/** How many apps the card names before "+N more" (the Domain Verification card's rule). */
+const CARD_APPS_SHOWN = 3;
+
+function AiAppsCardBody({ view }: { view: AiAppsCardView | null }) {
+  if (view === null || view.kind === 'failed') {
+    return <p className="mt-1 text-sm text-gray-700">{M_A.loadFailed}</p>;
+  }
+  if (view.kind === 'support') {
+    return <p className="mt-1 text-sm text-gray-700">{M_A.supportSession}</p>;
+  }
+  if (view.apps.length === 0) {
+    return <p className="mt-1 text-sm text-gray-700">{M_A.empty}</p>;
+  }
+  const hidden = view.apps.length - CARD_APPS_SHOWN;
+  return (
+    <ul className="mt-1 space-y-0.5 text-sm text-gray-700" data-testid="account-ai-apps-list">
+      {view.apps.slice(0, CARD_APPS_SHOWN).map((app) => (
+        <li key={app.id} data-testid="account-ai-app">
+          <span className="font-medium text-gray-900">{app.providerLabel}</span> · {app.lastUsed}
+        </li>
+      ))}
+      {hidden > 0 && <li>{AI_APPS.more(hidden)}</li>}
+    </ul>
+  );
 }
 
 function formatRole(role: string | null): string | null {
@@ -51,8 +81,10 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function AccountClient({ account, mcpOn = false }: AccountClientProps) {
+export default function AccountClient({ account, mcpOn = false, aiApps = null }: AccountClientProps) {
   const { isImpersonating } = useImpersonation();
+  // The server already decides a support session; the client signal only ever narrows it.
+  const aiAppsView: AiAppsCardView | null = isImpersonating ? { kind: 'support' } : aiApps;
 
   const identity = account?.identity ?? null;
   const provider = providerDisplayName(identity?.authProvider ?? null);
@@ -233,18 +265,34 @@ export default function AccountClient({ account, mcpOn = false }: AccountClientP
         </CardContent>
       </Card>
 
-      {/* BACKLOG-4238: AI apps — rendered only while MCP is on. */}
-      {mcpOn && (
-        <Card padding="none">
-          <CardHeader>
-            <h2 className="text-lg font-semibold text-gray-900">
-              <Link href={AI_APPS_PATH} className="hover:underline" data-testid="account-ai-apps-link">
-                {AI_APPS.accountLink}
-              </Link>
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">{AI_APPS.intro}</p>
-          </CardHeader>
-        </Card>
+      {/* BACKLOG-4238: AI apps — rendered only while MCP is on. The connected apps
+          are listed here; Disconnect stays on the AI apps page. Same link card as
+          Domain Verification (OrgSettingsClient). A support session gets the
+          AI apps page's own message and no link: that page refuses it. */}
+      {mcpOn && aiAppsView?.kind === 'support' && (
+        <div
+          className="bg-white rounded-lg shadow-sm border border-gray-200 px-6 py-4"
+          data-testid="account-ai-apps-card"
+        >
+          <h2 className="text-lg font-semibold text-gray-900">{AI_APPS.accountLink}</h2>
+          <AiAppsCardBody view={aiAppsView} />
+        </div>
+      )}
+      {mcpOn && aiAppsView?.kind !== 'support' && (
+        <Link
+          href={AI_APPS_PATH}
+          data-testid="account-ai-apps-link"
+          className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
+        >
+          <div className="px-6 py-4 flex items-center justify-between gap-4" data-testid="account-ai-apps-card">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold text-gray-900">{AI_APPS.accountLink}</h2>
+              <p className="mt-1 text-sm text-gray-500">{AI_APPS.intro}</p>
+              <AiAppsCardBody view={aiAppsView} />
+            </div>
+            <ChevronRight className="h-5 w-5 shrink-0 text-gray-400" aria-hidden="true" />
+          </div>
+        </Link>
       )}
     </div>
   );
