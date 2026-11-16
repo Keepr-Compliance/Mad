@@ -13,6 +13,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 root = subprocess.check_output(['git', '-C', here, 'rev-parse', '--show-toplevel'], text=True).strip()
 MIG = 'supabase/migrations/20261117120000_backlog_4257_learn_pilot_signals.sql'
 RB = 'supabase/tests/backlog-4257/rollback-4257.sql'
+CMP = 'supabase/tests/backlog-4257/compose.py'
 
 BRANCH = "  IF p->'schema' = '2'::jsonb THEN\n"
 MUT = {
@@ -32,6 +33,8 @@ MUT = {
   # C3b: 'signals' required in every schema (schema 1 included)
   'C3b_signals_required_always': [(MIG, BRANCH, "  IF NOT p ? 'signals' THEN\n    RETURN 'signals';\n  END IF;\n" + BRANCH, 1)],
   # C9: the schema-2 cap is the schema-1 cap
+  # 4219 S0 reads the whole shared table again (no narrowing to this run's rows)
+  'S0_narrowing_dropped': [(CMP, "c19 = once(c19, S0_WHOLE, S0_NARROW)\n", "", 1)],
   'C9_schema2_cap_32768': [(MIG, "    IF octet_length(p::text) > 65536 THEN\n", "    IF octet_length(p::text) > 32768 THEN\n", 1)],
 }
 
@@ -40,7 +43,7 @@ def sh(*a):
     return subprocess.run(a, capture_output=True, text=True, cwd=root)
 
 
-if sh('git', 'status', '--porcelain', '--', MIG, RB).stdout.strip():
+if sh('git', 'status', '--porcelain', '--', MIG, RB, CMP).stdout.strip():
     sys.exit('migration/rollback have uncommitted changes; commit before mutating')
 
 modes = list(MUT) if sys.argv[1] == 'all' else sys.argv[1].split(',')
