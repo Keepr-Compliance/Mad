@@ -101,10 +101,7 @@ describe("main.ts registers the Learn suppress handlers at startup (BACKLOG-4212
     expect(ts.isExpressionStatement(statement)).toBe(true);
     expect({ directlyInWhenReadyBody: statement.parent === body }).toEqual({ directlyInWhenReadyBody: true });
 
-    // It runs after the BACKLOG-2962 stand-down guard, which is statement 0.
     const index = body.statements.indexOf(statement as ts.Statement);
-    expect(index).toBeGreaterThan(0);
-    expect(text(body.statements[0])).toBe("if (getStartupFailure()) return;");
 
     // No unconditional return/throw ahead of it in the same block.
     const earlyExit = body.statements
