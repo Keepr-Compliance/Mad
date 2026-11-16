@@ -18,8 +18,10 @@ Take the highest of these three, then increment:
 ```bash
 git show origin/main:package.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])'
 gh release list --repo Keepr-Compliance/Mad --limit 5
-gh release list --repo Keepr-Compliance/keepr-releases --limit 5   # what users actually receive
+gh release list --repo Keepr-Compliance/keepr-releases --limit 5 --exclude-pre-releases   # what users actually receive
 ```
+
+Betas are prereleases on the feed (see *Cutting a beta*) and never count here: the next stable is numbered from the stables only.
 
 Ask the user which increment — patch, minor, major.
 
@@ -111,16 +113,66 @@ Ask the user which increment — patch, minor, major.
 14. **Confirm the feed repo actually updated:**
 
     ```bash
-    gh release list --repo Keepr-Compliance/keepr-releases --limit 3
+    gh release list --repo Keepr-Compliance/keepr-releases --limit 3 --exclude-pre-releases
+    gh api repos/Keepr-Compliance/keepr-releases/releases/latest --jq '.tag_name + " prerelease=" + (.prerelease|tostring)'
     ```
 
-    `vX.Y.Z` must appear and be `Latest`. The mirror runs on `PUBLIC_RELEASE_TOKEN`, a fine-grained PAT **with an expiry** — when it lapses, the main merge is green and the feed silently never updates. A green workflow is not evidence a user can receive the release; the feed repo is.
+    `vX.Y.Z` must appear and be `Latest` (for an old-line hotfix, e.g. 2.48.1 after 2.49.0, Latest stays on the newer stable). The workflow's last step, *Check which release is Latest (report only)*, checks the same rule and only warns: read its output. The mirror runs on `PUBLIC_RELEASE_TOKEN`, a fine-grained PAT **with an expiry** — when it lapses, the main merge is green and the feed silently never updates. A green workflow is not evidence a user can receive the release; the feed repo is.
 
 15. **Releases in `Keepr-Compliance/Mad` are drafts by design.** Do not read a draft there as a failure — `keepr-releases` is the one users see.
+
+## Cutting a beta
+
+A beta is a prerelease on the update feed. Only installs with **Get beta updates** switched on receive it (an account must be eligible *and* have the switch on; each account is separate). Everyone else keeps receiving `Latest`, which a beta never becomes.
+
+**The workflow refuses, before signing:** a version that is not `X.Y.Z` on `main`; `channel=beta` anywhere but a `beta/` or `rehearsal/` branch; a beta branch not named `beta/<version>`; a beta version that is not newer than the feed's Latest; any beta to the feed while Latest is below v2.49.0.
+
+1. **Branch from the released stable tag, not from develop:**
+
+   ```bash
+   git fetch origin --tags
+   git checkout -b beta/2.49.1-beta.1 v2.49.0      # branch name = beta/<version>
+   ```
+
+   The version is the **next patch of the released tag** plus `-beta.N` (`v2.49.0` gives `2.49.1-beta.1`, then `-beta.2`), so the stable `2.49.1` that later ships the same fixes supersedes it for every beta install. Feature-preview betas from develop are a separate case and are not covered here.
+
+2. **Cherry-pick the fixes, then bump `package.json` to `X.Y.Z-beta.N`** and push the branch. **No beta may carry a local schema migration whose version is not already merged to develop.** A beta branch is never merged anywhere.
+
+3. **Dispatch (founder's go):**
+
+   ```bash
+   gh workflow run release.yml --ref beta/X.Y.Z-beta.N -f channel=beta
+   ```
+
+   Both platforms build exactly as for a website release. The `Publish Beta` job then waits on the `feed-beta` Environment.
+
+4. **Only the founder approves, in the browser.** Agents never approve or reject a deployment, and never call the `pending_deployments` API. For the **first** beta, he rejects once, the run must end with nothing new on the feed, and then a second dispatch is approved.
+
+5. **Verify:**
+
+   ```bash
+   gh release view vX.Y.Z-beta.N --repo Keepr-Compliance/keepr-releases --json isDraft,isPrerelease   # false, true
+   gh api repos/Keepr-Compliance/keepr-releases/releases/latest --jq .tag_name                         # unchanged stable
+   ```
+
+**Withdraw a bad beta (founder's go):**
+
+```bash
+gh release edit vX.Y.Z-beta.N --repo Keepr-Compliance/keepr-releases --draft=true --notes "WITHDRAWN-4245: <reason>"
+```
+
+It leaves the feed; installs that already took it stay on it (never downgraded). A re-run refuses to publish a withdrawn beta; ship the fix as `beta.N+1`, or ship the stable `X.Y.Z`.
+
+**Never mirror a beta by hand.** If a stable is ever mirrored by hand, use no `--prerelease`, `--latest` or `--draft` flag, exactly as the workflow does.
+
+### Rehearsing the publish path
+
+`rehearsal/*` branches publish to the scratch feed named by the `SCRATCH_FEED_REPO` variable, never to the update feed. Versions are `90.x` and are cut from the branch under test. Each dispatch needs the founder's go. Run artifacts from these branches are kept 1 day; delete them after each step's checks. **Never install a rehearsal build anywhere.**
 
 ## Rules
 
 - Never commit a version bump to a feature branch
+- Never put a prerelease version on main (the workflow refuses it)
 - Always tag on main, never on develop
 - Never `--admin`; if a check blocks, fix the check
 - Wait for explicit user approval before the merge (step 11)
