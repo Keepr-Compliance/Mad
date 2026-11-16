@@ -178,9 +178,13 @@ import {
 } from "./services/updateDownloadPolicy";
 // BACKLOG-4245: the beta-updates preference drives autoUpdater.allowPrerelease.
 import {
-  applyBetaUpdates,
+  applyBetaUpdatesOff,
   installBetaUpdatesSessionReset,
 } from "./services/updateChannelPolicy";
+import {
+  registerBetaUpdatesHandlers,
+  runAfterBetaEligibility,
+} from "./handlers/betaUpdatesHandlers";
 // Import constants
 import {
   WINDOW_CONFIG,
@@ -234,6 +238,7 @@ import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 // BACKLOG-4120: Learn mode ("Help Keepr learn"). Separate from AI detection.
 import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
+import { registerLearnSuppressHandlers } from "./handlers/learnSuppressHandlers";
 import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { startSenderRuleSetRefresher } from "./services/senderRuleSetRefresher";
@@ -1688,9 +1693,11 @@ app.whenReady().then(async () => {
   // BACKLOG-4245: prereleases off and downgrades off before any update check
   // (startup, periodic or manual) can run. The stored beta-updates preference
   // is applied later by the startup read and by preferences:get / :update.
-  applyBetaUpdates(false, autoUpdater);
+  applyBetaUpdatesOff(autoUpdater);
   // BACKLOG-4245: sign-out or a different user's session turns prereleases off.
   installBetaUpdatesSessionReset(autoUpdater);
+  // BACKLOG-4245: beta eligibility reads and the Settings switch state.
+  registerBetaUpdatesHandlers(autoUpdater);
 
   // Auto-updater event handlers (TASK-2330: comprehensive Sentry monitoring)
   autoUpdater.on("checking-for-update", () => {
@@ -1964,6 +1971,8 @@ app.whenReady().then(async () => {
   // handlers keep no static edge to it; its startup and sign-in check starts here.
   const learnPilotReport = createLearnPilotReportService();
   registerLearnModeHandlers({ openQuestionAttachment, pilotReport: learnPilotReport });
+  // BACKLOG-4212 PR3: "Senders you marked as newsletters" (own file: R5).
+  registerLearnSuppressHandlers();
   startLearnPilotReportService(learnPilotReport);
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
@@ -2074,7 +2083,9 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     const updateInterval = setInterval(() => {
       // BACKLOG-3927: no feed contact in the Store build.
-      checkForUpdatesUnlessStore(autoUpdater, "periodic")
+      // BACKLOG-4245: a stored-on beta user's eligibility is re-read first
+      // (bounded); everyone else checks at once.
+      runAfterBetaEligibility(() => checkForUpdatesUnlessStore(autoUpdater, "periodic"))
         ?.then((result) => {
           // BACKLOG-1903/1905 (B2, organic path): also handle the auto-download
           // promise rejection so a failed periodic download can't leak a raw

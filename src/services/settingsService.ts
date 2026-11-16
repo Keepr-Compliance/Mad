@@ -6,6 +6,7 @@
  */
 
 import { type ApiResult, getErrorMessage } from "./index";
+import type { BetaUpdatesState } from "../../electron/types/ipc/window-api-services";
 
 /**
  * Phone type for mobile device preference
@@ -263,6 +264,28 @@ export const settingsService = {
       return false;
     } catch {
       return false;
+    }
+  },
+
+  /**
+   * The "Get beta versions" switch state, decided in the main process.
+   * Hidden (`visible` false) when the state cannot be read.
+   */
+  async getBetaUpdatesState(): Promise<BetaUpdatesState> {
+    const hidden: BetaUpdatesState = {
+      visible: false,
+      stored: false,
+      applied: false,
+      eligibility: "unknown",
+      note: null,
+    };
+    try {
+      const getState = window.api?.update?.getBetaState;
+      if (typeof getState !== "function") return hidden;
+      const state = await getState();
+      return state && typeof state === "object" ? state : hidden;
+    } catch {
+      return hidden;
     }
   },
 

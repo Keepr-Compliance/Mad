@@ -34,7 +34,27 @@ jest.mock("../logService", () => ({
 import { AppUpdater } from "electron-updater/out/AppUpdater";
 import { GitHubProvider } from "electron-updater/out/providers/GitHubProvider";
 import { HttpError } from "builder-util-runtime";
-import { applyBetaUpdates } from "../updateChannelPolicy";
+import {
+  applyBetaUpdatesOff,
+  recordBetaEligibility,
+  recordStoredBetaUpdates,
+  resetBetaUpdatesStateForTests,
+  type PrereleaseTarget,
+} from "../updateChannelPolicy";
+
+// pii-allow-uuid: invented, not from any live row
+const LIB_USER = "00000000-0000-4000-8000-000000000009";
+
+/** On through the inputs (stored true + eligible), else off. */
+function applyBetaUpdates(value: boolean, updater: PrereleaseTarget): void {
+  resetBetaUpdatesStateForTests();
+  if (!value) {
+    applyBetaUpdatesOff(updater);
+    return;
+  }
+  recordStoredBetaUpdates(LIB_USER, true, updater);
+  recordBetaEligibility(LIB_USER, "allowed", updater);
+}
 
 const OWNER = "Keepr-Compliance";
 const REPO = "keepr-releases";

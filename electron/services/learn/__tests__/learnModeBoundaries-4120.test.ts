@@ -35,6 +35,8 @@ const LEARN_ENTRIES = [
   path.join(ELECTRON, "handlers", "learnModeHandlers.ts"),
   path.join(ELECTRON, "schemas", "learnMode.ts"),
   path.join(ELECTRON, "preload", "learnModeBridge.ts"),
+  // BACKLOG-4212 PR3: the newsletter-senders channels (own file, SR R5).
+  path.join(ELECTRON, "handlers", "learnSuppressHandlers.ts"),
 ];
 
 const FORBIDDEN: Array<[string, RegExp]> = [

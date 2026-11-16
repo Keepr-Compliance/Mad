@@ -27,8 +27,14 @@
  * filter only removes: kept strings are unchanged and no email gets a new
  * first address, so every key existed under v3 and no stored answer is
  * asked again.
+ * v5 (BACKLOG-4212): the mail question is re-worded ("What kind of email is
+ * this?": Automated or mass mail / Real estate work / Other). The stored values
+ * are unchanged, but newsletter_spam now also covers receipts, bills and app
+ * notices that used to be skipped, so its meaning widened. Nothing filters
+ * answers by rule_version, so no stored answer is asked again; bulk answers now
+ * record the version at ANSWER time (they used to keep the draw-time version).
  */
-export const LEARN_RULE_VERSION = 4;
+export const LEARN_RULE_VERSION = 5;
 
 export const LEARN_RULES = {
   version: LEARN_RULE_VERSION,

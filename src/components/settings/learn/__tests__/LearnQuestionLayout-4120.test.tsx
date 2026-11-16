@@ -74,8 +74,8 @@ describe("Learn mode question layout (BACKLOG-4120 2.46.1)", () => {
     expect(emailBody.querySelector("table")?.getAttribute("width")).toBe("2000");
     expect(emailBody.textContent).toContain(URL_500);
 
-    const column = expectContainedLayout(dialog, /Real estate business/);
-    expect(column).not.toContainElement(within(dialog).getByRole("button", { name: /Newsletter or spam/ }));
+    const column = expectContainedLayout(dialog, /Real estate work/);
+    expect(column).not.toContainElement(within(dialog).getByRole("button", { name: /Automated or mass mail/ }));
 
     const pane = within(column).getByTestId("learn-email-pane");
     expect(classes(pane)).toEqual(expect.arrayContaining(["min-w-0", "min-h-0", "flex-1"]));
