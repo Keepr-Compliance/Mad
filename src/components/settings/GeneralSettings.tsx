@@ -7,6 +7,7 @@ import { safeErrorMessage } from '../../utils/formatUtils';
 import { InfoTooltip } from '../common/InfoTooltip';
 import { isStoreBuild } from '../../utils/platform';
 import { ToggleSwitch } from './ToggleSwitch';
+import { BetaUpdatesSetting } from './BetaUpdatesSetting';
 import { notifyShowTodoChanged, showTodoFromPreferences } from '../dashboard/panels/todoPanelPreference';
 import type { PreferencesResult } from './types';
 
@@ -251,6 +252,8 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
              updateStatus === 'error' ? 'Check failed' :
              'Check for Updates'}
           </button>
+          {/* BACKLOG-4245: shown only when the main process says so. */}
+          <BetaUpdatesSetting userId={userId} isOnline={isOnline} />
         </div>
         )}
 

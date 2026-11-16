@@ -190,6 +190,8 @@ const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   autodetect_eval: true,
   cloud_autosave: true,
   cloud_autosave_assignable: true,
+  // BACKLOG-4245: eligibility for beta versions, read in the main process only.
+  beta_updates: true,
 };
 
 /**

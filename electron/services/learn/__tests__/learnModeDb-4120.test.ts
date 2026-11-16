@@ -16,6 +16,7 @@
  * Synthetic data only: ids are obviously fake, addresses use the "Canarytest"
  * street and @example.test mail.
  */
+import { LEARN_RULE_VERSION } from "../learnRules";
 import * as nodePath from "path";
 import * as fs from "fs";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -216,7 +217,7 @@ describe("C10 learn tables: CHECKs, ids, timestamps, soft removal", () => {
     expect([typeof b.created_at, typeof b.updated_at, b.rule_version, b.answer, b.deleted_at]).toEqual([
       "string",
       "string",
-      4, // LEARN_RULE_VERSION (v4 since the BACKLOG-4225 address filter)
+      LEARN_RULE_VERSION, // the sample row is drawn under the current rules
       null,
       null,
     ]);

@@ -68,7 +68,7 @@ export function learnDetailLines(s: LearnScore): string[] {
     line("Shown deals that are real", s.precisionAfterCleanup),
     `Buyer or seller: ${s.side.correct} right, ${s.side.wrong} wrong, ${s.side.notPredicted} not predicted; ${s.side.skipped} skipped (deal type not buyer or seller)`,
     `Outcome: ${s.outcome.scorable} deals could be scored; ${s.outcome.skipped} skipped (status not closed, active or pending)`,
-    `Mail questions: ${s.bulk.realEstate} real estate, ${s.bulk.newsletterSpam} newsletter or spam, ${s.bulk.skip} skipped`,
+    `Mail questions: ${s.bulk.realEstate} real estate, ${s.bulk.newsletterSpam} automated or mass mail, ${s.bulk.skip} skipped`,
     senderFilterLine(s),
   ];
 }

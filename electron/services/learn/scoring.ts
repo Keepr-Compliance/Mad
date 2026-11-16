@@ -204,6 +204,33 @@ function classify(
   });
 }
 
+/** BACKLOG-4257: one detection as the signal measurement reads it. */
+export interface ClassifiedDetection {
+  detection: LearnDetection;
+  cls: DetectionClass;
+  /** Cleanup answer on an unmatched detection's deal key; null otherwise or unanswered. */
+  answer: "yes" | "no" | null;
+}
+
+/**
+ * BACKLOG-4257: every detection with the class scoreRunWithDetector gives it
+ * (true / knownWrong / unmatched) and, for an unmatched one, the cleanup
+ * answer on its deal key. Same answer key and the same matching.
+ */
+export function classifyDetections(
+  run: LearnRunResult,
+  keyRows: AnswerKeyRow[],
+  dealAnswers: DealAnswerRow[],
+): ClassifiedDetection[] {
+  const key = buildAnswerKey(keyRows, scannedRange(run));
+  const answerByKey = new Map(dealAnswers.map((a) => [a.address_key, a.answer]));
+  return classify(run.detections, key.positives, key.negatives, key.neutral).map((c) => {
+    const k = c.cls === "unmatched" ? c.detection.addressKey : null;
+    const a = k ? answerByKey.get(k) : undefined;
+    return { detection: c.detection, cls: c.cls, answer: a === "yes" || a === "no" ? a : null };
+  });
+}
+
 function scannedRange(run: LearnRunResult): { firstMs: number; lastMs: number } | null {
   return run.firstMs === null || run.lastMs === null ? null : { firstMs: run.firstMs, lastMs: run.lastMs };
 }

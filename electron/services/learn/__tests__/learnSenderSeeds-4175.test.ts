@@ -56,6 +56,7 @@ import {
 } from "../../db/learnModeDbService";
 import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../../../utils/senderFilter/bundledRules";
 import { gmailFrom, insertStoredEmail, outlookFrom } from "../../__tests__/helpers/storedEmail-4175";
+import { LEARN_RULE_VERSION } from "../learnRules";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
 const USER = "user-4175-a";
@@ -192,11 +193,11 @@ describe("P6 an all-seed detection is never answered", () => {
 });
 
 describe("P10 answers are stamped with the new rules version", () => {
-  it("a cleanup answer row has rule_version 4", async () => {
+  it("a cleanup answer row has the current rule_version", async () => {
     const ordinary = mail("agent@example.com", A2, 1);
     const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield });
     expect(answerCleanupQuestion(USER, r, detectionOf(r, ordinary).id, "yes")).toBe(true);
-    expect(get(`SELECT rule_version FROM learn_deal_answers`)).toEqual({ rule_version: 4 });
+    expect(get(`SELECT rule_version FROM learn_deal_answers`)).toEqual({ rule_version: LEARN_RULE_VERSION });
   });
 });
 
@@ -291,7 +292,7 @@ describe("P9 seed mail linked to deals: non-rejected deals only", () => {
 });
 
 describe("RV answers per rules version in the Copy block", () => {
-  it("one v1 and one v4 deal answer, one v1 sample answer -> both versions listed", async () => {
+  it("one v1 and one current-version deal answer, one v1 sample answer -> both versions listed", async () => {
     const ordinary = mail("agent@example.com", A2, 1);
     const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield });
     run(
@@ -307,7 +308,7 @@ describe("RV answers per rules version in the Copy block", () => {
     );
     expect(answerCleanupQuestion(USER, r, detectionOf(r, ordinary).id, "yes")).toBe(true);
     const block = formatCopyBlock(score(r));
-    expect(block).toContain("Answers by rules version: v1 deal 1 / bulk 1, v4 deal 1 / bulk 0");
+    expect(block).toContain(`Answers by rules version: v1 deal 1 / bulk 1, v${LEARN_RULE_VERSION} deal 1 / bulk 0`);
     expect(block).toContain("Hidden by live sender rules (sender rules v1): 0 deals, 0 detections, 0 emails");
   });
 });

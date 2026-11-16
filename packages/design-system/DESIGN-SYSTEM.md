@@ -94,6 +94,7 @@ Raw hex values for non-Tailwind contexts (inline-styled global-error pages):
 - **Radii**: `rounded-md` buttons/inputs/alerts; `rounded-lg` cards/tables/modals/dropdowns; `rounded-full` pills/avatars; bare `rounded` skeletons/micro-chips.
 - **Shadows**: `shadow-sm` cards → `shadow-lg` dropdowns → `shadow-xl` modals. Backdrop `bg-black/50` at `fixed inset-0 z-50`.
 - **Icons (lucide)**: `h-5 w-5` top-level nav/dialog close/stat tiles; `h-4 w-4` inside buttons/sub-nav/tabs; `h-3.5 w-3.5` in `text-xs` buttons; `h-3 w-3` inline spinners/sort arrows; `h-12 w-12 text-gray-300` empty states.
+- **Button labels**: stay on one line (`whitespace-nowrap`). Icon and label sit together (`inline-flex items-center gap-2`, icon `shrink-0`). If buttons don't fit side by side, stack them full-width; never let the label wrap inside the button.
 - **Focus**: buttons `focus:ring-2 focus:ring-primary-500 focus:ring-offset-2`; inputs `focus:ring-1 focus:ring-primary-500 focus:border-primary-500`.
 - **Spacing rhythm**: layout provides `p-6 bg-gray-50` (pages do not re-pad); page header `mb-6`; forms `space-y-4`; button groups `gap-3`; grids `gap-4`.
 - **Status pill formula**: `bg-{hue}-100 text-{hue}-800`. Semantics: gray=pending/none, blue=in-progress/info, yellow=testing, green=completed/active, red=blocked/critical, orange=deferred/high, purple=reopened/resolved, amber=waiting, indigo=epic.

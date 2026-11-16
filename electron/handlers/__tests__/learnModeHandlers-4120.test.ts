@@ -29,6 +29,7 @@
  *
  * Synthetic data only: Canarytest / Testville / ZZ / 00000, @example.test.
  */
+import { LEARN_RULE_VERSION } from "../../services/learn/learnRules";
 import * as nodePath from "path";
 import * as fs from "fs";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -300,6 +301,7 @@ const VALID: Record<string, unknown> = {
   "learn:sample-next": undefined,
   "learn:sample-answer": { rowId: "row-4120-x", answer: "skip" },
   "learn:score": undefined,
+  "learn:signals": undefined,
   "learn:delete-answers": undefined,
   "learn:preview": { kind: "bulk", rowId: "row-4120-x" },
   "learn:attachment-open": { detectionId: "d1", attachmentId: "att-4120-x" },
@@ -419,7 +421,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(15);
+    expect(registered).toHaveLength(16); // BACKLOG-4257: + learn:signals
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -1423,7 +1425,7 @@ describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
     expect(score.seedLinkedToDeals).toBe(1);
     expect(score.senderCensus.minCensusLinkedEmails).toBe(3);
     expect(score.senderCensus.dealLinkedSuppressed.map((m) => [m.full.k, m.n])).toEqual([[2, 2]]);
-    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v4; sender rules v7, source: download)");
+    expect(String(r.copyBlock).split("\n")[0]).toBe(`Keepr Learn mode score (rules v${LEARN_RULE_VERSION}; sender rules v7, source: download)`);
   });
 
   it("RS18a a refused download over a newer cache: source: cache (download rejected)", async () => {
@@ -1679,5 +1681,93 @@ describe("C-B3 (main) get-state { settle: true } waits for the queued pilot job"
         return rpcAnswer(args?.p_org_id ?? "");
       }) as never);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4257 (M3) PR2, SR R8: learn:score is unchanged and never runs the
+// signal pass; learn:signals returns the signals on their own. The pilot
+// report is byte-identical.
+// ---------------------------------------------------------------------------
+describe("R8 (4257) learn:score never runs the signal pass; learn:signals returns them", () => {
+  async function seedLinked(maybeSend: jest.Mock): Promise<void> {
+    ipcHandlers.clear();
+    featureGateHandlers.registerFeatureGateHandlers();
+    handlers.registerLearnModeHandlers({ pilotReport: { maybeSend, queueWithdraw: jest.fn() } });
+    setToggle(true);
+    const e1 = seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: `Offer accepted on ${CANARY_ADDRESS}`, body: CANARY_BODY });
+    run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4257-r8', ?, ?, 'active')`, USER, CANARY_ADDRESS);
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4257-r8', ?, 't-4257-r8', ?, 'th-4257-r8')`, USER, e1);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+  }
+
+  it("learn:score returns the score as before, without invoking the signal pass; the pilot payload is byte-identical", async () => {
+    const maybeSend = jest.fn();
+    await seedLinked(maybeSend);
+    const signalScoring = await import("../../services/learn/signalScoring");
+    const pass = jest.spyOn(signalScoring, "scoreSignals");
+
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
+    expect(Object.keys(r).sort()).toEqual(["copyBlock", "score", "success"]);
+    const score = r.score as Record<string, unknown>;
+    expect("signals" in score).toBe(false);
+
+    // The same score, built directly, as before this item.
+    const { getLastRun } = await import("../../services/learn/baselineRunner");
+    const scoring = await import("../../services/learn/scoring");
+    const dbs = await import("../../services/db/learnModeDbService");
+    const { buildKeepSets } = await import("../../utils/senderFilter/senderFilter");
+    const { buildPilotReport } = await import("../../services/learn/pilotReport");
+    const lastRun = getLastRun(USER);
+    if (!lastRun) throw new Error("no run");
+    const direct = scoring.scoreRunWithDetector(
+      lastRun,
+      dbs.listAnswerKeyTransactions(USER),
+      dbs.listDealAnswers(USER),
+      dbs.listAnsweredBulkWithText(USER),
+      scoring.countSeedLinkedToDeals(
+        dbs.listDealLinkedSeedCandidates(USER, lastRun.senderRules.suppress.exactAddresses),
+        lastRun.senderRules,
+      ),
+      {
+        rules: lastRun.senderRules,
+        keep: buildKeepSets(dbs.listDealContactEmails(USER), lastRun.senderRules),
+        linked: dbs.listDealLinkedEmails(USER),
+      },
+    );
+    expect(maybeSend).toHaveBeenCalledTimes(1);
+    expect(maybeSend.mock.calls[0]).toHaveLength(3);
+    const [uid, sentScore, sentDetector] = maybeSend.mock.calls[0];
+    expect(uid).toBe(USER);
+    expect(sentScore).toBe(r.score);
+    expect(JSON.stringify(sentScore)).toBe(JSON.stringify(direct.score));
+    expect(JSON.stringify(buildPilotReport(sentScore, sentDetector, "2.49.0"))).toBe(
+      JSON.stringify(buildPilotReport(direct.score, direct.detector, "2.49.0")),
+    );
+    expect(r.copyBlock).toBe(scoring.formatCopyBlock(direct.score));
+  });
+
+  it("learn:signals returns the signals and their count-only Copy lines; the pilot is not called", async () => {
+    const maybeSend = jest.fn();
+    await seedLinked(maybeSend);
+    const r = await invoke("learn:signals");
+    expect(r.success).toBe(true);
+    const signals = r.signals as { complete: boolean; values: unknown[]; emails: { dealLinked: number } };
+    expect(signals.complete).toBe(true);
+    expect(signals.emails.dealLinked).toBe(1);
+    expect(signals.values.length).toBeGreaterThan(30);
+    const lines = String(r.copyLines);
+    expect(lines.startsWith("Signals (measured only; signals v1, terms v1; complete)")).toBe(true);
+    expect(lines).toContain("Signal anchor.subject:");
+    for (const needle of ["@", "Canarytest", "Canarybody", "Testville"]) expect(lines).not.toContain(needle);
+    expect(maybeSend).not.toHaveBeenCalled();
+  });
+
+  it("learn:signals refuses a payload and needs a run", async () => {
+    setToggle(true);
+    expect(await invoke("learn:signals")).toEqual({ success: false, error: handlers.LEARN_NO_RUN_ERROR });
+    expect(await invoke("learn:signals", { any: 1 })).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
   });
 });

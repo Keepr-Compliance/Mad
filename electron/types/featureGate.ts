@@ -56,7 +56,10 @@ export type StrictFeatureKey =
   // BACKLOG-4243: Keepr Cloud. Read only to decide whether Settings may ask the
   // server for the per-user state; the per-user answer is the server's.
   | "cloud_autosave"
-  | "cloud_autosave_assignable";
+  | "cloud_autosave_assignable"
+  // BACKLOG-4245: eligibility for beta versions (Settings > General "Get beta
+  // versions"). Read in the main process at apply time.
+  | "beta_updates";
 
 /**
  * What a strict read concluded.

@@ -21,7 +21,15 @@
  * Pure: no Supabase, no React.
  */
 
-import { BULK_KEYS, SIGNALS, SURFACES, MEASURE_ONLY_SIGNALS, type SenderRuleSet, type ThresholdKey } from './types';
+import {
+  BULK_KEYS,
+  SIGNALS,
+  SURFACES,
+  MEASURE_ONLY_SIGNALS,
+  isOptionalThreshold,
+  type SenderRuleSet,
+  type ThresholdKey,
+} from './types';
 
 const MAX_SAFE = Number.MAX_SAFE_INTEGER; // 9007199254740991, as the SQL
 
@@ -114,6 +122,7 @@ export const THRESHOLD_RANGES = {
   minCensusLinkedEmails: { min: 0, max: MAX_SAFE },
   reportSendIntervalHours: { min: 1, max: MAX_SAFE },
   reportMaxRows: { min: 1, max: 500 },
+  userSuppressMinAnswers: { min: 0, max: 20 },
 } as const;
 
 /**
@@ -223,6 +232,13 @@ export function setThreshold(
   key: ThresholdKey,
   input: string,
 ): { ok: true; content: SenderRuleSet } | { ok: false; reason: string } {
+  // An optional threshold left empty is not set: the key is removed (never stored as undefined,
+  // which validate reads as present and refuses).
+  if (isOptionalThreshold(key) && input.trim() === '') {
+    const { [key]: _removed, ...rest } = content.thresholds;
+    void _removed;
+    return { ok: true, content: { ...content, thresholds: rest as SenderRuleSet['thresholds'] } };
+  }
   const r = parseThresholdInput(key, input);
   if (!r.ok) return r;
   return { ok: true, content: { ...content, thresholds: { ...content.thresholds, [key]: r.value } } };

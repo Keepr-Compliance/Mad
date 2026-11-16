@@ -13,12 +13,13 @@
  * and the app opens the questions or the score over the main screen
  * (LearnSessionHost / LearnScoreHost in AppModals, BACKLOG-4120 2.46.1).
  */
-import React from "react";
+import React, { useState } from "react";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useLearnSettings } from "./useLearnSettings";
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnTiles } from "./learnScoreView";
 import { LearnAnswersList } from "./LearnAnswersList";
+import { LearnSuppressedSenders } from "./LearnSuppressedSenders";
 import { LEARN_SITTING_SIZE } from "./learnSitting";
 import { pilotConsentText, pilotStatusLine } from "./learnPilotCopy";
 
@@ -39,6 +40,8 @@ export function LearnSettings({
   const machine = isMacOS ? "this Mac" : "this computer";
   // The card shows one sitting; Start passes the full count (the session stops at a sitting).
   const sitting = Math.min(LEARN_SITTING_SIZE, learn.questionsReady);
+  // BACKLOG-4212: deleting an answer can take a sender off the list; remount re-reads it.
+  const [answersVersion, setAnswersVersion] = useState(0);
 
   return (
     <div id="settings-learn" className="mb-8" data-testid="settings-learn">
@@ -182,7 +185,16 @@ export function LearnSettings({
         )}
 
         {/* Shown with the toggle off too: a user can always delete one of his own answers. */}
-        {!learn.loading && <LearnAnswersList onChanged={() => void learn.refresh()} />}
+        {!learn.loading && (
+          <LearnAnswersList
+            onChanged={() => {
+              setAnswersVersion((v) => v + 1);
+              void learn.refresh();
+            }}
+          />
+        )}
+        {/* BACKLOG-4212: shown with the toggle off too; hidden when empty. */}
+        {!learn.loading && <LearnSuppressedSenders key={answersVersion} machine={machine} />}
       </div>
 
     </div>

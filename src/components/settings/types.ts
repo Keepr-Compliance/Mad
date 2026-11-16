@@ -42,6 +42,8 @@ export interface PreferencesResult {
     };
     updates?: {
       autoDownload?: boolean;
+      /** BACKLOG-4245: absent = beta updates off. */
+      betaUpdates?: boolean;
     };
     notifications?: {
       enabled?: boolean;

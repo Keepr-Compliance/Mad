@@ -14,9 +14,10 @@
 import type { PublicRunSummary } from "../../services/learn/baselineRunner";
 import type { SampleDrawResult } from "../../services/learn/bulkSample";
 import type { LearnScore } from "../../services/learn/scoring";
+import type { SignalScore } from "../../services/learn/signalScoring";
 import type { BulkAnswer, DealAnswer } from "../../services/learn/learnRules";
 
-export type { PublicRunSummary, SampleDrawResult, LearnScore, BulkAnswer, DealAnswer };
+export type { PublicRunSummary, SampleDrawResult, LearnScore, SignalScore, BulkAnswer, DealAnswer };
 
 export type LearnFailure = { success: false; error: string };
 
@@ -74,6 +75,15 @@ export type LearnScoreResult =
   | { success: true; score: LearnScore; copyBlock: string }
   | LearnFailure;
 
+/**
+ * BACKLOG-4257: per-email signals measured in shadow (learn:signals), asked
+ * for after the score is shown. `signals` is null when the pass failed;
+ * `copyLines` are the count-only lines appended to the Copy block.
+ */
+export type LearnSignalsResult =
+  | { success: true; signals: SignalScore | null; copyLines: string }
+  | LearnFailure;
+
 export type LearnDeleteAnswersResult =
   | { success: true; removed: { deal: number; bulk: number } }
   | LearnFailure;
@@ -96,6 +106,21 @@ export interface LearnAnswerRow {
 export type LearnListAnswersResult = { success: true; answers: LearnAnswerRow[] } | LearnFailure;
 
 export type LearnDeleteAnswerResult = { success: true } | LearnFailure;
+
+/**
+ * BACKLOG-4212 PR3: one sender in "Senders you marked as newsletters".
+ * `hidden`: Keepr skips this sender's mail now (false = the user chose Stop
+ * hiding). Shown to the user only; never logged.
+ */
+export interface LearnSuppressedSender {
+  senderKey: string;
+  newsletterCount: number;
+  hidden: boolean;
+}
+
+export type LearnListSuppressedResult = { success: true; senders: LearnSuppressedSender[] } | LearnFailure;
+
+export type LearnSetOverrideResult = { success: true; hidden: boolean } | LearnFailure;
 
 export interface LearnPreviewAttachment {
   id: string;
@@ -159,9 +184,15 @@ export interface WindowApiLearn {
   sampleNext: () => Promise<LearnSampleNextResult>;
   sampleAnswer: (args: { rowId: string; answer: BulkAnswer }) => Promise<LearnAnswerResult>;
   score: () => Promise<LearnScoreResult>;
+  /** BACKLOG-4257: per-email signals (shadow); call after the score is shown. */
+  signals: () => Promise<LearnSignalsResult>;
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
   listAnswers: () => Promise<LearnListAnswersResult>;
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => Promise<LearnDeleteAnswerResult>;
+  /** BACKLOG-4212: the caller's newsletter senders (own rows only). */
+  listSuppressed: () => Promise<LearnListSuppressedResult>;
+  /** BACKLOG-4212: hide = false is "Stop hiding", hide = true is "Hide again". */
+  setOverride: (args: { senderKey: string; hide: boolean }) => Promise<LearnSetOverrideResult>;
   preview: (args: LearnPreviewArgs) => Promise<LearnPreviewResult>;
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) => Promise<LearnAttachmentOpenResult>;
 }

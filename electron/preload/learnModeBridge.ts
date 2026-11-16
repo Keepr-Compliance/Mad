@@ -45,11 +45,17 @@ export const learnModeBridge: WindowApiLearn = {
   sampleNext: () => ipcRenderer.invoke("learn:sample-next"),
   sampleAnswer: (args) => ipcRenderer.invoke("learn:sample-answer", args),
   score: () => ipcRenderer.invoke("learn:score"),
+  /** BACKLOG-4257: per-email signals (shadow), after the score is shown. */
+  signals: () => ipcRenderer.invoke("learn:signals"),
   deleteAnswers: () => ipcRenderer.invoke("learn:delete-answers"),
   /** The caller's saved answers, newest first (own rows only). */
   listAnswers: () => ipcRenderer.invoke("learn:list-answers"),
   /** Delete one saved answer; the item can be asked again. */
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => ipcRenderer.invoke("learn:delete-answer", args),
+  /** BACKLOG-4212: senders the user marked as newsletters (own rows only). */
+  listSuppressed: () => ipcRenderer.invoke("learn:list-suppressed"),
+  /** BACKLOG-4212: "Stop hiding" (hide: false) / "Hide again" (hide: true). */
+  setOverride: (args: { senderKey: string; hide: boolean }) => ipcRenderer.invoke("learn:set-override", args),
   preview: (args: LearnPreviewArgs) => ipcRenderer.invoke("learn:preview", args),
   /** Open (downloading first if needed) the one attachment the question is about. */
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) =>

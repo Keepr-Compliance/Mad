@@ -14,6 +14,36 @@ import {
   autoDownloadFromPreferences,
   autoDownloadInPartial,
 } from "../services/updateDownloadPolicy";
+import {
+  betaUpdatesChangeCount,
+  betaUpdatesFromPreferences,
+  betaUpdatesInPartial,
+  applyBetaUpdatesOff,
+  betaUpdatesSessionEpoch,
+  clearStoredBetaUpdates,
+  getBetaUpdatesInputs,
+  isLatestBetaUpdatesWrite,
+  noteBetaUpdatesChange,
+  noteBetaUpdatesWriteStart,
+  recordStoredBetaUpdates,
+} from "../services/updateChannelPolicy";
+import sessionService from "../services/sessionService";
+
+/**
+ * BACKLOG-4245: whether `userId` is the user the session file names. The
+ * beta-updates value is recorded only for that user. Never throws.
+ */
+async function isSessionUser(userId: string): Promise<boolean> {
+  try {
+    const peek = await sessionService.peekSession();
+    if (peek.status !== "ok") return false;
+    const session = peek.session;
+    if (session.expiresAt && Date.now() > session.expiresAt) return false;
+    return session.user?.id === userId;
+  } catch {
+    return false;
+  }
+}
 
 // Import validation utilities
 import {
@@ -48,17 +78,28 @@ export function registerPreferenceHandlers(): void {
       userId: string,
     ): Promise<PreferenceResponse> => {
       let validatedUserId: string | null = null;
+      let betaChangesAtRead = -1;
       try {
         logService.debug("[Preferences] Getting preferences", "Preferences", { userId });
 
         // Validate input
         validatedUserId = validateUserId(userId)!;
+        // BACKLOG-4245: a write naming the preference, or a session change,
+        // while this read runs makes its beta value stale.
+        betaChangesAtRead = betaUpdatesChangeCount();
 
         const preferences =
           (await supabaseService.getPreferences(validatedUserId)) ?? {};
 
         // BACKLOG-3469: the read value drives the updater (default on).
         applyAutoDownload(autoDownloadFromPreferences(preferences));
+        // BACKLOG-4245: the read value is recorded for the session user only.
+        if (
+          (await isSessionUser(validatedUserId)) &&
+          betaUpdatesChangeCount() === betaChangesAtRead
+        ) {
+          recordStoredBetaUpdates(validatedUserId, betaUpdatesFromPreferences(preferences));
+        }
 
         return {
           success: true,
@@ -85,6 +126,12 @@ export function registerPreferenceHandlers(): void {
               { copiedAt: copy.copiedAt },
             );
             applyAutoDownload(autoDownloadFromPreferences(copy.preferences));
+            if (
+              (await isSessionUser(validatedUserId)) &&
+              betaUpdatesChangeCount() === betaChangesAtRead
+            ) {
+              recordStoredBetaUpdates(validatedUserId, betaUpdatesFromPreferences(copy.preferences));
+            }
             return {
               success: true,
               preferences: copy.preferences,
@@ -93,6 +140,8 @@ export function registerPreferenceHandlers(): void {
             };
           }
         }
+        // BACKLOG-4245: no value could be read: prereleases off.
+        clearStoredBetaUpdates();
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
@@ -182,27 +231,68 @@ export function registerPreferenceHandlers(): void {
         if (autoDownload !== null) {
           applyAutoDownload(autoDownload);
         }
+        // BACKLOG-4245: turning beta updates off takes effect at once, and the
+        // recorded value becomes false at once (an eligibility answer during
+        // the save then cannot turn betas back on). Turning them on takes
+        // effect only once the cloud save has succeeded. A failed save leaves
+        // betas off either way; the next good read restores the stored value.
+        const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
+        const betaUpdatesWrite = betaUpdates === null ? null : noteBetaUpdatesWriteStart();
+        if (betaUpdates === false) {
+          if (getBetaUpdatesInputs().stored?.userId === validatedUserId) {
+            // Recorded only ever for the session user, so no session check is needed.
+            recordStoredBetaUpdates(validatedUserId, false);
+          } else {
+            applyBetaUpdatesOff();
+          }
+        }
+        try {
+          const betaForSessionUser =
+            betaUpdatesWrite !== null && (await isSessionUser(validatedUserId));
+          if (
+            betaUpdates === false &&
+            betaForSessionUser &&
+            betaUpdatesWrite !== null &&
+            betaUpdatesWrite.epoch === betaUpdatesSessionEpoch()
+          ) {
+            recordStoredBetaUpdates(validatedUserId, false);
+          }
 
-        // Get existing preferences
-        const existingPreferences =
-          (await supabaseService.getPreferences(validatedUserId)) ?? {};
+          // Get existing preferences
+          const existingPreferences =
+            (await supabaseService.getPreferences(validatedUserId)) ?? {};
 
-        // Merge with new preferences (deep merge for nested objects)
-        const updatedPreferences = deepMerge(
-          existingPreferences,
-          sanitizedPartialPreferences,
-        );
+          // Merge with new preferences (deep merge for nested objects)
+          const updatedPreferences = deepMerge(
+            existingPreferences,
+            sanitizedPartialPreferences,
+          );
 
-        // Save merged preferences
-        await supabaseService.syncPreferences(
-          validatedUserId,
-          updatedPreferences,
-        );
+          // Save merged preferences
+          await supabaseService.syncPreferences(
+            validatedUserId,
+            updatedPreferences,
+          );
 
-        return {
-          success: true,
-          preferences: updatedPreferences,
-        };
+          // Applied only if nothing named the preference, and no session
+          // change happened, since this call started.
+          if (
+            betaUpdates === true &&
+            betaForSessionUser &&
+            betaUpdatesWrite !== null &&
+            isLatestBetaUpdatesWrite(betaUpdatesWrite)
+          ) {
+            recordStoredBetaUpdates(validatedUserId, true);
+          }
+
+          return {
+            success: true,
+            preferences: updatedPreferences,
+          };
+        } finally {
+          // The write has finished (saved or failed): a read that ran during it is stale.
+          if (betaUpdates !== null) noteBetaUpdatesChange();
+        }
       } catch (error) {
         logService.error("[Preferences] Failed to update preferences:", "Preferences", { error });
         // TASK-2058: Log failure for offline diagnostics (skip validation errors)
