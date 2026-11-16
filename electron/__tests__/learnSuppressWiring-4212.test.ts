@@ -81,7 +81,8 @@ describe("main.ts registers the Learn suppress handlers at startup (BACKLOG-4212
   });
 
   it(`calls ${FN}() exactly once in main.ts`, () => {
-    expect(callsTo(FN)).toHaveLength(1);
+    // Compared as source text: AST nodes are circular and cannot be printed.
+    expect(callsTo(FN).map(text)).toEqual([`${FN}()`]);
   });
 
   it(`the call is a direct, unconditional statement of the app.whenReady() body`, () => {
@@ -89,15 +90,16 @@ describe("main.ts registers the Learn suppress handlers at startup (BACKLOG-4212
     expect(ts.isBlock(handler.body)).toBe(true);
     const body = handler.body as ts.Block;
 
-    const [call] = callsTo(FN);
-    expect(call).toBeDefined();
+    const calls = callsTo(FN);
+    expect(calls.length).toBe(1);
+    const call = calls[0];
     expect(call.arguments).toHaveLength(0);
 
     // The call's statement sits directly in the whenReady block: not inside a
     // nested function, an if/try/loop, or a callback that may never run.
     const statement = call.parent;
     expect(ts.isExpressionStatement(statement)).toBe(true);
-    expect(statement.parent).toBe(body);
+    expect({ directlyInWhenReadyBody: statement.parent === body }).toEqual({ directlyInWhenReadyBody: true });
 
     // It runs after the BACKLOG-2962 stand-down guard, which is statement 0.
     const index = body.statements.indexOf(statement as ts.Statement);
