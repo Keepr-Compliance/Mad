@@ -133,6 +133,12 @@ export const updateBridge = {
     ipcRenderer.invoke("app:download-update"),
 
   /**
+   * BACKLOG-4245: the "Get beta versions" switch state, decided in the main
+   * process (visibility, stored value, applied value, eligibility, note).
+   */
+  getBetaState: () => ipcRenderer.invoke("updates:get-beta-state"),
+
+  /**
    * Manually check for updates
    * @returns Update check result
    */

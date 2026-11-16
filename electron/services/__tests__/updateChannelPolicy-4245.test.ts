@@ -134,8 +134,11 @@ jest.mock("../supabaseService", () => ({
 }));
 
 import {
-  applyBetaUpdates,
+  applyBetaUpdatesOff,
   betaUpdatesFromPreferences,
+  onStoredBetaUpdatesRecorded,
+  recordBetaEligibility,
+  recordStoredBetaUpdates,
   betaUpdatesInPartial,
   installBetaUpdatesSessionReset,
   resetBetaUpdatesStateForTests,
@@ -146,6 +149,29 @@ import { registerPreferenceHandlers } from "../../handlers/preferenceHandlers";
 import supabaseService from "../supabaseService";
 
 const cloud = supabaseService as jest.Mocked<typeof supabaseService>;
+
+/**
+ * PR 1's controls describe the stored preference. BACKLOG-4245 PR 2 adds an
+ * eligibility input; these tests stand in an always-"allowed" reader that
+ * answers as soon as a stored value is recorded, so they keep testing the
+ * stored-preference paths. Eligibility itself is tested in
+ * betaUpdatesHandlers-4245.test.ts.
+ */
+function installAllowedReader(): void {
+  onStoredBetaUpdatesRecorded((userId) => {
+    recordBetaEligibility(userId, "allowed");
+  });
+}
+
+/** On for `userId` through the inputs (stored true + eligible), else off. */
+function applyBetaUpdates(value: boolean, updater: ReturnType<typeof makeUpdater> | Parameters<typeof applyBetaUpdatesOff>[0], userId = "00000000-0000-4000-8000-000000000001"): void { // pii-allow-uuid: invented
+  if (!value) {
+    applyBetaUpdatesOff(updater);
+    return;
+  }
+  recordStoredBetaUpdates(userId, true, updater);
+  recordBetaEligibility(userId, "allowed", updater);
+}
 
 // pii-allow-uuid: invented, not from any live row
 const USER = "00000000-0000-4000-8000-000000000001";
@@ -186,7 +212,9 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   resetBetaUpdatesStateForTests();
-  mockStored = null;
+  installAllowedReader();
+  // The session file names USER unless a test says otherwise.
+  mockStored = sessionWith(null);
   mockPeekImpl = null;
   mockUpdater = makeUpdater("2.49.0");
 });
@@ -496,15 +524,15 @@ function productionSources(dir: string): string[] {
 
 describe("B7 main.ts wiring (text)", () => {
   it("the session reset is installed next to the off value", () => {
-    expect(MAIN).toMatch(/applyBetaUpdates\(false, autoUpdater\);[\s\S]{0,200}?installBetaUpdatesSessionReset\(autoUpdater\);/);
+    expect(MAIN).toMatch(/applyBetaUpdatesOff\(autoUpdater\);[\s\S]{0,200}?installBetaUpdatesSessionReset\(autoUpdater\);/);
   });
 
   it("the off value is applied right after the updater is configured", () => {
-    expect(MAIN).toMatch(/autoUpdater\.logger = log;[\s\S]{0,400}?applyBetaUpdates\(false, autoUpdater\);/);
+    expect(MAIN).toMatch(/autoUpdater\.logger = log;[\s\S]{0,400}?applyBetaUpdatesOff\(autoUpdater\);/);
   });
 
   it("the off value is applied before every check entry point in the file", () => {
-    const baseline = MAIN.indexOf("applyBetaUpdates(false, autoUpdater);");
+    const baseline = MAIN.indexOf("applyBetaUpdatesOff(autoUpdater);");
     expect(baseline).toBeGreaterThan(-1);
     const whenReady = MAIN.indexOf("app.whenReady().then(");
     expect(whenReady).toBeGreaterThan(-1);
@@ -512,6 +540,26 @@ describe("B7 main.ts wiring (text)", () => {
     for (const marker of ["createWindow();", "registerUpdaterHandlers();", 'checkForUpdatesUnlessStore(autoUpdater, "periodic")']) {
       const at = MAIN.indexOf(marker, whenReady);
       expect([marker, at > baseline]).toEqual([marker, true]);
+    }
+  });
+
+  it("R3 inside app.whenReady, no check entry point textually precedes the off value", () => {
+    const whenReady = MAIN.indexOf("app.whenReady().then(");
+    const baseline = MAIN.indexOf("applyBetaUpdatesOff(autoUpdater);");
+    // Code only: block and line comments removed.
+    const between = MAIN.slice(whenReady, baseline).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(between.length).toBeGreaterThan(0);
+    expect(between).not.toMatch(/checkForUpdates\(|checkForUpdatesUnlessStore\(|runStartupUpdateCheck\(|runAfterBetaEligibility\(|registerUpdaterHandlers\(\)|createWindow\(\)/);
+  });
+
+  it("R3 the session reset and the eligibility handlers follow the off value, before any check", () => {
+    expect(MAIN).toMatch(
+      /applyBetaUpdatesOff\(autoUpdater\);[\s\S]{0,200}?installBetaUpdatesSessionReset\(autoUpdater\);[\s\S]{0,200}?registerBetaUpdatesHandlers\(autoUpdater\);/,
+    );
+    const reg = MAIN.indexOf("registerBetaUpdatesHandlers(autoUpdater);");
+    const whenReady = MAIN.indexOf("app.whenReady().then(");
+    for (const marker of ["createWindow();", "registerUpdaterHandlers();", "runAfterBetaEligibility(() => checkForUpdatesUnlessStore"]) {
+      expect([marker, MAIN.indexOf(marker, whenReady) > reg]).toEqual([marker, true]);
     }
   });
 
@@ -561,6 +609,7 @@ describe("B8 session change", () => {
     ["false", { updates: { betaUpdates: false } }],
   ])("A on, then B signs in with the preference %s -> off, and off after B's read", async (_l, bBag) => {
     await turnOn(USER);
+    mockStored = sessionWith(null, { userId: OTHER_USER });
     emitSessionChanged({ kind: "saved", userId: OTHER_USER });
     expect(mockUpdater.allowPrerelease).toBe(false);
     cloud.getPreferences.mockResolvedValueOnce(bBag);
@@ -570,6 +619,7 @@ describe("B8 session change", () => {
 
   it("A on, then B signs in with B's preference on -> off until B's read, then on", async () => {
     await turnOn(USER);
+    mockStored = sessionWith(null, { userId: OTHER_USER });
     emitSessionChanged({ kind: "saved", userId: OTHER_USER });
     expect(mockUpdater.allowPrerelease).toBe(false);
     cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
@@ -676,7 +726,11 @@ describe("B9 a read racing a write", () => {
 
   it("startup read of a stored on, an off update completes meanwhile -> off at the check", async () => {
     let release!: (v: unknown) => void;
-    mockPeekImpl = () => new Promise((r) => { release = r; });
+    // Holds only the startup read's peek; later peeks answer normally.
+    mockPeekImpl = () => {
+      mockPeekImpl = null;
+      return new Promise((r) => { release = r; });
+    };
     const done = runStartupUpdateCheck(mockUpdater, () => mockUpdater.checkForUpdates(), 5_000);
     await flush();
     cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });

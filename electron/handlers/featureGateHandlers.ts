@@ -188,6 +188,8 @@ const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   desktop_hide_from_export: true,
   transaction_checklists: true,
   autodetect_eval: true,
+  // BACKLOG-4245: eligibility for beta versions, read in the main process only.
+  beta_updates: true,
 };
 
 /**

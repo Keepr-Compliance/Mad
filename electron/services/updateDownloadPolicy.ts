@@ -21,8 +21,9 @@ import logService from "./logService";
 import sessionService from "./sessionService";
 import { readPreferencesCopy } from "./preferencesMirror";
 import {
-  applyBetaUpdatesFor,
+  applyBetaUpdatesOff,
   betaUpdatesChangeCount,
+  recordStoredBetaUpdates,
   betaUpdatesFromPreferences,
   type PrereleaseTarget,
 } from "./updateChannelPolicy";
@@ -178,7 +179,13 @@ export async function runStartupUpdateCheck<T>(
   // A write or a session change during the read makes the stored value
   // stale: keep what they applied (a session change applies off).
   if (betaUpdatesChangeCount() === betaChangesAtRead) {
-    applyBetaUpdatesFor(stored.userId ?? null, stored.betaUpdates, updater as PrereleaseTarget);
+    if (stored.userId) {
+      // BACKLOG-4245: records the value; eligibility is read separately and
+      // never awaited here, so this check runs with whatever is known now.
+      recordStoredBetaUpdates(stored.userId, stored.betaUpdates, updater as PrereleaseTarget);
+    } else {
+      applyBetaUpdatesOff(updater as PrereleaseTarget);
+    }
   }
   return runCheck();
 }

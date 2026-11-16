@@ -52,7 +52,10 @@ export type StrictFeatureKey =
   | "transaction_checklists"
   // BACKLOG-4120: makes the Learn mode ("Help Keepr learn") switch available.
   // Separate from AI detection: Learn mode never reads ai_detection.
-  | "autodetect_eval";
+  | "autodetect_eval"
+  // BACKLOG-4245: eligibility for beta versions (Settings > General "Get beta
+  // versions"). Read in the main process at apply time.
+  | "beta_updates";
 
 /**
  * What a strict read concluded.
