@@ -5,7 +5,8 @@ set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 # static checks are informational here (a mutation can fail them on purpose); the DB run always follows
 python3 "$here/static.py" >/dev/null 2>&1 || echo "STATIC FAIL (see static.py)"
-tmp="$(mktemp -t p4257).sql"
+tmp="$(mktemp -t p4257)"
+trap 'rm -f "$tmp"' EXIT
 python3 "$here/compose.py" "$tmp" ${1:-} >/dev/null
 ~/.claude/bin/kt-sql -c "$(cat "$tmp")" 2>&1 | python3 "$here/parse.py"
 rm -f "$tmp"
