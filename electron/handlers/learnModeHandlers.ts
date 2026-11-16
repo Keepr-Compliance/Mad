@@ -32,6 +32,9 @@
 // main.ts), which may send a numbers-only snapshot; this file imports no part
 // of that send path. Every OFF path (the switch, Learn mode off, Delete all)
 // writes sharing OFF + withdraw owed locally FIRST, then queues the withdraw.
+// BACKLOG-4257: learn:score also hands the service a LAZY thunk for the signal
+// pass (one memo shared with learn:signals); the service runs it only when a
+// report is due, and the report carries its counts as schema 2.
 //
 // What this file deliberately does NOT import: emailSyncHandlers
 // (isAutoDetectAllowed), llmConfigService, transactionService,
@@ -76,6 +79,7 @@ import {
   previewEmailForBulkRow,
   previewEmailsByIds,
   getPilotState,
+  latestAnswerAt,
   setLearnModeEnabled,
   setPilotOn,
   softClearAnswersAndStopSharing,
@@ -93,6 +97,7 @@ import {
   runBaseline0,
   setLastRun,
   toPublicRunSummary,
+  type LearnRunResult,
 } from "../services/learn/baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../services/learn/cleanupPass";
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../services/learn/bulkSample";
@@ -107,6 +112,7 @@ import type { LearnPilotReportDeps } from "../services/learnPilotReportService";
 import { getActiveSenderRules } from "../services/senderRuleSetStore";
 import { formatSignalLines, scoreSignals, vendorRoleDomains, type SignalScore } from "../services/learn/signalScoring";
 import { signalLoadersFor } from "../services/db/learnSignalsDb";
+import { createSignalMemo } from "../services/learn/signalMemo";
 import { listDealVendorRoleEmails } from "../services/db/dealContactEmailsDb";
 import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
@@ -196,6 +202,8 @@ export interface LearnModeHandlerDeps {
   >;
   /** BACKLOG-4219: the pilot report send / withdraw (type-only import here). */
   pilotReport?: LearnPilotReportDeps;
+  /** BACKLOG-4257: the signal memo's clock and reuse window (tests). */
+  signalMemo?: { now?: () => number; ttlMs?: number };
 }
 
 /** Messages per preview: newest first. */
@@ -361,6 +369,25 @@ function isPreviewFailure(
 }
 
 export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void {
+  // BACKLOG-4257 (SR R4): learn:signals and the pilot report share one pass per
+  // (user, run, latest answer); single-flight, a complete result reused for a
+  // short window, never a failed or incomplete one (signalMemo.ts).
+  const signalMemo = createSignalMemo(deps.signalMemo);
+  const signalsFor = (userId: string, run: LearnRunResult): Promise<SignalScore> =>
+    signalMemo.get(userId, { runId: run.runId, latestAnswerAt: latestAnswerAt(userId) }, () =>
+      scoreSignals({
+        run,
+        keyRows: listAnswerKeyTransactions(userId),
+        dealAnswers: listDealAnswers(userId),
+        ctx: {
+          rules: run.senderRules,
+          keep: buildKeepSets(listDealContactEmails(userId), run.senderRules),
+          vendorRoleDomains: vendorRoleDomains(listDealVendorRoleEmails(userId), run.senderRules),
+        },
+        loaders: signalLoadersFor(userId),
+      }),
+    );
+
   ipcMain.handle(
     "learn:get-state",
     guarded("learn:get-state", async (_e, payload?: unknown): Promise<LearnStateResult> => {
@@ -574,8 +601,11 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         },
       );
       // BACKLOG-4219: fire and forget; the service re-reads the switch itself.
+      // BACKLOG-4257: the signal pass is LAZY: the service calls the thunk only
+      // when a report is due, so learn:score never waits for it.
+      const userId = g.userId;
       try {
-        deps.pilotReport?.maybeSend(g.userId, score, detector);
+        deps.pilotReport?.maybeSend(userId, score, detector, () => signalsFor(userId, run));
       } catch {
         // never fails the score
       }
@@ -588,29 +618,20 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
     guarded("learn:signals", async (_e, payload?: unknown): Promise<LearnSignalsResult> => {
       // BACKLOG-4257: per-email signals, measured in shadow, in their own
       // channel so learn:score never waits for them. The renderer calls this
-      // after the score is shown. Never part of the score (SR R8), never handed
-      // to the pilot report (D3). Context = the run's rules, the deal-contact
-      // keep sets and the vendor-role domains only. A failed pass is reported
-      // as "not available", never as a refusal of the score.
+      // after the score is shown. Never part of the score (SR R8). The founder
+      // reversed D3: the pilot report now carries the COUNTS of a complete pass
+      // (schema 2), from the same memoised pass (signalsFor above), so the
+      // dialog and the report never run two. Context = the run's rules, the
+      // deal-contact keep sets and the vendor-role domains only. A failed pass
+      // is reported as "not available", never as a refusal of the score.
       const g = await gate();
       if (isFailure(g)) return g;
       if (!LearnSignalsArgsSchema.safeParse(payload).success) return fail(LEARN_INVALID_ERROR);
       const run = getLastRun(g.userId);
       if (!run) return fail(LEARN_NO_RUN_ERROR);
-      const userId = g.userId;
       let signals: SignalScore | null = null;
       try {
-        signals = await scoreSignals({
-          run,
-          keyRows: listAnswerKeyTransactions(userId),
-          dealAnswers: listDealAnswers(userId),
-          ctx: {
-            rules: run.senderRules,
-            keep: buildKeepSets(listDealContactEmails(userId), run.senderRules),
-            vendorRoleDomains: vendorRoleDomains(listDealVendorRoleEmails(userId), run.senderRules),
-          },
-          loaders: signalLoadersFor(userId),
-        });
+        signals = await signalsFor(g.userId, run);
       } catch (error) {
         logService.warn("Learn mode signals unavailable", MODULE, {
           errorName: error instanceof Error ? error.name : typeof error,

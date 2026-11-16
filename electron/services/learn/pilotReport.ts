@@ -21,17 +21,51 @@
  * them); the NULL-account bucket ("unknown mailbox") -> 0.
  * Caps (the server's): at most 10 mailboxes per census block (the first 10 in
  * the score's order) and the 10 highest rules versions in answers_by_rule_version.
+ *
+ * SCHEMA 2 (BACKLOG-4257): every schema-1 key, in the same order, plus `signals`:
+ * the counts of one COMPLETE signal pass (signalScoring.ts), built field by field
+ * (never a spread of SignalValueScore) and checked by `PilotReportV2Schema`, which
+ * mirrors 20261117120000_backlog_4257_learn_pilot_signals.sql (strict at every
+ * node, signals_version 1 only). Integers and booleans only: no Wilson intervals,
+ * verdicts, reasons, ids or anything per email. No signals, an incomplete pass,
+ * an unknown signals_version, a value list that is not PILOT_SIGNAL_VALUE_NAMES,
+ * or a schema-2 report the server would refuse -> the schema-1 report, unchanged.
+ * Size: the server measures `jsonb::text` (": " and ", " separators), so the
+ * client measures `jsonbTextLength`, vs 65,536 for schema 2 and 32,768 for the
+ * report without `signals`.
  */
 import { z } from "zod/v4";
 
 import type { SenderRuleSignal } from "../../utils/senderFilter/bundledRules";
 import type { CensusCount, LearnScore, MailboxCensus, Rate, SenderCensus } from "./scoring";
+import type { SignalScore, SignalValueScore } from "./signalScoring";
 
 export const PILOT_REPORT_SCHEMA_VERSION = 1;
 export const PILOT_MAX_INT = 10_000_000;
 export const PILOT_MAX_MAILBOXES = 10;
 export const PILOT_MAX_ANSWER_VERSIONS = 10;
 export const PILOT_MAX_BYTES = 32_768;
+/** BACKLOG-4257: schema 2 = schema 1 + `signals`. */
+export const PILOT_REPORT_SCHEMA_V2 = 2;
+/** The only signals_version the server accepts (an unknown one -> schema 1 is sent). */
+export const PILOT_SIGNALS_VERSION = 1;
+export const PILOT_MAX_BYTES_V2 = 65_536;
+
+/**
+ * The 40 signal value names per family, in the server's order: SIGNAL_VALUES ids
+ * (signalScoring.ts) split on "." verbatim. Mirrored by the five ARRAYs in
+ * _learn_pilot_signals_invalid. A changed list = a new signals_version + a
+ * migration; until then the client sends schema 1.
+ */
+export const PILOT_SIGNAL_VALUE_NAMES = {
+  anchor: ["subject", "bodyTop", "bodyMid", "afterSignature", "footer", "none", "nearFooterCue", "inQuoteOnly"],
+  stage: ["offer", "counter", "underContract", "inspection", "appraisal", "closing", "any", "inSubject"],
+  sender: ["dealContact", "vendorRoleDomain", "dealContactDomain", "platform", "freeMail", "other", "recipientIsDealContact", "bulk"],
+  filename: ["purchaseAgreement", "counteroffer", "addendum", "inspection", "appraisal", "closing", "disclosure", "listing", "other"],
+  forms: ["anyMatch", "purchase_agreement", "buyer_agreement", "listing_agreement", "counteroffer", "representation_termination", "other"],
+} as const;
+export type PilotSignalFamily = keyof typeof PILOT_SIGNAL_VALUE_NAMES;
+export const PILOT_SIGNAL_FAMILIES = ["anchor", "stage", "sender", "filename", "forms"] as const satisfies readonly PilotSignalFamily[];
 
 /** The 7 signal names, in the server's order. A new name = schema 2 + a migration. */
 export const PILOT_SIGNALS = [
@@ -136,6 +170,87 @@ export const PilotReportSchema = z.strictObject({
 
 export type PilotReport = z.infer<typeof PilotReportSchema>;
 
+// ---- schema 2: the signals block (mirrors _learn_pilot_signals_invalid) ---------
+
+const SignalGate = z.strictObject({
+  true_kept: Int,
+  true_lost: Int,
+  known_wrong_dropped: Int,
+  known_wrong_total: Int,
+  cleanup_no_dropped: Int,
+  cleanup_no_total: Int,
+  cleanup_yes_lost: Int,
+  cleanup_yes_total: Int,
+  unmeasured: Int,
+});
+const SignalValue = z.strictObject({ newsletter: RateKN, positives: RateKN, gate: SignalGate });
+function valueFamily<F extends PilotSignalFamily>(fam: F) {
+  const shape = {} as Record<(typeof PILOT_SIGNAL_VALUE_NAMES)[F][number], typeof SignalValue>;
+  for (const n of PILOT_SIGNAL_VALUE_NAMES[fam] as readonly (typeof PILOT_SIGNAL_VALUE_NAMES)[F][number][]) shape[n] = SignalValue;
+  return z.strictObject(shape);
+}
+const TextCoverageBlock = z.strictObject({ emails: Int, with_attachments: Int, with_attachment_text: Int });
+
+export const PilotSignalsSchema = z.strictObject({
+  signals_version: z.literal(PILOT_SIGNALS_VERSION),
+  terms_version: Int,
+  deal_linked_capped: z.boolean(),
+  detection_capped: z.boolean(),
+  emails: z.strictObject({
+    newsletter: Int,
+    real_estate_sample: Int,
+    deal_linked: Int,
+    content_positives: Int,
+    true_detection: Int,
+    gate: Int,
+    body_truncated: Int,
+  }),
+  text_coverage: z.strictObject({
+    newsletter: TextCoverageBlock,
+    content_positives: TextCoverageBlock,
+    true_detection: TextCoverageBlock,
+  }),
+  baseline: z.strictObject({ anchor: RateKN, stage: RateKN, sender: RateKN, filename: RateKN, forms: RateKN }),
+  values: z.strictObject({
+    anchor: valueFamily("anchor"),
+    stage: valueFamily("stage"),
+    sender: valueFamily("sender"),
+    filename: valueFamily("filename"),
+    forms: valueFamily("forms"),
+  }),
+});
+
+/** strictObject.extend stays strict (zod 4; SR plan review). `schema` keeps its place, `signals` is last. */
+export const PilotReportV2Schema = PilotReportSchema.extend({
+  schema: z.literal(PILOT_REPORT_SCHEMA_V2),
+  signals: PilotSignalsSchema,
+});
+
+export type PilotSignals = z.infer<typeof PilotSignalsSchema>;
+export type PilotReportV2 = z.infer<typeof PilotReportV2Schema>;
+
+/**
+ * The byte length of `value`'s Postgres `jsonb::text` (what octet_length measures
+ * server side): compact JSON plus one space after every ':' and ',' outside a
+ * string. Key order differs in jsonb; the length does not.
+ */
+export function jsonbTextLength(value: unknown): number {
+  const s = JSON.stringify(value);
+  let extra = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === ":" || c === ",") extra += 1;
+  }
+  return Buffer.byteLength(s, "utf8") + extra;
+}
+
 // ---- builder ------------------------------------------------------------------
 
 function kn(r: Rate): { k: number; n: number } {
@@ -185,9 +300,90 @@ function censusBlock(c: SenderCensus) {
 }
 
 export type BuildPilotReportResult =
-  | { ok: true; report: PilotReport }
+  | {
+      ok: true;
+      report: PilotReport | PilotReportV2;
+      /** Set only when `report` is schema 2: the same report as schema 1 (the 22023 fallback). */
+      schema1?: PilotReport;
+      /** Set only when signals were given and left out: a fixed name, never a value. */
+      signalsLeftOut?: string;
+    }
   /** `reason` names a field path or "too large", never a value. */
   | { ok: false; reason: string };
+
+function gateCounts(v: SignalValueScore): z.infer<typeof SignalGate> {
+  const g = v.gate;
+  return {
+    true_kept: g.trueKept,
+    true_lost: g.trueLost,
+    known_wrong_dropped: g.knownWrongDropped,
+    known_wrong_total: g.knownWrongTotal,
+    cleanup_no_dropped: g.cleanupNoDropped,
+    cleanup_no_total: g.cleanupNoTotal,
+    cleanup_yes_lost: g.cleanupYesLost,
+    cleanup_yes_total: g.cleanupYesTotal,
+    unmeasured: g.unmeasured,
+  };
+}
+
+function coverageCounts(c: SignalScore["textCoverage"]["newsletter"]) {
+  return { emails: c.emails, with_attachments: c.withAttachments, with_attachment_text: c.withAttachmentText };
+}
+
+/**
+ * The signals block, field by field, or the reason it cannot be built (a fixed
+ * name). The value list must be exactly PILOT_SIGNAL_VALUE_NAMES; the baseline
+ * is per family (every value of a family measures the same newsletter mail).
+ */
+export function buildPilotSignals(s: SignalScore): { ok: true; signals: unknown } | { ok: false; reason: string } {
+  if (!s.complete) return { ok: false, reason: "incomplete" };
+  if (s.signalsVersion !== PILOT_SIGNALS_VERSION) return { ok: false, reason: "signals_version" };
+  const byId = new Map<string, SignalValueScore>();
+  for (const v of s.values) byId.set(v.id, v);
+  const expected = PILOT_SIGNAL_FAMILIES.reduce((n, f) => n + PILOT_SIGNAL_VALUE_NAMES[f].length, 0);
+  if (s.values.length !== expected || byId.size !== expected) return { ok: false, reason: "values" };
+  const baseline = {} as Record<PilotSignalFamily, { k: number; n: number }>;
+  const values = {} as Record<PilotSignalFamily, Record<string, unknown>>;
+  for (const fam of PILOT_SIGNAL_FAMILIES) {
+    const out: Record<string, unknown> = {};
+    let base: { k: number; n: number } | null = null;
+    for (const name of PILOT_SIGNAL_VALUE_NAMES[fam]) {
+      const v = byId.get(`${fam}.${name}`);
+      if (!v || v.family !== fam) return { ok: false, reason: `values.${fam}` };
+      const b = kn(v.newsletterBaseline);
+      if (base === null) base = b;
+      else if (base.k !== b.k || base.n !== b.n) return { ok: false, reason: `baseline.${fam}` };
+      out[name] = { newsletter: kn(v.newsletter), positives: kn(v.positives), gate: gateCounts(v) };
+    }
+    baseline[fam] = base as { k: number; n: number };
+    values[fam] = out;
+  }
+  return {
+    ok: true,
+    signals: {
+      signals_version: s.signalsVersion,
+      terms_version: s.termsVersion,
+      deal_linked_capped: s.sampled.dealLinkedCapped,
+      detection_capped: s.sampled.detectionCapped,
+      emails: {
+        newsletter: s.emails.newsletter,
+        real_estate_sample: s.emails.realEstateSample,
+        deal_linked: s.emails.dealLinked,
+        content_positives: s.emails.contentPositives,
+        true_detection: s.emails.trueDetection,
+        gate: s.emails.gate,
+        body_truncated: s.emails.bodyTruncated,
+      },
+      text_coverage: {
+        newsletter: coverageCounts(s.textCoverage.newsletter),
+        content_positives: coverageCounts(s.textCoverage.contentPositives),
+        true_detection: coverageCounts(s.textCoverage.trueDetection),
+      },
+      baseline,
+      values,
+    },
+  };
+}
 
 /**
  * BACKLOG-4245: `x.y.z-pre` / `x.y.z+build` -> `x.y.z`. Anything else is
@@ -203,7 +399,34 @@ export function pilotAppVersion(appVersion: string): string {
  * (scoreRunWithDetector). Returns ok:false (nothing to send) when the result
  * would not pass the server's schema.
  */
-export function buildPilotReport(score: LearnScore, detector: SenderCensus, appVersion: string): BuildPilotReportResult {
+export function buildPilotReport(
+  score: LearnScore,
+  detector: SenderCensus,
+  appVersion: string,
+  signals?: SignalScore | null,
+): BuildPilotReportResult {
+  const v1 = buildSchema1(score, detector, appVersion);
+  if (!v1.ok || signals === undefined || signals === null) return v1;
+  const block = buildPilotSignals(signals);
+  if (!block.ok) return { ...v1, signalsLeftOut: block.reason };
+  const parsed = PilotReportV2Schema.safeParse({ ...v1.report, schema: PILOT_REPORT_SCHEMA_V2, signals: block.signals });
+  if (!parsed.success) {
+    const first = parsed.error.issues[0];
+    return { ...v1, signalsLeftOut: first ? first.path.map(String).join(".") || first.code : "invalid" };
+  }
+  // The server caps schema 2 at 65,536 and the report without `signals` at 32,768 (jsonb text).
+  if (jsonbTextLength(parsed.data) > PILOT_MAX_BYTES_V2 || jsonbTextLength(v1.report) > PILOT_MAX_BYTES) {
+    return { ...v1, signalsLeftOut: "too large" };
+  }
+  return { ok: true, report: parsed.data, schema1: v1.report };
+}
+
+/** The schema-1 report (BACKLOG-4219), unchanged. */
+function buildSchema1(
+  score: LearnScore,
+  detector: SenderCensus,
+  appVersion: string,
+): { ok: true; report: PilotReport } | { ok: false; reason: string } {
   const candidate = {
     schema: PILOT_REPORT_SCHEMA_VERSION,
     app_version: pilotAppVersion(appVersion),

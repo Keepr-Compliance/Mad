@@ -34,7 +34,19 @@
  * withdraw deletes the caller's rows. Key lost = the strict read says
  * "blocked" (never "unknown": offline must not turn sharing off).
  *
- * Logs carry the step and counts or an error CODE only; never the payload.
+ * BACKLOG-4257, signals (schema 2). maybeSend takes an optional LAZY thunk for
+ * the signal pass (learnModeHandlers.ts memo). The job calls it only after the
+ * switch and throttle checks pass, races it against PILOT_SIGNALS_TIMEOUT_MS
+ * (timer cleared and unref'd), and awaits it BEFORE the switch re-read, so a
+ * switch-off during the pass still wins. Missing, null, thrown, timed out or
+ * incomplete -> the schema-1 report, unchanged. A schema-2 submit refused with
+ * 22023 (invalid report: a server without schema 2, or one that disagrees) ->
+ * ONE schema-1 resend in the same job, after re-reading the auth user and the
+ * switch; any other error or a timeout -> no resend.
+ *
+ * Logs carry the step and counts or an error CODE only; never the payload. A
+ * refusal logs its code and, for 22023, the server's DETAIL (a fixed key or
+ * section name, never a value) only if it has that shape.
  */
 import { app } from "electron";
 
@@ -49,10 +61,15 @@ import {
   setPilotSentVersions,
   setPilotUnsettledAt,
 } from "./db/learnModeDbService";
-import { buildPilotReport } from "./learn/pilotReport";
+import { buildPilotReport, type PilotReport } from "./learn/pilotReport";
 import type { LearnScore, SenderCensus } from "./learn/scoring";
+import type { SignalScore } from "./learn/signalScoring";
 
 export const PILOT_RPC_TIMEOUT_MS = 10_000;
+/** The longest a submit job waits for the signal pass (its own limit is 20 s). */
+export const PILOT_SIGNALS_TIMEOUT_MS = 25_000;
+/** Postgres invalid_parameter_value: learn_pilot_report_submit's "Invalid report". */
+export const PILOT_INVALID_REPORT_CODE = "22023";
 export const PILOT_MIN_RESEND_MS = 6 * 60 * 60 * 1000;
 export const PILOT_IDLE_RESEND_MS = 24 * 60 * 60 * 1000;
 export const PILOT_EXTRA_WITHDRAW_MS = 60_000;
@@ -72,13 +89,16 @@ const MODULE = "LearnPilot";
  * (capped there), so Settings can show a send or withdraw on the same visit.
  */
 export interface LearnPilotReportDeps {
-  maybeSend: (userId: string, score: LearnScore, detector: SenderCensus) => void;
+  /** `signals` (BACKLOG-4257) is lazy: called at most once, and only when a report is due. */
+  maybeSend: (userId: string, score: LearnScore, detector: SenderCensus, signals?: PilotSignalsThunk) => void;
   queueWithdraw: (userId: string) => void;
   /** Resolves when every job queued for this user so far has run. */
   idle?: (userId: string) => Promise<void>;
 }
 
-type RpcResult = { error: { code?: string } | null };
+export type PilotSignalsThunk = () => Promise<SignalScore | null>;
+
+type RpcResult = { error: { code?: string; details?: string } | null };
 type RpcCall = (name: string, args: Record<string, unknown> | undefined, signal: AbortSignal) => Promise<RpcResult>;
 
 export interface PilotServiceOptions {
@@ -91,6 +111,8 @@ export interface PilotServiceOptions {
   featureState?: () => Promise<"allowed" | "blocked" | "unknown">;
   setTimer?: (fn: () => void, ms: number) => void;
   timeoutMs?: number;
+  /** BACKLOG-4257: how long a submit waits for the signal thunk. */
+  signalsTimeoutMs?: number;
 }
 
 const defaultRpc: RpcCall = async (name, args, signal) =>
@@ -126,6 +148,7 @@ export class LearnPilotReportService {
   private readonly featureState: () => Promise<"allowed" | "blocked" | "unknown">;
   private readonly setTimer: (fn: () => void, ms: number) => void;
   private readonly timeoutMs: number;
+  private readonly signalsTimeoutMs: number;
   private readonly queues = new Map<string, Promise<void>>();
   private lastUser: string | null = null;
   private lastCheckMs = 0;
@@ -138,6 +161,7 @@ export class LearnPilotReportService {
     this.featureState = opts.featureState ?? (() => resolveStrictFeatureState(AUTODETECT_EVAL_FEATURE_KEY));
     this.setTimer = opts.setTimer ?? unrefTimer;
     this.timeoutMs = opts.timeoutMs ?? PILOT_RPC_TIMEOUT_MS;
+    this.signalsTimeoutMs = opts.signalsTimeoutMs ?? PILOT_SIGNALS_TIMEOUT_MS;
   }
 
   private enqueue(userId: string, job: () => Promise<void>): Promise<void> {
@@ -175,6 +199,44 @@ export class LearnPilotReportService {
     }
   }
 
+  /** The signal pass, or null when it is missing, throws or does not settle in time. Never throws. */
+  private async awaitSignals(thunk: PilotSignalsThunk | undefined): Promise<SignalScore | null> {
+    if (!thunk) return null;
+    const TIMED_OUT = Symbol("timeout");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), this.signalsTimeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    try {
+      const pass = Promise.resolve().then(thunk);
+      pass.catch(() => undefined); // a pass that rejects after the timeout is not an unhandled rejection
+      const r = await Promise.race([pass, timeout]);
+      if (r === TIMED_OUT) {
+        logService.warn("Learn pilot signals timed out", MODULE, {});
+        return null;
+      }
+      return r ?? null;
+    } catch (error) {
+      logService.warn("Learn pilot signals unavailable", MODULE, {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private logRefused(error: { code?: string; details?: string }, schema: number): void {
+    const code = error.code ?? "unknown";
+    const fields: Record<string, unknown> = { code, schema };
+    // The submit's DETAIL is a key or section name (migration 4219 :325-328, 4257); anything else is dropped.
+    if (code === PILOT_INVALID_REPORT_CODE && typeof error.details === "string" && /^[A-Za-z0-9_.: ]{1,80}$/.test(error.details)) {
+      fields.detail = error.details;
+    }
+    logService.warn("Learn pilot submit refused", MODULE, fields);
+  }
+
   /** Sharing is ON and no withdraw is owed. The ONE check both reads use. */
   private sharingOn(st: { enabled: boolean; pendingWithdraw: boolean }): boolean {
     return st.enabled && !st.pendingWithdraw;
@@ -199,30 +261,48 @@ export class LearnPilotReportService {
     setPilotSentVersions(userId, Object.fromEntries(kept));
   }
 
-  private async submitJob(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
+  private async submitJob(
+    userId: string,
+    score: LearnScore,
+    detector: SenderCensus,
+    signalsThunk?: PilotSignalsThunk,
+  ): Promise<void> {
     const before = getPilotState(userId);
     if (!this.sharingOn(before)) return;
     if (!this.isDue(userId, score.senderRulesVersion, before.sentVersions)) return;
-    const built = buildPilotReport(score, detector, this.appVersion());
+    // BACKLOG-4257: the pass runs only once a report is due, and settles before the re-read below.
+    const signals = await this.awaitSignals(signalsThunk);
+    const built = buildPilotReport(score, detector, this.appVersion(), signals);
     if (!built.ok) {
       logService.warn("Learn pilot report not built", MODULE, { reason: built.reason });
       return;
     }
-    if ((await this.authUserId()) !== userId) return;
-    // R1: re-read immediately before the RPC; a switch-off since then wins.
-    if (!this.sharingOn(getPilotState(userId))) return;
+    if (built.signalsLeftOut) logService.info("Learn pilot signals left out", MODULE, { reason: built.signalsLeftOut });
+    if (!(await this.readyToSubmit(userId))) return;
     const r = await this.call(SUBMIT_RPC, { p_report: built.report });
-    if (r === "timeout") {
-      setPilotUnsettledAt(userId, new Date(this.now()).toISOString());
-      logService.warn("Learn pilot submit timed out", MODULE, {});
-      return;
-    }
+    if (r === "timeout") return this.submitTimedOut(userId);
     if (r.error) {
-      logService.warn("Learn pilot submit refused", MODULE, { code: r.error.code ?? "unknown" });
-      return;
+      this.logRefused(r.error, built.report.schema);
+      // 22023 on schema 2: one schema-1 resend, same checks first (R7). Anything else: no resend.
+      if (!built.schema1 || r.error.code !== PILOT_INVALID_REPORT_CODE) return;
+      if (!(await this.readyToSubmit(userId))) return;
+      const r1 = await this.call(SUBMIT_RPC, { p_report: built.schema1 satisfies PilotReport });
+      if (r1 === "timeout") return this.submitTimedOut(userId);
+      if (r1.error) return this.logRefused(r1.error, built.schema1.schema);
     }
     this.recordSent(userId, score.senderRulesVersion);
     logService.info("Learn pilot report sent", MODULE, { senderRulesVersion: score.senderRulesVersion });
+  }
+
+  /** R1: re-read immediately before an RPC; a sign-out, another user or a switch-off since wins. */
+  private async readyToSubmit(userId: string): Promise<boolean> {
+    if ((await this.authUserId()) !== userId) return false;
+    return this.sharingOn(getPilotState(userId));
+  }
+
+  private submitTimedOut(userId: string): void {
+    setPilotUnsettledAt(userId, new Date(this.now()).toISOString());
+    logService.warn("Learn pilot submit timed out", MODULE, {});
   }
 
   private async withdrawJob(userId: string, extra: boolean): Promise<void> {
@@ -246,8 +326,8 @@ export class LearnPilotReportService {
     }
   }
 
-  maybeSend(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
-    return this.enqueue(userId, () => this.submitJob(userId, score, detector));
+  maybeSend(userId: string, score: LearnScore, detector: SenderCensus, signals?: PilotSignalsThunk): Promise<void> {
+    return this.enqueue(userId, () => this.submitJob(userId, score, detector, signals));
   }
 
   queueWithdraw(userId: string): Promise<void> {

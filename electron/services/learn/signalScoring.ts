@@ -1,11 +1,13 @@
 /**
  * Per-email deal signals, measured in Learn — BACKLOG-4257 (M3) PR2.
  *
- * SHADOW ONLY. Nothing here changes what the detector keeps or drops, what
- * Learn asks, or what the pilot report sends. `scoreSignals` runs in its own
- * channel (learn:signals), never inside learn:score, and returns its own
- * record (`SignalScore`), never part of the score (SR R8). The pilot report
- * never sees it (D3).
+ * SHADOW ONLY. Nothing here changes what the detector keeps or drops or what
+ * Learn asks. `scoreSignals` never runs inside learn:score and returns its own
+ * record (`SignalScore`), never part of the score (SR R8). It runs from
+ * learn:signals and, for a user sharing with Keepr, from the pilot report job
+ * (BACKLOG-4257, founder reversed D3): both go through one per-user memo in
+ * learnModeHandlers.ts, and the report carries the COUNTS of a complete pass
+ * only (pilotReport.ts schema 2), never the verdicts or anything per email.
  *
  * For every signal value (SIGNAL_VALUES), on the email sets below:
  *   newsletter   fires on answered newsletter/spam sample mail (k/n, Wilson)
@@ -27,9 +29,10 @@
  * on the same emails, a minimum fire rate on deal mail, and at most one true
  * detection lost in twenty. Otherwise "not enough data" or "fails".
  *
- * Cost (SR R4): one pass per learn:signals call (after the score is shown), in
- * memory, pages of at most 200 with a yield between pages, capped emails, and
- * a time limit. An email cap makes the pass a SAMPLE: verdicts are computed
+ * Cost (SR R4): one pass per memo miss (learn:signals, or a due pilot report),
+ * in memory, pages of at most 200 with a yield between pages AND a time check
+ * plus a yield every MEASURE_CHUNK emails inside a page (4257 SR R5: one page
+ * of large mail took ~1.5-3 s), capped emails, and a time limit. An email cap makes the pass a SAMPLE: verdicts are computed
  * over the sampled mail and the cap is reported. Only the time stop makes the
  * pass incomplete (every verdict "not enough data").
  *
@@ -69,6 +72,8 @@ export const MAX_DEAL_LINKED_SIGNAL_EMAILS = 5_000;
 export const MAX_DETECTION_SIGNAL_EMAILS = 5_000;
 /** Page / chunk size (SR R4: <= 200). */
 export const SIGNAL_PASS_PAGE = 200;
+/** Inside a page: check the time and yield every this many emails (4257 SR R5). */
+export const MEASURE_CHUNK = 25;
 
 export const KEEP_BAR = {
   /** Minimum measurable emails on each side (newsletter, positives). */
@@ -276,11 +281,16 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
 
   const { ctx, loaders } = input;
   const byId = new Map<string, Measured>();
-  const measure = (rows: readonly SignalEmailRow[]): void => {
+  const measure = async (rows: readonly SignalEmailRow[]): Promise<void> => {
     const fresh = rows.filter((r) => !byId.has(r.id));
     if (fresh.length === 0) return;
     const atts = loaders.attachmentsByEmailIds(fresh.map((r) => r.id));
-    for (const r of fresh) {
+    for (let i = 0; i < fresh.length; i++) {
+      if (i > 0 && i % MEASURE_CHUNK === 0) {
+        if (outOfTime()) return;
+        await yieldFn();
+      }
+      const r = fresh[i];
       const x = extractEmailSignals(
         {
           subject: r.subject,
@@ -305,7 +315,7 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
   for (let i = 0; i < bulk.length; i += SIGNAL_PASS_PAGE) {
     if (outOfTime()) break;
     const page = bulk.slice(i, i + SIGNAL_PASS_PAGE);
-    measure(page);
+    await measure(page);
     for (const b of page) {
       if (b.answer === "newsletter_spam") {
         if (newsletterIds.includes(b.id)) continue;
@@ -346,7 +356,7 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
   }
   for (let i = 0; i < detectionBudget.length; i += SIGNAL_PASS_PAGE) {
     if (outOfTime()) break;
-    measure(loaders.emailsByIds(detectionBudget.slice(i, i + SIGNAL_PASS_PAGE)));
+    await measure(loaders.emailsByIds(detectionBudget.slice(i, i + SIGNAL_PASS_PAGE)));
     await yieldFn();
   }
 
@@ -363,7 +373,7 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
     const limit = Math.min(SIGNAL_PASS_PAGE, room);
     const page = loaders.dealLinkedPage(cursor, limit);
     if (page.length === 0) break;
-    measure(page);
+    await measure(page);
     for (const r of page) dealLinkedIds.add(r.id);
     cursor = page[page.length - 1].id;
     await yieldFn();

@@ -1738,7 +1738,7 @@ describe("R8 (4257) learn:score never runs the signal pass; learn:signals return
       },
     );
     expect(maybeSend).toHaveBeenCalledTimes(1);
-    expect(maybeSend.mock.calls[0]).toHaveLength(3);
+    expect(maybeSend.mock.calls[0]).toHaveLength(4);
     const [uid, sentScore, sentDetector] = maybeSend.mock.calls[0];
     expect(uid).toBe(USER);
     expect(sentScore).toBe(r.score);
