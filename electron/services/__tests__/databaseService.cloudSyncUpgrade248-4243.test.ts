@@ -302,7 +302,7 @@ function makeEngineOn(db: DatabaseType, server?: unknown) {
  * A v2.48.0 connection: the tag's pragmas (databaseService.ts:1001-1003 key / cipher_compatibility /
  * foreign_keys = ON, :1022 journal_mode = WAL, :1029 synchronous = NORMAL), then the tag's every-open
  * `currentDb.exec(schemaSql)` (databaseService.ts:1897). Its chain runs nothing on a v80 file:
- * `pendingMigrations = migrations.filter((m) => m.version > currentVersion)` (:2311) is empty.
+ * `pendingMigrations = migrations.filter((m) => m.version > currentVersion)` (:2313) is empty.
  */
 function openAs248(file: string): DatabaseType {
   const db = openKeyed(file);
@@ -608,7 +608,7 @@ const WRITES_248: Write248[] = [
         .run("user_deleted", C2),
   },
   {
-    at: "electron/services/db/syncDbService.ts:168-173 + :192 (batchInsertMessages: 500 rows in one transaction)",
+    at: "electron/services/db/syncDbService.ts:168-173 + :194 (batchInsertMessages: 500 rows in one transaction)",
     kind: "bulk insert",
     table: "messages",
     marks: [],
@@ -628,7 +628,7 @@ const WRITES_248: Write248[] = [
     },
   },
   {
-    at: "electron/services/db/transactionDbService.ts:1312 + :1327-1329 (deleteTransactionSync: reads the texts naming the deal, then the DELETE; parties, checklists and items follow by cascade)",
+    at: "electron/services/db/transactionDbService.ts:1312 + :1326-1329 (deleteTransactionSync: reads the texts naming the deal, then the DELETE; parties, checklists and items follow by cascade)",
     kind: "cascade",
     table: "transactions",
     marks: [D4],
@@ -883,6 +883,8 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       (db.prepare("SELECT cloud_id FROM cloud_sync_state WHERE entity = 'deal' AND local_id = ?").get(local) as { cloud_id: string } | undefined)?.cloud_id;
     const d4Cloud = cloudIdOf(first.db, D4);
     expect(d4Cloud).toBeTruthy();
+    const d1Version = (server.deals.find((d) => d.localId === D1) as { version: number }).version;
+    const upsertsBefore = server.calls.length;
     await first.svc.close();
 
     const old = openAs248(path.join(dir, "mad.db"));
@@ -926,6 +928,13 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     db.exec("UPDATE cloud_sync_dirty SET attempts = 0, next_attempt_at = NULL");
     await e.service.runner!.runPass();
     expect(dirtyIds(db)).toEqual([]);
+    // What changed under 2.48.0 was uploaded: D1's new header (a new server version, sent with the
+    // city 2.48.0 wrote), the deal it created, and the person it put on D1.
+    const after = server.calls.slice(upsertsBefore);
+    expect(after.some((c) => c.fn === "cloud_upsert_deal" && JSON.stringify(c.args).includes("Newtown"))).toBe(true);
+    expect((server.deals.find((d) => d.localId === D1) as { version: number }).version).toBeGreaterThan(d1Version);
+    expect(server.deals.map((d) => d.localId)).toEqual(expect.arrayContaining([D1, NEW_DEAL]));
+    expect(after.some((c) => c.fn === "cloud_upsert_parties" && JSON.stringify(c.args).includes(NEW_PARTY))).toBe(true);
     // The deal deleted under 2.48.0 was deleted online (runner.ts:430-440) and its records forgotten.
     expect(server.callsTo("cloud_delete_deal").map((c) => JSON.stringify(c))).toEqual([expect.stringContaining(d4Cloud as string)]);
     expect(server.deals.map((d) => (d as unknown as { id: string }).id)).not.toContain(d4Cloud);
