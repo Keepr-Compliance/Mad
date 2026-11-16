@@ -533,6 +533,11 @@ jobs:
       - name: Assert macOS runners use the pinned label
         run: node scripts/ci/check-macos-runner.mjs --workflows
 
+      # BACKLOG-4245: the stable, beta and rehearsal publish paths in release.yml
+      # stay as reviewed.
+      - name: Assert the release feed publish paths
+        run: node scripts/ci/check-release-feed-flags.mjs
+
   # BACKLOG-3814. The iPhone tools in resources/win/libimobiledevice are the signed
   # copies from the 2.40.0 installer, shipped byte-for-byte every release. This job
   # needs no secrets: it checks the folder against
