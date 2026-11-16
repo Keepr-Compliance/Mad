@@ -1,0 +1,31 @@
+BACKLOG-3986 mutation record, 2026-11-15, keepr-test, base int-portal/release-2.49 @ 5cca33c98.
+Each run: one call, BEGIN ... controls ... RAISE (always rolled back). 23 controls per run.
+Mutations: exact-string replace on the migration's ALTER POLICY alone (compose.py exits non-zero
+on no match); POSTCHECK left out so the controls are the detector. "MUTATION APPLIED" + the
+mutated ALTER printed by compose.py; the qual read back from pg_policies inside the same
+transaction is carried in the result.
+
+run       pass/fail  reds
+baseline  18/5       P1-insert(42501) P1-select(0) P1-revoke(0) N2-sanity-own-org-select(0) inserted-rows-landed(1)
+          = the reported defect: an active admin is refused. (N2 sanity is an admin of org B, refused too.)
+file      23/0       none
+twice     23/0       none (idempotent; pre-check accepts the already-applied state)
+rollback  18/5       identical to baseline (rollback file's own md5 check passed)
+M1        18/5       P1-insert P1-select P1-revoke N2-sanity-own-org-select inserted-rows-landed
+          mutation: role IN ('admin','it_admin') -> role = 'it_admin'
+          qual: ... ((token_manager.role)::text = 'it_admin'::text) AND member_status_grants_access(...)
+M2        19/4       N3-insert("ok") N3-select(4) N3-revoke(1) inserted-rows-landed(3)
+          mutation: drop AND public.member_status_grants_access(token_manager.license_status)
+          qual: ... ((token_manager.role)::text = ANY ((ARRAY['admin','it_admin'])::text[]))))  (no status call)
+M3        19/4       N2-insert("ok") N2-select(4) N2-revoke(1) inserted-rows-landed(3)
+          mutation: drop token_manager.organization_id = scim_tokens.organization_id
+          qual: ... WHERE ((token_manager.user_id = ( SELECT auth.uid() AS uid)) AND role ANY admin,it_admin AND member_status_grants_access(...)
+M4        19/4       N1-insert("ok") N1-select(4) N1-revoke(1) inserted-rows-landed(3)
+          mutation: role IN ('admin','it_admin') -> role IN ('admin','it_admin','agent')
+          qual: ... ANY ((ARRAY['admin','it_admin','agent'])::text[]) ...
+
+After the batch: fixtures absent (orgs/users/tokens/logs with the p3986 prefix = 0), scim_tokens
+qual md5 still 650dd386970cc49956848392f8c5889f (unchanged), pg_stat_statements reset.
+Runs used: 8 (cap 12).
+Note: M3 and M4 are visible to the controls only; M1, M2 and M4 would also fail the migration's
+POSTCHECK (not exercised here by design).
