@@ -86,7 +86,10 @@ export function LearnEmailPane({
       )}
       {/* Contained: nothing in the email can paint outside this box or above the question. */}
       <div
-        className="relative isolate min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto px-5 py-5 text-[13px] [contain:paint]"
+        // Focusable on click (not in the tab order) so arrows scroll the email once the reader
+        // has clicked into it; the question dialog then does not treat them as answers.
+        tabIndex={-1}
+        className="relative isolate min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto px-5 py-5 text-[13px] outline-none [contain:paint]"
         data-testid="learn-email-scroll"
       >
         {body !== null ? (

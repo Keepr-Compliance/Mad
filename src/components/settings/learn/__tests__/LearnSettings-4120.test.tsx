@@ -18,6 +18,9 @@
  *   C3    "N more" only when another question exists; keeps skipped deals
  *   C4    Done for now keeps an in-flight answer and asks nothing after it
  *   C8    deleting one answer re-reads the score and the count
+ *   SUP   BACKLOG-4212: "Senders you marked as automated or mass mail": rows, copy,
+ *         inline-confirmed Stop hiding / Hide again, hidden when empty, shown
+ *         with Learn mode off, re-read after an answer is deleted
  *
  * window.api.learn is a fake "main" built from the transcribed replies in
  * learnFixtures-4120.ts. Synthetic data only.
@@ -30,7 +33,12 @@ import { LearnSettings } from "../LearnSettings";
 import { LearnScoreHost, LearnSessionHost } from "../LearnSessionHost";
 import { LearnAnswersPrivacyRow } from "../LearnAnswersPrivacyRow";
 import { LearnEmailPane } from "../LearnEmailPane";
-import type { LearnPreviewResult, LearnScoreResult, LearnStateResult } from "../../../../../electron/types/ipc/window-api-learn";
+import type {
+  LearnPreviewResult,
+  LearnScoreResult,
+  LearnSignalsResult,
+  LearnStateResult,
+} from "../../../../../electron/types/ipc/window-api-learn";
 import {
   CLEANUP_NEXT,
   CLEANUP_NEXT_2,
@@ -57,7 +65,15 @@ interface FakeMain {
   sampleSize: number;
   score: LearnScoreResult;
   list: Extract<typeof LIST_ANSWERS, { success: true }>["answers"];
+  /** BACKLOG-4212: main's newsletter senders (shape of learn:list-suppressed). */
+  suppressed: Array<{ senderKey: string; newsletterCount: number; hidden: boolean }>;
+  /** BACKLOG-4257: what learn:signals answers (a never-settling promise = still measuring). */
+  signals: Promise<LearnSignalsResult>;
 }
+
+/** learn:signals' copyLines shape (signalScoring.formatSignalLines), synthetic counts. */
+const SIGNAL_LINES =
+  "Signals (measured only; signals v1, terms v1; complete)\nSignal anchor.subject: newsletter 0/0 vs old rules 0/0; deal mail 0/0; gate true kept 0 lost 0, known wrong dropped 0/0, cleanup No dropped 0/0, cleanup Yes lost 0/0, unmeasured 0; keep bar not enough data (newsletter_n, positive_n, true_detections_n)";
 
 let main: FakeMain;
 let api: Record<string, jest.Mock>;
@@ -83,6 +99,8 @@ function install(overrides: Partial<FakeMain> = {}): void {
     sampleSize: 2,
     score: { ...(SCORE as Extract<LearnScoreResult, { success: true }>) },
     list: [],
+    suppressed: [],
+    signals: Promise.resolve({ success: true, signals: null, copyLines: SIGNAL_LINES }),
     ...overrides,
   };
   const s = SCORE as Extract<LearnScoreResult, { success: true }>;
@@ -128,8 +146,15 @@ function install(overrides: Partial<FakeMain> = {}): void {
       return main.bulk.find((b) => b.rowId === args.rowId)!.preview;
     }),
     attachmentOpen: jest.fn(async () => ({ success: true, dataUrl: "data:application/pdf;base64,JVBERi0=", downloadedNow: true })),
+    // BACKLOG-4257: the signal lines arrive in their own call, after the score.
+    signals: jest.fn(() => main.signals),
     deleteAnswers: jest.fn(async () => ({ success: true, removed: { deal: 2, bulk: 3 } })),
     listAnswers: jest.fn(async () => ({ success: true, answers: main.list })),
+    listSuppressed: jest.fn(async () => ({ success: true, senders: main.suppressed.map((x) => ({ ...x })) })),
+    setOverride: jest.fn(async ({ senderKey, hide }: { senderKey: string; hide: boolean }) => {
+      main.suppressed = main.suppressed.map((x) => (x.senderKey === senderKey ? { ...x, hidden: hide } : x));
+      return { success: true, hidden: hide };
+    }),
     deleteAnswer: jest.fn(async ({ kind, id }: { kind: string; id: string }) => {
       main.list = main.list.filter((a) => !(a.kind === kind && a.id === id));
       const st = main.state as Extract<LearnStateResult, { success: true }>;
@@ -288,8 +313,8 @@ describe("AT the one attachment, when its question is shown", () => {
     expect(api.cleanupAnswer).toHaveBeenCalledWith({ detectionId: "d1", answer: "yes" });
 
     fireEvent.click(within(dialog).getByRole("button", { name: /^No$/ }));
-    await within(dialog).findByText("Is this real estate business, or a newsletter / spam?");
-    fireEvent.click(within(dialog).getByRole("button", { name: /Real estate business/ }));
+    await within(dialog).findByText("What kind of email is this?");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Real estate work/ }));
     await within(dialog).findByText("Canarynews second issue", { selector: "span.text-base" });
     // Mail questions name no attachment and open none (flyer.pdf is listed only).
     expect(attachmentCalls()).toHaveLength(2);
@@ -321,7 +346,7 @@ describe("IMG remote images blocked until Show images, per email", () => {
     fireEvent.click(within(pane).getByRole("button", { name: "Show images" }));
     expect(remoteImages(within(dialog).getByTestId("learn-email-pane"))).toBe(1);
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Newsletter or spam/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Automated or mass mail/ }));
     await within(dialog).findByText("Canarynews second issue", { selector: "span.text-base" });
     const next = within(dialog).getByTestId("learn-email-pane");
     expect(remoteImages(next)).toBe(0);
@@ -341,8 +366,8 @@ describe("SK/UN skip and undo", () => {
     expect(within(dialog).getByTestId("learn-question-progress")).toHaveTextContent("Question 2 of 4");
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
-    await within(dialog).findByText("Is this real estate business, or a newsletter / spam?");
-    fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
+    await within(dialog).findByText("What kind of email is this?");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Other$/ }));
     await waitFor(() => expect(api.sampleAnswer).toHaveBeenCalledWith({ rowId: SAMPLE_ROW_ID, answer: "skip" }));
   });
 
@@ -385,10 +410,31 @@ describe("SC score", () => {
     expect(details).toHaveTextContent("Deals found, without manual deals created before 2026-08-31: 0 of 0 (n/a)");
     expect(details).toHaveTextContent("skipped (deal type not buyer or seller)");
     expect(details).toHaveTextContent("skipped (status not closed, active or pending)");
-    fireEvent.click(within(done).getByRole("button", { name: "Copy score" }));
-    expect(writeText).toHaveBeenCalledWith((SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock);
+    // BACKLOG-4257: Copy = main's score block + the signal lines once they have loaded.
+    await waitFor(() => expect(api.signals).toHaveBeenCalled());
+    await waitFor(() => {
+      fireEvent.click(within(done).getByRole("button", { name: "Copy score" }));
+      expect(writeText).toHaveBeenLastCalledWith(
+        `${(SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock}\n${SIGNAL_LINES}`,
+      );
+    });
     // No address, subject or file name anywhere in the score dialog.
     expect(done.textContent).not.toMatch(/canary/i);
+  });
+
+  it("4257: while the signals are still measuring, Copy carries the score block and a measuring line", async () => {
+    const writeText = jest.fn(async () => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    main.signals = new Promise(() => undefined);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /See score/ }));
+    const d = await screen.findByRole("dialog", { name: "How Keepr is doing" });
+    await waitFor(() => expect(api.signals).toHaveBeenCalled());
+    fireEvent.click(within(d).getByRole("button", { name: "Details" }));
+    fireEvent.click(within(d).getByRole("button", { name: "Copy score" }));
+    expect(writeText).toHaveBeenLastCalledWith(
+      `${(SCORE as Extract<LearnScoreResult, { success: true }>).copyBlock}\nSignals (measured only): measuring…`,
+    );
   });
 
   it("See score opens the same dialog titled How Keepr is doing", async () => {
@@ -459,7 +505,7 @@ const progress = (dialog: HTMLElement) => within(dialog).getByTestId("learn-ques
 /** Wait for question N, then answer it (a mail question, or Yes on a deal). */
 async function answerQuestion(dialog: HTMLElement, n: number, of: number): Promise<void> {
   await waitFor(() => expect(progress(dialog)).toHaveTextContent(`Question ${n} of ${of}`));
-  const button = await within(dialog).findByRole("button", { name: /Newsletter or spam|Yes, my deal/ });
+  const button = await within(dialog).findByRole("button", { name: /Automated or mass mail|Yes, my deal/ });
   await waitFor(() => expect(button).not.toBeDisabled());
   fireEvent.click(button);
 }
@@ -499,7 +545,7 @@ describe("C1/C2/C3 sittings of 12", () => {
 
     const next = await screen.findByRole("dialog", { name: "Learn mode question" });
     await waitFor(() => expect(progress(next)).toHaveTextContent("Question 1 of 12"));
-    await within(next).findByRole("button", { name: /Newsletter or spam/ });
+    await within(next).findByRole("button", { name: /Automated or mass mail/ });
     expect(within(next).queryByText("4120 Canarytest Lane, Testville, ZZ 00000")).toBeNull();
     expect(api.cleanupNext).toHaveBeenLastCalledWith({ exclude: ["d1"] });
     for (let n = 1; n <= 12; n++) await answerQuestion(next, n, 12);
@@ -618,5 +664,89 @@ describe("C8 Your answers in Help Keepr learn", () => {
     renderSection();
     expect(await screen.findByTestId("learn-answers-list")).toBeInTheDocument();
     expect(screen.queryByTestId("learn-start")).toBeNull();
+  });
+});
+
+describe("SUP Senders you marked as automated or mass mail (BACKLOG-4212)", () => {
+  const SENDERS = [
+    { senderKey: "news@mail.example", newsletterCount: 3, hidden: true },
+    { senderKey: "promo@offers.example", newsletterCount: 2, hidden: false },
+  ];
+  const OFF: LearnStateResult = { success: true, available: true, enabled: false, answers: { deal: 0, bulk: 5 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null };
+
+  it("lists address and answer count under Your answers, with the copy", async () => {
+    install({ suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    const box = await screen.findByTestId("learn-suppressed-senders");
+    expect(box).toHaveTextContent("Senders you marked as automated or mass mail");
+    expect(within(box).getByTestId("learn-suppressed-copy")).toHaveTextContent(
+      /^Keepr skips mail from these senders when it looks for new deals\. This list stays on this (Mac|computer)\. Senders on your deals are never hidden\. Choose Stop hiding to see their mail again\.$/,
+    );
+    const rows = within(box).getAllByTestId("learn-suppressed-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("news@mail.example");
+    expect(rows[0]).toHaveTextContent("3 answers");
+    expect(within(rows[0]).getByRole("button", { name: "Stop hiding" })).toBeInTheDocument();
+    expect(within(rows[1]).getByRole("button", { name: "Hide again" })).toBeInTheDocument();
+  });
+
+  it("Stop hiding asks inline, then calls set-override with the sender and hide:false, and the row flips", async () => {
+    install({ suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    const box = await screen.findByTestId("learn-suppressed-senders");
+    const row = within(box).getAllByTestId("learn-suppressed-row")[0];
+    fireEvent.click(within(row).getByRole("button", { name: "Stop hiding" }));
+    expect(api.setOverride).not.toHaveBeenCalled();
+    expect(within(row).getByText("Stop hiding?")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Stop hiding" }));
+    await waitFor(() => expect(api.setOverride).toHaveBeenCalledWith({ senderKey: "news@mail.example", hide: false }));
+    expect(await within(row).findByRole("button", { name: "Hide again" })).toBeInTheDocument();
+    expect(row).toHaveTextContent("Not hidden");
+  });
+
+  it("Hide again calls set-override with hide:true and the row flips back", async () => {
+    install({ suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    const box = await screen.findByTestId("learn-suppressed-senders");
+    const row = within(box).getAllByTestId("learn-suppressed-row")[1];
+    fireEvent.click(within(row).getByRole("button", { name: "Hide again" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Hide again" }));
+    await waitFor(() => expect(api.setOverride).toHaveBeenCalledWith({ senderKey: "promo@offers.example", hide: true }));
+    expect(await within(row).findByRole("button", { name: "Stop hiding" })).toBeInTheDocument();
+  });
+
+  it("Cancel calls nothing", async () => {
+    install({ suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    const row = (await screen.findAllByTestId("learn-suppressed-row"))[0];
+    fireEvent.click(within(row).getByRole("button", { name: "Stop hiding" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Cancel" }));
+    expect(api.setOverride).not.toHaveBeenCalled();
+    expect(within(row).getByRole("button", { name: "Stop hiding" })).toBeInTheDocument();
+  });
+
+  it("is hidden when the list is empty, and shown with Learn mode off", async () => {
+    install({ state: OFF });
+    renderSection();
+    await waitFor(() => expect(api.listSuppressed).toHaveBeenCalled());
+    expect(screen.queryByTestId("learn-suppressed-senders")).toBeNull();
+
+    install({ state: OFF, suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    expect(await screen.findByTestId("learn-suppressed-senders")).toBeInTheDocument();
+  });
+
+  it("deleting an answer re-reads the list", async () => {
+    const list = (LIST_ANSWERS as Extract<typeof LIST_ANSWERS, { success: true }>).answers;
+    install({ list: [...list], suppressed: SENDERS.map((x) => ({ ...x })) });
+    renderSection();
+    await screen.findByTestId("learn-suppressed-senders");
+    const reads = api.listSuppressed.mock.calls.length;
+    main.suppressed = [];
+    const row = within(await screen.findByTestId("learn-answers-list")).getAllByTestId("learn-answer-row")[0];
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.listSuppressed.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(screen.queryByTestId("learn-suppressed-senders")).toBeNull());
   });
 });

@@ -6,6 +6,7 @@
  */
 
 import { type ApiResult, getErrorMessage } from "./index";
+import type { BetaUpdatesState } from "../../electron/types/ipc/window-api-services";
 
 /**
  * Phone type for mobile device preference
@@ -95,6 +96,15 @@ export interface NoticePreferences {
 }
 
 /**
+ * Updater preferences (BACKLOG-3469 auto-download, BACKLOG-4245 beta updates).
+ */
+export interface UpdatePreferences {
+  autoDownload?: boolean;
+  /** Absent or anything but true = beta updates off. */
+  betaUpdates?: boolean;
+}
+
+/**
  * User preferences object
  */
 export interface UserPreferences {
@@ -105,6 +115,7 @@ export interface UserPreferences {
   export?: ExportPreferences;
   integrations?: IntegrationsPreferences;
   notices?: NoticePreferences;
+  updates?: UpdatePreferences;
   /** BACKLOG-4220: absent `showTodo` = Todo hidden on the dashboard. */
   dashboard?: { showTodo?: boolean };
   [key: string]: unknown;
@@ -229,6 +240,63 @@ export const settingsService = {
     try {
       const result = await this.updatePreferences(userId, {
         contactAutoRole: { enabled },
+      });
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  // ============================================
+  // BETA UPDATES (BACKLOG-4245)
+  // ============================================
+
+  /**
+   * Whether the user turned beta updates on. `false` when the preference is
+   * absent, not exactly true, or the read failed.
+   */
+  async getBetaUpdates(userId: string): Promise<boolean> {
+    try {
+      const result = await this.getPreferences(userId);
+      if (result.success && result.data) {
+        return result.data.updates?.betaUpdates === true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * The "Get beta versions" switch state, decided in the main process.
+   * Hidden (`visible` false) when the state cannot be read.
+   */
+  async getBetaUpdatesState(): Promise<BetaUpdatesState> {
+    const hidden: BetaUpdatesState = {
+      visible: false,
+      stored: false,
+      applied: false,
+      eligibility: "unknown",
+      note: null,
+    };
+    try {
+      const getState = window.api?.update?.getBetaState;
+      if (typeof getState !== "function") return hidden;
+      const state = await getState();
+      return state && typeof state === "object" ? state : hidden;
+    } catch {
+      return hidden;
+    }
+  },
+
+  /**
+   * Persist the beta-updates preference. The main process applies it to the
+   * updater (off at once; on after the save succeeds).
+   */
+  async setBetaUpdates(userId: string, enabled: boolean): Promise<ApiResult<void>> {
+    try {
+      const result = await this.updatePreferences(userId, {
+        updates: { betaUpdates: enabled === true },
       });
       return { success: result.success, error: result.error };
     } catch (error) {

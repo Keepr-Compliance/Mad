@@ -55,7 +55,14 @@ jest.mock("../../utils/senderFilter/bundledRules", () => {
 import { setDb } from "../db/core/dbConnection";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
 import { BUNDLED_SENDER_RULES, USER_SUPPRESS_MIN_ANSWERS_DEFAULT } from "../../utils/senderFilter/bundledRules";
-import { answerBulk, insertBulkSample, softClearAnswersAndStopSharing, softDeleteAnswer } from "../db/learnModeDbService";
+import {
+  answerBulk,
+  insertBulkSample,
+  nextUnansweredBulk,
+  softClearAnswersAndStopSharing,
+  softDeleteAnswer,
+} from "../db/learnModeDbService";
+import { LEARN_RULE_VERSION } from "../learn/learnRules";
 import { buildUserSuppress } from "../userSuppressService";
 import { queueAddressMatchesForTransaction } from "../reviewStateService";
 import { gmailFrom, insertStoredEmail } from "./helpers/storedEmail-4175";
@@ -255,6 +262,34 @@ describe("A1 answerBulk snapshots the sender", () => {
     expect(key(id)).toEqual({ answer: "real_estate", sender_key: "other@mail.example" });
     expect(answerBulk(OTHER, id, "skip")).toBe(false);
     expect(key(id).answer).toBe("real_estate");
+  });
+});
+
+describe("A1b rule_version is stamped when the user answers (BACKLOG-4212)", () => {
+  const version = (rowId: string) =>
+    (db.prepare(`SELECT rule_version AS v FROM learn_bulk_answers WHERE id = ?`).get(rowId) as { v: number }).v;
+  const drawAt = (ext: string, v: number, user = USER): string => {
+    insertBulkSample(user, [{ source: "gmail", external_id: ext }], v);
+    return (db.prepare(`SELECT id FROM learn_bulk_answers WHERE external_id = ?`).get(ext) as { id: string }).id;
+  };
+  it("the shipped version is 5", () => {
+    expect(LEARN_RULE_VERSION).toBe(5);
+  });
+  it("a row drawn under v4 is stamped with the current version when answered", () => {
+    const id = drawAt("ext-v4-draw", 4);
+    expect(version(id)).toBe(4);
+    expect(answerBulk(USER, id, "newsletter_spam")).toBe(true);
+    expect(version(id)).toBe(LEARN_RULE_VERSION);
+  });
+  it("answering one row leaves an already-answered v4 row alone, and nothing is asked again", () => {
+    const old = drawAt("ext-old-answered", 4);
+    db.prepare(`UPDATE learn_bulk_answers SET answer = 'real_estate', answered_at = 'x' WHERE id = ?`).run(old);
+    const fresh = drawAt("ext-fresh", 4);
+    expect(answerBulk(USER, fresh, "skip")).toBe(true);
+    expect(version(old)).toBe(4);
+    expect(db.prepare(`SELECT answer FROM learn_bulk_answers WHERE id = ?`).get(old)).toEqual({ answer: "real_estate" });
+    expect(nextUnansweredBulk(USER)?.id).not.toBe(old);
+    expect(nextUnansweredBulk(USER)?.id).not.toBe(fresh);
   });
 });
 

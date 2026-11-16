@@ -303,9 +303,23 @@ export interface UpdateErrorPayload {
 }
 
 /**
+ * BACKLOG-4245: the "Get beta versions" switch state, from the main process.
+ * `note` says why betas are not active while the stored value is on.
+ */
+export interface BetaUpdatesState {
+  visible: boolean;
+  stored: boolean;
+  applied: boolean;
+  eligibility: "allowed" | "blocked" | "unknown";
+  note: "not_available" | "unreachable" | null;
+}
+
+/**
  * Auto-update methods (migrated from window.electron)
  */
 export interface WindowApiUpdate {
+  /** BACKLOG-4245: the "Get beta versions" switch state. */
+  getBetaState: () => Promise<BetaUpdatesState>;
   onAvailable: (callback: (info: unknown) => void) => () => void;
   onProgress: (callback: (progress: unknown) => void) => () => void;
   onDownloaded: (callback: (info: unknown) => void) => () => void;

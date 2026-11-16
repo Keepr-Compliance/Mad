@@ -75,14 +75,14 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
               type="button"
               aria-expanded={reviewing}
               onClick={() => setReviewing((v) => !v)}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 rounded border border-gray-300 transition-colors"
+              className="whitespace-nowrap px-4 py-2 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 rounded border border-gray-300 transition-colors"
             >
               Review
             </button>
             <button
               type="button"
               onClick={() => setConfirming(true)}
-              className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded border border-red-200 transition-colors"
+              className="whitespace-nowrap px-4 py-2 text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded border border-red-200 transition-colors"
             >
               Delete all
             </button>
@@ -103,7 +103,7 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
               type="button"
               disabled={deleting}
               onClick={() => void onConfirm()}
-              className="rounded border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+              className="whitespace-nowrap rounded border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
             >
               Delete all
             </button>
@@ -111,7 +111,7 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
               type="button"
               disabled={deleting}
               onClick={() => setConfirming(false)}
-              className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="whitespace-nowrap rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Cancel
             </button>

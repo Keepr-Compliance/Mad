@@ -30,6 +30,9 @@ export const LearnSetEnabledArgsSchema = z.strictObject({ enabled: z.boolean() }
  */
 export const LearnGetStateArgsSchema = z.strictObject({ settle: z.boolean().optional() });
 
+/** BACKLOG-4257: learn:signals takes no payload; anything sent is refused. */
+export const LearnSignalsArgsSchema = z.undefined();
+
 /** BACKLOG-4219: "Help improve Keepr". */
 export const LearnSetPilotReportArgsSchema = z.strictObject({ enabled: z.boolean() });
 
@@ -75,4 +78,14 @@ export const LearnAttachmentOpenArgsSchema = z.strictObject({
 export const LearnDeleteAnswerArgsSchema = z.strictObject({
   kind: z.enum(["deal", "bulk"]),
   id: RowIdSchema,
+});
+
+/**
+ * BACKLOG-4212 PR3: learn:set-override ("Stop hiding" / "Hide again"). The
+ * sender is an address as listed by learn:list-suppressed; main normalises it
+ * again. Strict: no user id or any other field is accepted from the renderer.
+ */
+export const LearnSetOverrideArgsSchema = z.strictObject({
+  senderKey: z.string().min(3).max(320),
+  hide: z.boolean(),
 });

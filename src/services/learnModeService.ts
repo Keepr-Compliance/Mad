@@ -23,6 +23,8 @@ import type {
   LearnDeleteAnswersResult,
   LearnFailure,
   LearnListAnswersResult,
+  LearnListSuppressedResult,
+  LearnSetOverrideResult,
   LearnPreviewArgs,
   LearnPreviewResult,
   LearnRunProgressEvent,
@@ -30,6 +32,7 @@ import type {
   LearnSampleDrawResponse,
   LearnSampleNextResult,
   LearnScoreResult,
+  LearnSignalsResult,
   LearnSetEnabledResult,
   LearnSetPilotReportResult,
   LearnStateResult,
@@ -81,6 +84,9 @@ export const learnModeService = {
 
   score: (): Promise<LearnScoreResult> => call(() => window.api.learn.score()),
 
+  /** BACKLOG-4257: per-email signals (shadow) and their Copy lines; asked for after the score is shown. */
+  signals: (): Promise<LearnSignalsResult> => call(() => window.api.learn.signals()),
+
   deleteAnswers: (): Promise<LearnDeleteAnswersResult> => call(() => window.api.learn.deleteAnswers()),
 
   /** The user's saved answers, newest first. */
@@ -89,6 +95,13 @@ export const learnModeService = {
   /** Delete one saved answer (soft, in main); the item can be asked again. */
   deleteAnswer: (kind: "deal" | "bulk", id: string): Promise<LearnDeleteAnswerResult> =>
     call(() => window.api.learn.deleteAnswer({ kind, id })),
+
+  /** BACKLOG-4212: senders the user marked as newsletters. */
+  listSuppressed: (): Promise<LearnListSuppressedResult> => call(() => window.api.learn.listSuppressed()),
+
+  /** BACKLOG-4212: hide = false is "Stop hiding", hide = true is "Hide again". */
+  setOverride: (senderKey: string, hide: boolean): Promise<LearnSetOverrideResult> =>
+    call(() => window.api.learn.setOverride({ senderKey, hide })),
 
   preview: (args: LearnPreviewArgs): Promise<LearnPreviewResult> => call(() => window.api.learn.preview(args)),
 
