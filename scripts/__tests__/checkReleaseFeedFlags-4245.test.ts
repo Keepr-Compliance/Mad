@@ -16,7 +16,8 @@ import path from "path";
 
 const ROOT = path.join(__dirname, "../..");
 const SCRIPT = path.join(ROOT, "scripts/ci/check-release-feed-flags.mjs");
-const WORKFLOW = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8");
+// A Windows checkout has CRLF line ends; the check reads either, the edits below are written with LF.
+const WORKFLOW = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8").replace(/\r\n/g, "\n");
 
 let dir = "";
 beforeAll(() => {
