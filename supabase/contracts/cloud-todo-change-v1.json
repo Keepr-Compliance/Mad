@@ -1,0 +1,349 @@
+{
+  "name": "keepr.cloud_todo_change",
+  "version": 1,
+  "about": "The todo change protocol of supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql (BACKLOG-4263): the ops cloud_todo_push and the core accept, the answers they give, and the rows cloud_todo_pull returns. Checked against the migration text by supabase/tests/backlog-4263/harness.py check.",
+  "push": {
+    "function": "cloud_todo_push(p_expected_user_id uuid, p_source_install_id uuid, p_sent_at text, p_ops jsonb)",
+    "limits": {
+      "ops": 200,
+      "bytes": 1048576
+    },
+    "errors": [
+      "batch_too_large",
+      "install_removed",
+      "invalid_input",
+      "not_authorized",
+      "not_entitled",
+      "wrong_account"
+    ],
+    "effective_time": "receive time - (p_sent_at - op.edited_at); -infinity (unknowable) when the age is below 0, above 365 days, either reading is missing or unparseable, or op.clock_stepped is true"
+  },
+  "op_kinds": [
+    "create_checklist",
+    "create_item",
+    "set",
+    "remove",
+    "restore"
+  ],
+  "entities": [
+    "item",
+    "checklist"
+  ],
+  "parts": {
+    "item": [
+      "done",
+      "title",
+      "note",
+      "due",
+      "order"
+    ],
+    "checklist": [
+      "order"
+    ]
+  },
+  "op_fields": {
+    "all": [
+      "op_id",
+      "kind",
+      "edited_at",
+      "clock_stepped"
+    ],
+    "set": [
+      "entity",
+      "id | deal_id + local_id",
+      "part",
+      "value",
+      "base_rev",
+      "edit_seq",
+      "held_locked"
+    ],
+    "remove": [
+      "entity",
+      "id | deal_id + local_id"
+    ],
+    "restore": [
+      "entity",
+      "id | deal_id + local_id"
+    ],
+    "create_checklist": [
+      "deal_id",
+      "local_id",
+      "template_id",
+      "template_name",
+      "sort_order",
+      "is_private"
+    ],
+    "create_item": [
+      "deal_id",
+      "checklist_id | checklist_local_id",
+      "local_id",
+      "title",
+      "description",
+      "is_required",
+      "expected_document_type",
+      "local_created_at",
+      "done",
+      "note",
+      "due_date",
+      "sort_order",
+      "edit_seq"
+    ]
+  },
+  "statuses": [
+    "applied",
+    "unchanged",
+    "lost",
+    "applied_to_removed",
+    "removed",
+    "already_removed",
+    "restored",
+    "not_removed",
+    "not_restorable",
+    "refused_removed",
+    "locked",
+    "not_allowed",
+    "not_found",
+    "rejected",
+    "added",
+    "exists",
+    "mapped",
+    "already_added",
+    "install_removed"
+  ],
+  "result": [
+    "op_id",
+    "status",
+    "entity",
+    "cloud_id",
+    "local_id",
+    "cloud_deal_id",
+    "parts",
+    "conflict",
+    "reason",
+    "field"
+  ],
+  "part_shape": [
+    "rev",
+    "value",
+    "at",
+    "by",
+    "edit_seq"
+  ],
+  "pull": {
+    "function": "cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer, p_horizon bigint DEFAULT NULL)",
+    "fields": [
+      "head",
+      "rows",
+      "next_after",
+      "horizon",
+      "install_max_edit_seq",
+      "resync_required"
+    ],
+    "row_entities": [
+      "deal",
+      "checklist",
+      "item",
+      "event"
+    ],
+    "limit": 500,
+    "cursor": "The desktop stores the pair (next_after, horizon) from every page it has applied, in the same local transaction as that page, and sends both back as p_after_seq and p_horizon. A full pull starts with p_after_seq 0 and p_horizon omitted (NULL) and keeps the horizon of each page it applies. p_after_seq > 0 without p_horizon answers {ok:false, error:'horizon_required'}. When resync_required is true the desktop applies nothing from that answer, drops its cursor and starts a full pull (p_after_seq 0, no p_horizon).",
+    "resync_rule": "resync_required = p_after_seq > head OR (p_after_seq > 0 AND forgotten_at > p_horizon AND forgotten_through_seq > p_after_seq). A cursor at or above forgotten_through_seq (caught up) never resyncs; a full pull from 0 never resyncs.",
+    "horizon": "horizon is the owner's forgotten_at marker read in the same snapshot as the page: a fresh number taken by every purge run that deletes anything, so it only moves forward. It is not a row number and is only compared with the horizon the desktop sends back."
+  },
+  "history_outcomes": [
+    "applied",
+    "lost",
+    "unchanged",
+    "removed",
+    "restored",
+    "applied_to_removed",
+    "held_locked"
+  ],
+  "refusals_from_install_scoped_writers": [
+    "install_removed",
+    "not_found"
+  ],
+  "ledger": {
+    "rule": "An op's answer is kept for exact replay unless it wrote nothing and can change without the op changing. A repeated op_id whose answer was kept returns that answer and writes nothing; a repeated op_id whose answer was not kept is evaluated again.",
+    "not_kept": [
+      "not_found",
+      "locked",
+      "refused_removed",
+      "install_removed",
+      "rejected/parent_missing",
+      "not_restorable/my_items_exists"
+    ],
+    "batch_errors_never_kept": [
+      "not_authorized",
+      "wrong_account",
+      "invalid_input",
+      "not_entitled",
+      "install_removed",
+      "batch_too_large",
+      "busy"
+    ]
+  },
+  "field_types": {
+    "rule": "A field present with a JSON type outside its list rejects that op alone (status rejected, reason invalid_value, field = the field names); the batch continues. op_id and kind are checked for the whole batch (invalid_input). edited_at of the wrong type or unparseable makes the op's time unknowable (E2).",
+    "entity": [
+      "string"
+    ],
+    "id": [
+      "string"
+    ],
+    "deal_id": [
+      "string"
+    ],
+    "local_id": [
+      "string"
+    ],
+    "checklist_local_id": [
+      "string"
+    ],
+    "template_id": [
+      "string"
+    ],
+    "template_name": [
+      "string",
+      "null"
+    ],
+    "sort_order": [
+      "number",
+      "null"
+    ],
+    "is_private": [
+      "boolean",
+      "null"
+    ],
+    "title": [
+      "string"
+    ],
+    "note": [
+      "string",
+      "null"
+    ],
+    "due_date": [
+      "string",
+      "null"
+    ],
+    "done": [
+      "boolean",
+      "object"
+    ],
+    "description": [
+      "string",
+      "null"
+    ],
+    "is_required": [
+      "boolean",
+      "null"
+    ],
+    "expected_document_type": [
+      "string",
+      "null"
+    ],
+    "local_created_at": [
+      "string",
+      "null"
+    ],
+    "part": [
+      "string"
+    ],
+    "base_rev": [
+      "integer",
+      "null"
+    ],
+    "edit_seq": [
+      "integer",
+      "null"
+    ],
+    "clock_stepped": [
+      "boolean",
+      "null"
+    ],
+    "held_locked": [
+      "boolean",
+      "null"
+    ],
+    "value": "per part (done boolean|{is_checked, checked_at}; title string; note string|null; due YYYY-MM-DD|null; order integer|null)",
+    "checklist_id": [
+      "string"
+    ]
+  },
+  "pull_errors": [
+    "not_authorized",
+    "wrong_account",
+    "invalid_input",
+    "not_entitled",
+    "horizon_required"
+  ],
+  "wire_types": {
+    "rule": "Every value is sent as the JSON type listed in field_types; the server does not convert. Booleans are JSON true/false (never 0/1 or strings). A set op's value is the bare part value, never wrapped in an object keyed by the part name. Times are ISO 8601 strings with a zone (for example 2026-11-17T04:05:08.266Z); due_date is a YYYY-MM-DD string; ids (id, deal_id, checklist_id) are uuid strings, compared as uuids in any letter case; a malformed uuid rejects the op with reason invalid_value, a final answer kept for replay (never not_found or parent_missing); local ids (local_id, checklist_local_id) are free text; integers are JSON numbers without a fraction.",
+    "examples_accepted": [
+      {
+        "kind": "set",
+        "entity": "item",
+        "id": "<uuid>",
+        "part": "done",
+        "value": {
+          "is_checked": true,
+          "checked_at": "2026-11-17T04:05:08.266Z"
+        },
+        "base_rev": 1,
+        "edit_seq": 3,
+        "edited_at": "2026-11-17T04:05:08.266Z"
+      },
+      {
+        "kind": "set",
+        "entity": "item",
+        "id": "<uuid>",
+        "part": "title",
+        "value": "Call lender"
+      },
+      {
+        "kind": "create_item",
+        "deal_id": "<uuid>",
+        "checklist_local_id": "cl1",
+        "local_id": "i9",
+        "title": "Order survey",
+        "is_required": false,
+        "done": false
+      }
+    ],
+    "examples_refused": [
+      {
+        "why": "is_required as 1",
+        "op": {
+          "kind": "create_item",
+          "is_required": 1
+        }
+      },
+      {
+        "why": "done.is_checked as 1",
+        "op": {
+          "kind": "set",
+          "part": "done",
+          "value": {
+            "is_checked": 1
+          }
+        }
+      },
+      {
+        "why": "part value wrapped by part name",
+        "op": {
+          "kind": "set",
+          "part": "title",
+          "value": {
+            "title": "Call lender"
+          }
+        }
+      }
+    ]
+  },
+  "my_items": {
+    "mapped": "create_checklist with template_id keepr:my-items answers status 'mapped' when the deal already has a live My items list online under another local id. The answer's cloud_id is that list. The server records the desktop's local_id as a name of that list (mapped_local_ids), so every later op from that desktop may keep naming it by its own local_id: create_item checklist_local_id, and set/restore on entity checklist by deal_id + local_id. A repeated create_checklist with that local_id answers 'mapped' again.",
+    "desktop_after_mapped": "Store the answer's cloud_id as the cloud id of the local My items list (the shadow) and keep the local list. Send item creates with checklist_id = that cloud id, or with checklist_local_id = the desktop's own local id (both resolve). Ops already answered rejected/parent_missing are not kept in the ledger, so the same op_id can be sent again. Do not create a second list.",
+    "parent_resolution": "create_item from the desktop names its parent by checklist_id (cloud uuid) or checklist_local_id (the list's local id or a local id answered 'mapped'); the parent must be a checklist of the op's deal, which must be this owner's and this install's. A parent on another deal or of another owner answers rejected/parent_missing.",
+    "list_removal": "A keepr:my-items checklist is removed only with its deal: a remove op on it answers not_allowed for every actor. Its items are removed one by one. Reorder (set order) applies to the one online list."
+  }
+}

@@ -84,6 +84,13 @@ def unit(text, name):
 
 
 OFFLINE_MD5 = {n: md5(unit(MIG, n)[1]) for n in (READER, TOOL)}
+# BACKLOG-4263 PR-2 (20261118110000) replaces the reader (removed deals skipped) and makes a deal delete a soft
+# removal. Once it is applied on the test project (its ledger row exists; decided in main before composing), or
+# with --post-pr2, the call also runs that migration after this one, and p_md5, p_removed and p_rollback take
+# the post-PR-2 expectations.
+MIG2 = rd('supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql')
+PR2_READER_MD5 = md5(unit(MIG2, READER)[1])
+POST_PR2 = '--post-pr2' in sys.argv
 
 
 def create(name, expr):
@@ -105,8 +112,9 @@ WANT = {}
 
 
 def fn_mutant(mode, name, reps, probe, want='red', pre=''):
-    """reps: [(old, new, count)] exact-string replaces on the function's text from the migration file"""
-    u, _, sig = unit(MIG, name)
+    """reps: [(old, new, count)] exact-string replaces on the function's text from the migration file
+    (post-PR-2: the reader's text is PR-2's replacement, the body that is live)"""
+    u, _, sig = unit(MIG2 if (POST_PR2 and name == READER) else MIG, name)
     mu = u
     for old, new, cnt in reps:
         n = mu.count(old)
@@ -259,6 +267,29 @@ def mutants():
     print('MUTATION APPLIED ROLLBACK_no_delete (rollback text)\n  - DELETE FROM public.mcp_call_log WHERE tool = ...;')
     WANT['M_ROLLBACK_no_delete'] = 'red'
     b.append(block('M_ROLLBACK_no_delete', "    PERFORM pg_temp.la('a1');\n    v := pg_temp.p_rollback(%s);" % q(rb_bad)))
+    if POST_PR2:
+        u2 = unit(MIG2, READER)[0]
+        frag = ' AND dl.removed_at IS NULL /*LIVE:all_deals*/'
+        assert u2.count(frag) == 1
+        mu2 = u2.replace(frag, '')
+        msrc2 = unit(mu2, READER)[1]
+        for probe in ('p_removed', 'p_md5'):
+            mode = 'PR2_reader_without_removed_filter_' + probe
+            print('MUTATION APPLIED %s (PR-2 reader: removed-deal filter dropped)' % mode)
+            WANT['M_' + mode] = 'red'
+            b.append(block('M_' + mode, create(READER, q(mu2)) + (
+                "    IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public._mcp_r_list_all_deals(text,date,date,uuid)')) IS DISTINCT FROM %s THEN\n"
+                "      v := 'NOT APPLIED IN DB';\n    ELSE\n      v := pg_temp.%s();\n    END IF;") % (lit(md5(msrc2)), probe)))
+        for mode, sql in (('PR2_deleted_deal_live_again', "UPDATE public.cloud_deals SET removed_at = NULL, removed_kind = NULL WHERE id = pg_temp.id('A5')"),
+                          ('PR2_deleted_deal_hard_deleted', "DELETE FROM public.cloud_deals WHERE id = pg_temp.id('A5')")):
+            print('MUTATION APPLIED %s (ddl)\n  + %s' % (mode, sql))
+            WANT['M_' + mode] = 'red'
+            b.append(block('M_' + mode, "    EXECUTE %s;\n    GET DIAGNOSTICS t0 = ROW_COUNT;\n    IF t0 <> '1' THEN v := 'NOT APPLIED IN DB'; ELSE v := pg_temp.p_removed(); END IF;" % q(sql)))
+        print('MUTATION APPLIED PR2_rollback_check_without_pr2 (p_rollback re-applies only PR-1)')
+        WANT['M_PR2_rollback_check_without_pr2'] = 'red'
+        b.append(block('M_PR2_rollback_check_without_pr2',
+                       "    EXECUTE %s;\n    PERFORM pg_temp.la('a1');\n    v := pg_temp.p_rollback(pg_temp.t_rb());"
+                       % q("CREATE OR REPLACE FUNCTION pg_temp.t_mig() RETURNS text LANGUAGE sql IMMUTABLE AS $tm4263$ SELECT %s::text $tm4263$" % q2(MIG))))
     return b
 
 
@@ -296,7 +327,7 @@ def md5_control():
             "    pg_temp.pass((SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.mcp_list_all_deals(text,bytea,text,text,text,text,text)'::regprocedure) = %s, 'tool md5'),\n"
             "    pg_temp.pass((SELECT bool_and(md5(p.prosrc) = e.m) AND count(*) = 9 FROM e JOIN pg_proc p ON p.oid = to_regprocedure('public.' || e.sig)), 'existing anon md5 changed'),\n"
             "    pg_temp.pass((SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_') = 41, 'mcp function count'))\n$h$;\n"
-            ) % (lit(OFFLINE_MD5[READER]), lit(OFFLINE_MD5[TOOL]))
+            ) % (lit(PR2_READER_MD5 if POST_PR2 else OFFLINE_MD5[READER]), lit(OFFLINE_MD5[TOOL]))
 
 
 SIMULATE_APPLIED = '--simulate-applied' in sys.argv
@@ -319,11 +350,13 @@ def compose(with_mutants=True, only=None):
     if SIMULATE_APPLIED:
         # the state after the real apply, inside this transaction: the migration and its ledger row first
         head = MIG + "\nINSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20261118100000', 'backlog_4263_mcp_list_all_deals');\n" + head
-    text = head + guard + RB + '\n' + MIG + '\n' + MIG + '\n' + HL + '\n' + FX + '\n' + PR + '\n' + FP + md5_control()
+    mig2 = (MIG2 + '\n') if POST_PR2 else ''
+    text = head + guard + RB + '\n' + MIG + '\n' + MIG + '\n' + mig2 + HL + '\n' + FX + '\n' + PR + '\n' + FP + md5_control()
     text += ("INSERT INTO pg_temp.p4263_out SELECT 'fp_after_apply', pg_temp.fp();\n"
              "INSERT INTO pg_temp.p4263_out SELECT 'BASE', pg_temp.base4263()::text;\n")
+    text += ("CREATE FUNCTION pg_temp.post_pr2() RETURNS boolean LANGUAGE sql IMMUTABLE AS $pp4263$ SELECT %s $pp4263$;\n" % ('true' if POST_PR2 else 'false'))
     text += ("CREATE FUNCTION pg_temp.t_mig() RETURNS text LANGUAGE sql IMMUTABLE AS $tm4263$ SELECT %s::text $tm4263$;\n"
-             "CREATE FUNCTION pg_temp.t_rb() RETURNS text LANGUAGE sql IMMUTABLE AS $tr4263$ SELECT %s::text $tr4263$;\n") % (q2(MIG), q2(RB))
+             "CREATE FUNCTION pg_temp.t_rb() RETURNS text LANGUAGE sql IMMUTABLE AS $tr4263$ SELECT %s::text $tr4263$;\n") % (q2(MIG + ('\n' + MIG2 if POST_PR2 else '')), q2(RB))
     text += ROLLBACK_PROBE
     b = [block('C_p_md5', '    v := pg_temp.p_md5();')]
     for p in PROBES:
@@ -402,6 +435,11 @@ def main():
         print(msg[:3000])
         ok = 'P4263_APPLY_TRIAL post-check passed' in msg
         sys.exit(0 if ok != ('--break-md5' in args) else 1)
+    global POST_PR2
+    if not POST_PR2:
+        led = run_sql("SELECT count(*) AS n FROM supabase_migrations.schema_migrations WHERE version = '20261118110000'")
+        POST_PR2 = '"n":1' in led.replace(' ', '')
+    print('post-PR-2 expectations: %s' % POST_PR2)
     only = next((a.split('=', 1)[1].split(',') for a in args if a.startswith('--only=')), None)
     fx_path = next((a.split('=', 1)[1] for a in args if a.startswith('--fixtures=')), None)
     sql = compose(with_mutants='--no-mutants' not in args, only=only)
