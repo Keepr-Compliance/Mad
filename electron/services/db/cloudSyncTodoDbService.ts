@@ -154,10 +154,19 @@ export function stepTodoEpoch(db: SqlDb, projectRef: string, now: Date): number 
   return r ? r.clock_epoch : null;
 }
 
-/** One edit_seq for a scan op (absent counter: NULL, compared by time, N1b). */
+/**
+ * One edit_seq for a scan op (absent counter: NULL, compared by time, N1b). After a restore the counter is
+ * the backup's (rewound, R3) until a pull raises it (PR-4b), so a scan op could carry a number above one this
+ * computer stored online for a NEWER value before the restore, and win through the same-install arm: while
+ * the counter is rewound, scan ops carry no edit_seq (with their unknowable time they then never win).
+ */
 function nextEditSeq(db: SqlDb, projectRef: string): number | null {
   const install = currentInstallId(db, projectRef);
   if (!install) return null;
+  const k = db.prepare("SELECT rewound_at FROM cloud_sync_todo_counter WHERE project_ref = ? AND install_id = ?").get(projectRef, install) as
+    | { rewound_at: string | null }
+    | undefined;
+  if (k?.rewound_at) return null;
   db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = edit_seq + 1 WHERE project_ref = ? AND install_id = ?").run(projectRef, install);
   const r = db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter WHERE project_ref = ? AND install_id = ?").get(projectRef, install) as
     | { edit_seq: number }

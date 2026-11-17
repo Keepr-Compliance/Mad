@@ -455,10 +455,14 @@ export function forgetDealDeletedOnline(
   userId: string,
   transactionId: string,
   generation: number,
+  now: Date = new Date(),
 ): void {
   db.transaction(() => {
     deleteDealState(db, projectRef, userId, transactionId);
     clearMarkIfGeneration(db, transactionId, generation);
+    // BACKLOG-4263: the deal's todo shadow names the old online copy; forget it and queue the deal's todos
+    // again (unknowable times), so a deal that returns under a new online id gets its todos created.
+    resetTodoDeal(db, projectRef, userId, transactionId, now);
   })();
 }
 

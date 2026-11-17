@@ -458,7 +458,7 @@ export class CloudSyncRunner {
         this.stopOn(res);
         const gone = res.kind === "ok" || (res.kind === "refused" && res.code === "not_found");
         if (!gone) return this.recordFailure(db, row, res);
-        this.forgetDeleted(db, projectRef, pinned.userId, row.transaction_id, row.generation);
+        this.forgetDeleted(db, projectRef, pinned.userId, row.transaction_id, row.generation, this.now());
         if (res.kind === "ok") this.sentThisPass++;
         return "done";
       }

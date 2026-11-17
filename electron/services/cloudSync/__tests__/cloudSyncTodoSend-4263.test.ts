@@ -95,7 +95,8 @@ function turnOn(db: TestDb, user = USER_A): void {
 /** The engine on the real clock (the triggers stamp the real wall time). */
 function engine(db: TestDb, server?: FakeServer): Engine {
   const e = makeEngine(db, { server });
-  e.clock.now = new Date();
+  // a moving clock: sent_at is read just before each call, after the edits it sends
+  Object.defineProperty(e.clock, "now", { get: () => new Date(), set: () => undefined, configurable: true });
   e.server.serverNow = () => Date.now();
   return e;
 }
@@ -256,6 +257,18 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(shadow(db, I1)).toMatchObject({ note_rev: t.parts.note.rev, note_json: JSON.stringify("from the phone") });
       expect(outbox(db)).toEqual([]);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
+    });
+
+    it("time decides a concurrent change: a desktop edit made after another side's change wins (applied, conflict) and stays the value online", async () => {
+      const { db, e } = await sentOnce();
+      const t = onlineItem(e, I1)!;
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "an hour ago elsewhere", at: Date.now() - 3_600_000, by: "ai_app:conn-1", edit_seq: null };
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("just now here", I1);
+      await pass(e);
+      expect(onlineItem(e, I1)!.parts.note.value).toBe("just now here");
+      expect(item(db, I1).note).toBe("just now here");
+      expect(shadow(db, I1)).toMatchObject({ note_rev: t.parts.note.rev, note_json: JSON.stringify("just now here") });
+      expect(outbox(db)).toEqual([]);
     });
 
     it("R4: a replayed answer naming an older rev moves neither the shadow nor the local row back", () => {
@@ -468,6 +481,27 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(pushes(e)).toHaveLength(before);
       expect(onlineItem(e, I1)!.parts.note.value).toBe("newer");
       expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+    });
+
+    it("a scan that bypasses the gate after a restore (a deal the cloud lost, a server reset) sends no edit_seq: the rewound counter cannot outrank a newer value this computer wrote before the restore", async () => {
+      const { db, deal, e } = await sentOnce();
+      // before the restore: a newer note sent from this computer (same install, edit_seq k)
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer", I1);
+      await pass(e);
+      const stored = onlineItem(e, I1)!.parts.note;
+      expect(stored).toMatchObject({ value: "newer", by: expect.stringMatching(/^desktop:/) });
+      // the restored file: the older note, and a counter well behind (the backup's)
+      db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("older (backup)", I1);
+      db.exec("DELETE FROM cloud_sync_applying");
+      db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = ?").run((stored.edit_seq as number) - 1);
+      prepareRestoredFile(db);
+      // the cloud loses track of the deal's todos (R3b / reconcile path): the deal is scanned again
+      todos.resetTodoDeal(db, PROJECT, USER_A, deal, new Date());
+      expect(outbox(db).every((r) => r.edit_seq === null)).toBe(true);
+      await pass(e);
+      expect(onlineItem(e, I1)!.parts.note.value).toBe("newer");
+      expect(item(db, I1).note).toBe("newer");
     });
 
     it("the gate: once no full pull is owed, the same daily scan does send the difference (the predicate is what stops it)", async () => {
@@ -700,6 +734,21 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ deals and waiting
   describe("ops wait for their deal; ops of a deal gone everywhere are dropped", () => {
+    it("a deal deleted online (no longer eligible), then eligible again under a new online id: its todos are created on the new deal", async () => {
+      const { db, deal, e } = await sentOnce();
+      db.prepare("UPDATE transactions SET status = 'rejected' WHERE id = ?").run(deal);
+      await pass(e);
+      expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(1);
+      db.prepare("UPDATE transactions SET status = 'active' WHERE id = ?").run(deal);
+      await pass(e);
+      const newDeal = e.server.deals.find((d) => d.localId === deal)!;
+      expect(newDeal).toBeDefined();
+      expect(e.server.todos.filter((t) => t.dealId === newDeal.id).map((t) => `${t.entity}:${t.localId}`).sort()).toEqual(
+        [`checklist:${CL}`, `checklist:${MY}`, `item:${I1}`, `item:${I2}`],
+      );
+      expect(outbox(db)).toEqual([]);
+    });
+
     it("a deal not online yet (not eligible): its todos wait; once it is uploaded they go", async () => {
       const { db, e } = await sentOnce();
       const deal = dealId();

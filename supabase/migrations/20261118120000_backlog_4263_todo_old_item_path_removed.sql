@@ -11,8 +11,9 @@
 --   3. drops cloud_upsert_checklists and cloud_upsert_checklist_items;
 --   4. replaces cloud_tombstone and cloud_list_install_rows without their checklist and checklist_item kinds
 --      (those kinds now answer invalid_input).
--- Kept (still read or written by 20261118110000's functions): the columns content_hash, version, links,
---   origin, source_updated_at and last_change_request_id of cloud_deal_checklists / _items.
+-- Kept on cloud_deal_checklists / _items: content_hash, version, links, origin and source_updated_at (still
+--   read or written by 20261118110000's functions and by the replaced cloud_tombstone), and
+--   last_change_request_id (read by no function; present on every cloud table, so not dropped from two).
 -- Grants: unchanged for the two replaced functions (authenticated only); no function here is callable by anon.
 -- Pre-check: each function this file drops or replaces is at the body 20261118110000 wrote (md5 of prosrc),
 --   at this file's body, or (for the two dropped) already absent. Requires 20261118110000.

@@ -250,6 +250,20 @@ BEGIN
   PERFORM pg_temp.rec('setup_tomb_item', r::text);
   r := pg_temp.rpc(pg_temp.id('A'), format('SELECT public.cloud_tombstone(%L::uuid, %L::uuid, %L, ARRAY[%L::uuid])', pg_temp.id('A'), pg_temp.id('I1'), 'checklist', pg_temp.id('cl2')));
   PERFORM pg_temp.rec('setup_tomb_checklist', r::text);
+  -- removed through the NEW path before this file (the 4a build is already sending when it is applied):
+  -- a checklist with an item, both created and then removed with cloud_todo_push; must NOT be purged
+  r := pg_temp.push(pg_temp.id('A'), pg_temp.id('I1'), pg_temp.nowt(), jsonb_build_array(
+    jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', pg_temp.id('D1'), 'local_id', 'cl10',
+      'template_id', 'tpl-10', 'template_name', 'Ten', 'sort_order', 10, 'is_private', false, 'edited_at', pg_temp.nowt()),
+    jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'cl10',
+      'local_id', 'i10', 'title', 'Ten a', 'done', false, 'edited_at', pg_temp.nowt()),
+    jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'cl1',
+      'local_id', 'i11', 'title', 'Eleven', 'done', false, 'edited_at', pg_temp.nowt())));
+  PERFORM pg_temp.rec('setup_new_path_creates', r::text);
+  r := pg_temp.push(pg_temp.id('A'), pg_temp.id('I1'), pg_temp.nowt(), jsonb_build_array(
+    jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'remove', 'entity', 'item', 'deal_id', pg_temp.id('D1'), 'local_id', 'i11', 'edited_at', pg_temp.nowt()),
+    jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'remove', 'entity', 'checklist', 'deal_id', pg_temp.id('D1'), 'local_id', 'cl10', 'edited_at', pg_temp.nowt())));
+  PERFORM pg_temp.rec('setup_new_path_removes', r::text);
   CREATE TEMP TABLE p4263a_pre AS SELECT
     (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE owner_user_id IN (pg_temp.id('A'), pg_temp.id('B')) AND change_seq IS NULL)
   + (SELECT count(*) FROM public.cloud_deal_checklists WHERE owner_user_id IN (pg_temp.id('A'), pg_temp.id('B')) AND change_seq IS NULL) AS unnumbered;
@@ -269,8 +283,9 @@ END $setup$;
 --   3. drops cloud_upsert_checklists and cloud_upsert_checklist_items;
 --   4. replaces cloud_tombstone and cloud_list_install_rows without their checklist and checklist_item kinds
 --      (those kinds now answer invalid_input).
--- Kept (still read or written by 20261118110000's functions): the columns content_hash, version, links,
---   origin, source_updated_at and last_change_request_id of cloud_deal_checklists / _items.
+-- Kept on cloud_deal_checklists / _items: content_hash, version, links, origin and source_updated_at (still
+--   read or written by 20261118110000's functions and by the replaced cloud_tombstone), and
+--   last_change_request_id (read by no function; present on every cloud table, so not dropped from two).
 -- Grants: unchanged for the two replaced functions (authenticated only); no function here is callable by anon.
 -- Pre-check: each function this file drops or replaces is at the body 20261118110000 wrote (md5 of prosrc),
 --   at this file's body, or (for the two dropped) already absent. Requires 20261118110000.
@@ -510,10 +525,15 @@ BEGIN
     pg_temp.pass((pg_temp.it(pg_temp.id('i2'))).purged_at IS NOT NULL AND (pg_temp.it(pg_temp.id('i2'))).change_seq IS NOT NULL, 'i2 not purged'),
     pg_temp.pass((SELECT purged_at IS NOT NULL FROM public.cloud_deal_checklists WHERE id = pg_temp.id('cl2')), 'cl2 not purged'),
     pg_temp.pass((pg_temp.it(pg_temp.id('i3'))).purged_at IS NOT NULL, 'i3 (scrubbed with cl2) not purged'),
-    pg_temp.pass(pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', pg_temp.id('i2'))) ->> 'status' = 'not_restorable',
+    pg_temp.pass(pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', pg_temp.id('i2'))) -> 'results' -> 0 ->> 'status' = 'not_restorable',
                  pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', pg_temp.id('i2')))::text),
     pg_temp.pass(position(pg_temp.id('i2')::text IN pg_temp.rpc(A, format('SELECT public.cloud_list_removed(%L::uuid)', A))::text) = 0, 'i2 listed as removed'),
-    pg_temp.pass((pg_temp.it(pg_temp.id('i1'))).purged_at IS NULL AND (pg_temp.it(pg_temp.id('m1'))).purged_at IS NULL, 'a live item was purged')));
+    pg_temp.pass((pg_temp.it(pg_temp.id('i1'))).purged_at IS NULL AND (pg_temp.it(pg_temp.id('m1'))).purged_at IS NULL, 'a live item was purged'),
+    -- removed through the new path: still restorable (not purged), still listed
+    pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklist_items WHERE owner_user_id = A AND local_item_id IN ('i10', 'i11') AND purged_at IS NULL) = 2
+                 AND (SELECT count(*) FROM public.cloud_deal_checklists WHERE owner_user_id = A AND local_checklist_id = 'cl10' AND removed_at IS NOT NULL AND purged_at IS NULL) = 1,
+                 'a new-path removal was purged'),
+    pg_temp.pass(position('Eleven' IN pg_temp.rpc(A, format('SELECT public.cloud_list_removed(%L::uuid)', A))::text) > 0, 'new-path removed item not listed')));
   -- C4 the two upserts are gone; an old build's call fails (42883 here; PostgREST answers PGRST202 / 404)
   t := pg_temp.call_as(A, format('SELECT public.cloud_upsert_checklist_items(%L::uuid, %L::uuid, %L::uuid, %L::jsonb)', A, I1, pg_temp.id('D1'), '[]'));
   PERFORM pg_temp.rec('C4_dropped', pg_temp.all_of(
@@ -592,8 +612,9 @@ CREATE TEMP TABLE p4263a_md5 AS SELECT p.oid::regprocedure::text AS sig, md5(p.p
 --   3. drops cloud_upsert_checklists and cloud_upsert_checklist_items;
 --   4. replaces cloud_tombstone and cloud_list_install_rows without their checklist and checklist_item kinds
 --      (those kinds now answer invalid_input).
--- Kept (still read or written by 20261118110000's functions): the columns content_hash, version, links,
---   origin, source_updated_at and last_change_request_id of cloud_deal_checklists / _items.
+-- Kept on cloud_deal_checklists / _items: content_hash, version, links, origin and source_updated_at (still
+--   read or written by 20261118110000's functions and by the replaced cloud_tombstone), and
+--   last_change_request_id (read by no function; present on every cloud table, so not dropped from two).
 -- Grants: unchanged for the two replaced functions (authenticated only); no function here is callable by anon.
 -- Pre-check: each function this file drops or replaces is at the body 20261118110000 wrote (md5 of prosrc),
 --   at this file's body, or (for the two dropped) already absent. Requires 20261118110000.
