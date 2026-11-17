@@ -22,7 +22,8 @@
 import fs from "fs";
 import path from "path";
 import { CLOUD_SYNC_TRIGGERS } from "../../db/cloudSyncSql";
-import { CLOUD_SYNC_TODO_TABLES, CLOUD_SYNC_TODO_TRIGGERS } from "../../db/cloudSyncTodoSql";
+import { CLOUD_SYNC_TODO_TABLES, CLOUD_SYNC_TODO_TRIGGERS, TODO_NOW } from "../../db/cloudSyncTodoSql";
+import { MARK_ALL_ELIGIBLE_FOR_USER_SQL } from "../../db/cloudSyncSql";
 import { enableForUser } from "../../db/cloudSyncDbService";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
 import {
@@ -320,6 +321,42 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     expect(fingerprint(db)).toEqual(ops);
     expect(trash(db)).toHaveLength(trashCount);
     expect(counter(db)).toEqual(seq);
+    db.close();
+  });
+
+  it("T11 the capture clock is UTC: the time expression is exactly strftime with a Z suffix on 'now', and no trigger SQL names localtime or utc", () => {
+    // Static on purpose: a runtime check passes on a process started at UTC (CI runners) whatever the SQL says.
+    expect(TODO_NOW).toBe("strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    for (const t of CLOUD_SYNC_TODO_TRIGGERS) {
+      expect([t.name, /localtime|'utc'/i.test(t.sql)]).toEqual([t.name, false]);
+      expect([t.name, t.sql.includes(TODO_NOW)]).toEqual([t.name, true]);
+    }
+  });
+
+  it("T12 turn-on seeds the counter row inside the turn-on transaction: a failure after the seed leaves no counter row and the flag off; a clean turn-on leaves one row at 0", () => {
+    const db = freshDb();
+    db.prepare("INSERT INTO cloud_sync_install (project_ref, install_id, machine_hash, created_at) VALUES (?, ?, NULL, '2026-11-01T00:00:00.000Z')").run(
+      PROJECT,
+      INSTALL,
+    );
+    const realPrepare = db.prepare.bind(db);
+    let hit = false;
+    (db as { prepare: unknown }).prepare = (sql: string) => {
+      if (sql === MARK_ALL_ELIGIBLE_FOR_USER_SQL) {
+        hit = true;
+        throw Object.assign(new Error("disk"), { code: "SQLITE_FULL" });
+      }
+      return realPrepare(sql);
+    };
+    expect(() => enableForUser(db, PROJECT, USER_A, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" })).toThrow("disk");
+    (db as { prepare: unknown }).prepare = realPrepare;
+    expect(hit).toBe(true);
+    expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(0);
+    expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_settings WHERE enabled = 1")).toBe(0);
+    enableForUser(db, PROJECT, USER_A, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" });
+    expect(db.prepare("SELECT project_ref, install_id, edit_seq, clock_epoch FROM cloud_sync_todo_counter").all()).toEqual([
+      { project_ref: PROJECT, install_id: INSTALL, edit_seq: 0, clock_epoch: 0 },
+    ]);
     db.close();
   });
 
