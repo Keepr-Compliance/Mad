@@ -479,7 +479,7 @@ describe("Transaction Handlers", () => {
       const result = await handler(mockEvent, TEST_TXN_ID);
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID);
+      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID, { archiveForRestore: true });
       expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "TRANSACTION_DELETE",

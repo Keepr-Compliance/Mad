@@ -665,7 +665,8 @@ export function registerTransactionCrudHandlers(): void {
       // at all. A failed entry cancels the delete; the deal stays.
       try {
         dbTransaction(() => {
-          databaseService.deleteTransactionSync(validatedTransactionId);
+          // BACKLOG-4263 PR-4c: a Keepr Cloud user's deleted deal stays restorable for 30 days (plan §14 F2).
+          databaseService.deleteTransactionSync(validatedTransactionId, { archiveForRestore: true });
           auditService.recordInTransaction({
             userId,
             action: "TRANSACTION_DELETE",
@@ -1538,7 +1539,8 @@ export function registerTransactionCrudHandlers(): void {
           // audit entry. A failed entry cancels this deal only.
           try {
             dbTransaction(() => {
-              databaseService.deleteTransactionSync(transactionId);
+              // BACKLOG-4263 PR-4c: as transactions:delete (plan §14 F2).
+              databaseService.deleteTransactionSync(transactionId, { archiveForRestore: true });
               auditService.recordInTransaction({
                 userId,
                 action: "TRANSACTION_DELETE",

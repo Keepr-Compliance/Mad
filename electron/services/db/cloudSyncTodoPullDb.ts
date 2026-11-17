@@ -41,6 +41,7 @@ import type { JsonValue } from "../cloudSync/jcs";
 import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
 import { MY_ITEMS_TEMPLATE_ID } from "./checklistPrivacy";
 import { dealLockReason } from "../transactionEligibility";
+import { hasArchivedDeal, restoreArchivedDeal, type RestoreArgs } from "./cloudSyncDealArchive";
 import {
   currentInstallId,
   getTodoCursor,
@@ -103,6 +104,12 @@ export interface PullCtx {
   userId: string;
   installId: string;
   now: Date;
+  /**
+   * BACKLOG-4263 PR-4c (plan §14 "Restore online", W33): a deal row that is live online again (restored elsewhere)
+   * whose deal this computer archived is restored here from the archive, inside this page, with this audit entry.
+   * Absent: no deal is restored by a pull.
+   */
+  auditRestore?: RestoreArgs["audit"];
 }
 
 type Row = Record<string, unknown>;
@@ -431,6 +438,28 @@ class Page {
     );
   }
 
+  /**
+   * BACKLOG-4263 PR-4c: a deal live online (removed_at null) that is not on this computer but is in this user's
+   * archive was restored elsewhere: restore it here, inside this page (the page holds the apply guard, so the
+   * restore neither inserts nor deletes it). Refused, changing nothing, while Delete for good is owed or while this
+   * computer's own removal of it is still to be sent. The deal's todo rows later in the pull then apply to it.
+   */
+  private restoreFromArchive(row: Row): boolean {
+    const audit = this.ctx.auditRestore;
+    const localId = str(row.local_id);
+    if (!audit || !localId || row.removed_at !== null || !("removed_at" in row)) return false;
+    if (!hasArchivedDeal(this.db, this.ctx.userId, localId)) return false;
+    const r = restoreArchivedDeal(this.db, {
+      userId: this.ctx.userId,
+      transactionId: localId,
+      now: this.ctx.now,
+      audit,
+      guardHeld: true,
+      refuseWhileRemovalPending: true,
+    });
+    return r.ok;
+  }
+
   // ------------------------------------------------------------ one row
 
   /** Applies one row inside a savepoint; a failure rolls back that row alone and parks it. */
@@ -438,6 +467,10 @@ class Page {
     const entity = str(row.entity);
     if (entity === "deal") {
       this.noteDealRow(row);
+      if (this.restoreFromArchive(row)) {
+        this.counts.applied++;
+        return;
+      }
       this.counts.skipped++;
       return;
     }

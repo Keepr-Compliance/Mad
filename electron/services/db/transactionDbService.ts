@@ -14,7 +14,9 @@ import type {
 import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
-import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction, getRawDatabase } from "./core/dbConnection";
+import { archiveDealBeforeDelete } from "./cloudSyncDealArchive";
+import type { SqlDb } from "./cloudSyncSqlDb";
 import { repointMessageTransaction } from "./messageDbService";
 import { sql, type SafeSql } from "./core/sqlText";
 import {
@@ -1323,8 +1325,20 @@ export const MESSAGES_NAMING_DEAL_SQL = sql`SELECT id FROM messages WHERE transa
  * `dbTransaction`, a savepoint inside the handler's transaction, so a failure
  * anywhere leaves the deal, its links and the column unchanged.
  */
-export function deleteTransactionSync(transactionId: string): void {
+export function deleteTransactionSync(
+  transactionId: string,
+  options: { archiveForRestore?: boolean } = {},
+): void {
   dbTransaction(() => {
+    // BACKLOG-4263 PR-4c (plan §14 F2): before the DELETE, in this same transaction. With the flag (passed only
+    // by the two delete handlers) and the owner's Keepr Cloud on, a copy is archived for a 30-day restore; every
+    // other delete writes no copy and erases any copy for this deal id.
+    archiveDealBeforeDelete(
+      getRawDatabase() as unknown as SqlDb,
+      transactionId,
+      options.archiveForRestore === true,
+      new Date(),
+    );
     const named = dbAll<{ id: string }>(MESSAGES_NAMING_DEAL_SQL, [transactionId]);
     dbRun(sql`DELETE FROM transactions WHERE id = ?`, [transactionId]);
     for (const { id } of named) {

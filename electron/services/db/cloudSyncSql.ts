@@ -29,6 +29,7 @@ import {
   PARTY_SOURCE_LINK_COLUMNS,
 } from "../cloudSync/projection";
 import { CLOUD_SYNC_TODO_TABLES, CLOUD_SYNC_TODO_TABLES_DDL, CLOUD_SYNC_TODO_TRIGGERS } from "./cloudSyncTodoSql";
+import { DEAL_ARCHIVE_DDL, DEAL_ARCHIVE_TABLE } from "./cloudSyncDealArchive";
 
 export const CLOUD_SYNC_TABLES_DDL = `CREATE TABLE IF NOT EXISTS cloud_sync_install (
   project_ref  TEXT PRIMARY KEY,
@@ -85,7 +86,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_runs (
   rows_rejected INTEGER NOT NULL DEFAULT 0,
   error_code    TEXT
 );
-${CLOUD_SYNC_TODO_TABLES_DDL}`;
+${CLOUD_SYNC_TODO_TABLES_DDL}
+${DEAL_ARCHIVE_DDL}`;
 
 export const CLOUD_SYNC_TABLES = [
   "cloud_sync_install",
@@ -94,6 +96,7 @@ export const CLOUD_SYNC_TABLES = [
   "cloud_sync_dirty",
   "cloud_sync_runs",
   ...CLOUD_SYNC_TODO_TABLES,
+  DEAL_ARCHIVE_TABLE,
 ] as const;
 
 // ---------------------------------------------------------------- triggers

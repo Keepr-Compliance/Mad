@@ -40,6 +40,7 @@ import {
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
+import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects } from "./cloudSyncDealArchive";
 import {
   clearTodoStateEverywhere,
   clearTodoStateForUser,
@@ -182,6 +183,8 @@ export function forgetOtherProjects(db: SqlDb, projectRef: string): void {
     db.prepare("DELETE FROM cloud_sync_settings WHERE project_ref <> ?").run(projectRef);
     db.prepare("DELETE FROM cloud_sync_state WHERE project_ref <> ?").run(projectRef);
     forgetTodoOtherProjects(db, projectRef);
+    // BACKLOG-4263 PR-4c: deals deleted under another project can no longer be restored here.
+    deleteDealArchiveOtherProjects(db, projectRef);
     const anyEnabled = db.prepare("SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 LIMIT 1").get();
     if (!anyEnabled) db.exec("DELETE FROM cloud_sync_dirty");
     applyCloudSyncTriggerRule(db);
@@ -293,6 +296,9 @@ export function clearUserSyncState(db: SqlDb, projectRef: string, userId: string
     );
     // BACKLOG-4263 D6/E1: outbox, shadow, cursor, parked rows, notices, trash and the stop.
     clearTodoStateForUser(db, projectRef, userId);
+    // BACKLOG-4263 PR-4c (plan §14 F6): turning Keepr Cloud off ends the 30-day restore of this user's deleted
+    // deals (a Delete for good still owed goes too: turning off deletes the online copy anyway).
+    deleteDealArchiveForUser(db, userId);
   })();
 }
 
@@ -342,6 +348,11 @@ export function applyAcceptedAt(db: SqlDb, projectRef: string, userId: string, a
 
 export function selectDueDirty(db: SqlDb, userId: string, now: Date, limit: number): DirtyRow[] {
   return db.prepare(SELECT_DUE_DIRTY_SQL).all(userId, userId, nowIso(now), limit) as DirtyRow[];
+}
+
+/** BACKLOG-4263 PR-4c: the deal has a dirty mark (a change, or its removal, still to be sent). */
+export function isMarked(db: SqlDb, transactionId: string): boolean {
+  return !!db.prepare("SELECT 1 FROM cloud_sync_dirty WHERE transaction_id = ?").get(transactionId);
 }
 
 export function clearMarkIfGeneration(db: SqlDb, transactionId: string, generation: number): boolean {

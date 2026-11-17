@@ -17,4 +17,7 @@ export const cloudSyncBridge: WindowApiCloudSync = {
   deleteOnlineNotHere: () => ipcRenderer.invoke("cloud-sync:delete-online-not-here"),
   deleteOldInstalls: () => ipcRenderer.invoke("cloud-sync:delete-old-installs"),
   reclaimInstall: () => ipcRenderer.invoke("cloud-sync:reclaim-install"),
+  listRemovedDeals: () => ipcRenderer.invoke("cloud-sync:list-removed-deals"),
+  restoreDeal: (args: { transactionId: string }) => ipcRenderer.invoke("cloud-sync:restore-deal", args),
+  deleteDealForGood: (args: { transactionId: string }) => ipcRenderer.invoke("cloud-sync:delete-deal-for-good", args),
 };

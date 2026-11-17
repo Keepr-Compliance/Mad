@@ -27,6 +27,8 @@ export interface Engine {
   feature: { allowed: boolean; reads: number };
   blocked: { reason: string | null };
   clock: { now: Date };
+  /** BACKLOG-4263 PR-4c: every restore audit entry recorded (inside the restore's transaction); `fail` makes it throw. */
+  audits: Array<{ userId: string; transactionId: string; archivedAt: string; via: string }> & { fail?: boolean };
 }
 
 export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: string | null; server?: FakeServer } = {}): Engine {
@@ -52,6 +54,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
   const feature = { allowed: true, reads: 0 };
   const blocked = { reason: null as string | null };
   const clock = { now: new Date("2026-11-14T12:00:00.000Z") };
+  const audits: Engine["audits"] = [];
   const service = new CloudSyncService({
     db: () => db,
     dbReady: () => true,
@@ -86,6 +89,10 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
       warn: (message, meta) => logs.push({ level: "warn", message, meta }),
     },
     reportFailure: (code) => reports.push(code),
+    auditRestore: (e) => {
+      if (audits.fail) throw new Error("audit insert failed");
+      audits.push(e);
+    },
   });
   return {
     service,
@@ -102,6 +109,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     feature,
     blocked,
     clock,
+    audits,
   };
 }
 

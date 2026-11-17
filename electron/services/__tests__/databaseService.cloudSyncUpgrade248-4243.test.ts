@@ -18,6 +18,7 @@ import path from "path";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { CLOUD_SYNC_TABLES, CLOUD_SYNC_TABLES_DDL, CLOUD_SYNC_TRIGGERS, ELIGIBLE_DEAL_WHERE } from "../db/cloudSyncSql";
 import { CLOUD_SYNC_TODO_TRIGGERS } from "../db/cloudSyncTodoSql";
+import { archiveDealBeforeDelete, DEAL_ARCHIVE_TABLE } from "../db/cloudSyncDealArchive";
 
 jest.mock("better-sqlite3-multiple-ciphers", () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -255,8 +256,8 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_tx_insert",
   "trg_cloud_sync_tx_update",
 ];
-/** The latest local schema version this build ships (BACKLOG-4263 PR-4b: v82). */
-const LATEST_VERSION = 82;
+/** The latest local schema version this build ships (BACKLOG-4263 PR-4c: v83). */
+const LATEST_VERSION = 83;
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -751,7 +752,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     db.close();
   });
 
-  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at the latest version (v82) with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
+  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at the latest version (v83) with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
     const { before } = buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
     expect(versionOf(db)).toBe(LATEST_VERSION);
@@ -776,7 +777,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80, v81 and v82 (79 -> 82); the next open changes nothing", async () => {
+  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80, v81, v82 and v83 (79 -> 83); the next open changes nothing", async () => {
     const { before } = buildV79Profile(dir);
     expect(before.has("cloud_sync_dirty")).toBe(false);
     expect(before.has("cloud_sync_todo_outbox")).toBe(false);
@@ -1116,6 +1117,55 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     old.close();
   });
 
+  it("1g v82 PROFILE (PR-4b build, Keepr Cloud on): this build runs v83 (the deal archive table, empty), nothing else changes, the next open changes nothing; going back, 2.48.0 opens the v83 file, its common writes succeed, and it never reads, writes or drops the archive", async () => {
+    const { file } = buildV79Profile(dir);
+    const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+    const pre = openKeyed(file);
+    pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+    for (const v of [80, 81, 82]) svcClass.MIGRATIONS.find((m) => m.version === v)!.migrate(pre);
+    pre.prepare("UPDATE schema_version SET version = 82 WHERE id = 1").run();
+    pre.prepare(
+      "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    expect(names(pre, "table", DEAL_ARCHIVE_TABLE)).toEqual([]);
+    const before = snapshot(pre);
+    pre.close();
+
+    const { svc, db } = await openWithThisBuild();
+    expect(versionOf(db)).toBe(LATEST_VERSION);
+    expect(columns(db, DEAL_ARCHIVE_TABLE)).toEqual(["transaction_id", "owner_user_id", "archived_at", "payload_json", "schema_version", "purge_owed_at"]);
+    expect(count(db, DEAL_ARCHIVE_TABLE)).toBe(0);
+    expect(changedTables(db, before)).toEqual(["cloud_sync_dirty", "schema_version"]);
+    // this build archives a deleted deal of the Keepr Cloud user (as its delete handlers do)
+    db.transaction(() => {
+      expect(archiveDealBeforeDelete(db as never, D3, true, new Date("2026-11-17T10:00:00.000Z"))).toBe(true);
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(D3);
+    })();
+    const archived = db.prepare(`SELECT * FROM ${DEAL_ARCHIVE_TABLE}`).all();
+    expect(archived).toHaveLength(1);
+    const cookie = db.pragma("schema_version", { simple: true });
+    const after = snapshot(db);
+    await svc.close();
+    const again = await openWithThisBuild();
+    expect(again.db.pragma("schema_version", { simple: true })).toBe(cookie);
+    expect(changedTables(again.db, after)).toEqual([]);
+    await again.svc.close();
+
+    // going back: 2.48.0's open (its schema.sql) and common writes, including a deal delete, on this v83 file
+    const old = openAs248(path.join(dir, "mad.db"));
+    expect(versionOf(old)).toBe(LATEST_VERSION);
+    const results = runWrites248(old);
+    expect(results).toHaveLength(WRITES_248.length);
+    expect(old.prepare(`SELECT * FROM ${DEAL_ARCHIVE_TABLE}`).all()).toEqual(archived);
+    expect(columns(old, DEAL_ARCHIVE_TABLE)).toEqual(["transaction_id", "owner_user_id", "archived_at", "payload_json", "schema_version", "purge_owed_at"]);
+    old.close();
+    // and back to this build: the file opens at v83 with the archive row as it was
+    const back = await openWithThisBuild();
+    expect(versionOf(back.db)).toBe(LATEST_VERSION);
+    expect(back.db.prepare(`SELECT * FROM ${DEAL_ARCHIVE_TABLE}`).all()).toEqual(archived);
+    await back.svc.close();
+  });
+
   it("2a GOING BACK, never on: on a profile this build upgraded, 2.48.0's own open and common writes all succeed, no cloud trigger exists, and the cloud tables stay empty", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
@@ -1173,6 +1223,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       }
       // A deal delete (D4, with a checklist and an item) records no todo op and no trash row.
       expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_outbox WHERE transaction_id = ?").get(D4)).toEqual({ n: 0 });
+      // BACKLOG-4263 PR-4c (plan §14 "Going back"): 2.48.0's delete bypasses the archive: it succeeds and leaves no row.
+      expect(count(db, DEAL_ARCHIVE_TABLE)).toBe(0);
       expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE transaction_id = ?").get(D4)).toEqual({ n: 0 });
       db.close();
     });

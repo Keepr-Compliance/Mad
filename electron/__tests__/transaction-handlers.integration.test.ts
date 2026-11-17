@@ -461,7 +461,7 @@ describe("Transaction Handlers Integration Tests", () => {
       const deleteResult = await deleteHandler(mockEvent, TEST_TXN_ID);
 
       expect(deleteResult.success).toBe(true);
-      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID);
+      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID, { archiveForRestore: true });
       expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({ action: "TRANSACTION_DELETE" }),
       );
