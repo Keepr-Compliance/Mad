@@ -24,12 +24,19 @@ BEGIN
 END $h$;
 
 -- a deal deleted with cloud_delete_deal has no row (hard delete at this ref); assertion only
+-- PR-2: the row is kept with removed_at set (planned only when called, so it also loads before PR-2)
+CREATE FUNCTION pg_temp.soft_removed(d uuid) RETURNS boolean LANGUAGE plpgsql AS $h$
+BEGIN RETURN EXISTS (SELECT 1 FROM public.cloud_deals WHERE id = d AND removed_at IS NOT NULL); END $h$;
 CREATE FUNCTION pg_temp.p_removed() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE t text := pg_temp.la('a1');
 BEGIN
   RETURN pg_temp.all_of(pg_temp.pass(pg_temp.err(t) = 'OK', left(t, 200)),
     pg_temp.pass(pg_temp.id('A5') IS NOT NULL AND NOT pg_temp.id('A5') = ANY (pg_temp.aids(t)), 'deleted deal returned'),
-    pg_temp.pass(NOT EXISTS (SELECT 1 FROM public.cloud_deals WHERE id = pg_temp.id('A5')), 'deleted deal row still present'));
+    -- before PR-2 a delete erased the row; with PR-2 it is a soft removal (row kept, removed_at set, hidden)
+    pg_temp.pass(CASE WHEN pg_temp.post_pr2()
+                      THEN pg_temp.soft_removed(pg_temp.id('A5'))
+                      ELSE NOT EXISTS (SELECT 1 FROM public.cloud_deals WHERE id = pg_temp.id('A5')) END,
+                 CASE WHEN pg_temp.post_pr2() THEN 'deleted deal not soft-removed' ELSE 'deleted deal row still present' END));
 END $h$;
 
 -- values: columns, numbers, dates, masking, saved_from, found_by, locked

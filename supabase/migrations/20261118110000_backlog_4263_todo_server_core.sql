@@ -153,7 +153,8 @@ REVOKE ALL ON SEQUENCE public.cloud_todo_seq FROM PUBLIC, anon, authenticated, s
 CREATE TABLE IF NOT EXISTS public.cloud_todo_feed_head (
   owner_user_id         uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   last_seq              bigint NOT NULL,
-  forgotten_through_seq bigint NOT NULL
+  forgotten_through_seq bigint NOT NULL,
+  forgotten_at          bigint NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS public.cloud_todo_history (
@@ -208,7 +209,7 @@ REVOKE ALL ON TABLE public.cloud_removed_installs FROM PUBLIC, anon, authenticat
 
 -- ============================================================================ allocator
 -- The only function that reads cloud_todo_seq. Locks the owner's head row FOR UPDATE (held to commit;
--- created when absent, with forgotten_through_seq set to a fresh number) and returns p_n numbers in
+-- created when absent, with forgotten_through_seq and forgotten_at set to a fresh number) and returns p_n numbers in
 -- ascending order. p_n = 0 only takes the lock.
 CREATE OR REPLACE FUNCTION public._cloud_todo_take_seq(p_owner uuid, p_n integer) RETURNS bigint[]
 LANGUAGE plpgsql VOLATILE SET search_path = '' AS $f$
@@ -220,8 +221,8 @@ BEGIN
   PERFORM 1 FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = p_owner FOR UPDATE;   /*SEQ:lock*/
   IF NOT FOUND THEN
     v := nextval('public.cloud_todo_seq');
-    INSERT INTO public.cloud_todo_feed_head (owner_user_id, last_seq, forgotten_through_seq)
-    VALUES (p_owner, v, v) ON CONFLICT (owner_user_id) DO NOTHING;
+    INSERT INTO public.cloud_todo_feed_head (owner_user_id, last_seq, forgotten_through_seq, forgotten_at)
+    VALUES (p_owner, v, v, v) ON CONFLICT (owner_user_id) DO NOTHING;
     PERFORM 1 FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = p_owner FOR UPDATE;
   END IF;
   IF p_n = 0 THEN RETURN ARRAY[]::bigint[]; END IF;
@@ -981,25 +982,28 @@ GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO aut
 -- One page of the owner's changes for one install, in number order, read in one snapshot: deals, checklists
 -- and items (tombstones included, purged rows without content) and conflict events, with change_seq in
 -- (p_after_seq, head]. next_after is the last number of a full page, else the head.
--- horizon: the owner's forgotten_through_seq in the same snapshot. The desktop keeps (next_after, horizon) from
--- each page it applied and sends both back; a full pull starts with p_after_seq 0 and no p_horizon.
--- resync_required when p_after_seq is above the head, or when rows were forgotten above p_after_seq after the
--- horizon the cursor carries (horizon now > p_horizon and > p_after_seq). A cursor sent without a horizon
--- counts as carrying 0 when p_after_seq > 0.
+-- horizon: the owner's forgotten_at marker in the same snapshot, a fresh number taken by every purge run that
+-- deletes anything (it only moves forward). The desktop keeps (next_after, horizon) from each page it applied and
+-- sends both back; a full pull starts with p_after_seq 0 and no p_horizon. p_after_seq > 0 without p_horizon
+-- answers horizon_required. resync_required when p_after_seq is above the head, or when something was deleted
+-- after the cursor's horizon (forgotten_at > p_horizon) and some deleted number is above the cursor
+-- (forgotten_through_seq > p_after_seq).
 CREATE OR REPLACE FUNCTION public.cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer,
   p_horizon bigint DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $f$
-DECLARE v_uid uuid := auth.uid(); v_head bigint; v_forgot bigint; v_after bigint := greatest(coalesce(p_after_seq, 0), 0);
+DECLARE v_uid uuid := auth.uid(); v_head bigint; v_forgot bigint; v_mark bigint; v_after bigint := greatest(coalesce(p_after_seq, 0), 0);
         v_lim integer; v_rows jsonb; v_n integer; v_last bigint; v_max bigint; v_b text;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:pull*/
   IF p_source_install_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF v_after > 0 AND p_horizon IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'horizon_required'); END IF;   /*PULL:horizon_required*/
   v_lim := least(greatest(coalesce(p_limit, 500), 1), 500);                                        /*CAP:pull*/
   v_b := 'desktop:' || p_source_install_id::text;
-  SELECT h.last_seq, h.forgotten_through_seq INTO v_head, v_forgot FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = v_uid;   /*PULL:head*/
-  v_head := coalesce(v_head, 0); v_forgot := coalesce(v_forgot, 0);
+  SELECT h.last_seq, h.forgotten_through_seq, h.forgotten_at INTO v_head, v_forgot, v_mark
+    FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = v_uid;                              /*PULL:head*/
+  v_head := coalesce(v_head, 0); v_forgot := coalesce(v_forgot, 0); v_mark := coalesce(v_mark, 0);
   SELECT coalesce(jsonb_agg(x.j ORDER BY x.seq), '[]'::jsonb), count(*)::integer, max(x.seq) INTO v_rows, v_n, v_last
     FROM (
       SELECT u.seq, u.j FROM (
@@ -1035,12 +1039,11 @@ BEGIN
   v_max := greatest(v_max, (SELECT max(greatest(CASE WHEN c.order_by = v_b THEN c.order_edit_seq END,
                                                 CASE WHEN c.removed_by = v_b THEN c.removed_edit_seq END))
                               FROM public.cloud_deal_checklists c WHERE c.owner_user_id = v_uid));
-  RETURN jsonb_build_object('ok', true, 'head', v_head, 'rows', v_rows, 'horizon', v_forgot,
+  RETURN jsonb_build_object('ok', true, 'head', v_head, 'rows', v_rows, 'horizon', v_mark,
     'next_after', CASE WHEN v_n = v_lim THEN v_last ELSE greatest(v_head, v_after) END,
     'install_max_edit_seq', v_max,
     'resync_required', v_after > v_head                                                            /*PULL:resync_head*/
-       OR (v_forgot > v_after
-           AND v_forgot > coalesce(p_horizon, CASE WHEN v_after = 0 THEN v_forgot ELSE 0 END)));  /*PULL:resync_horizon*/
+       OR (v_after > 0 AND v_mark > p_horizon AND v_forgot > v_after));                         /*PULL:resync_horizon*/
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_todo_pull(uuid, uuid, bigint, integer, bigint) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.cloud_todo_pull(uuid, uuid, bigint, integer, bigint) TO authenticated;
@@ -1196,7 +1199,7 @@ GRANT EXECUTE ON FUNCTION public.cloud_install_status(uuid, uuid) TO authenticat
 -- service_role (set transaction-locally by _cloud_todo_purge). Answers purged | not_found | not_removed.
 CREATE OR REPLACE FUNCTION public._cloud_todo_purge_deal(p_owner uuid, p_deal uuid) RETURNS text
 LANGUAGE plpgsql VOLATILE SET search_path = '' AS $f$
-DECLARE v_rem timestamptz; v_found boolean; v_blobs uuid[]; v_max bigint;
+DECLARE v_rem timestamptz; v_found boolean; v_blobs uuid[]; v_max bigint; v_mark bigint;
 BEGIN
   IF p_owner IS NULL OR (auth.uid() IS DISTINCT FROM p_owner AND auth.role() IS DISTINCT FROM 'service_role') THEN   /*PURGEDEAL:caller*/
     RAISE EXCEPTION 'purge_deal: not allowed' USING ERRCODE = '42501';
@@ -1214,7 +1217,9 @@ BEGIN
   DELETE FROM public.cloud_todo_history h WHERE h.cloud_deal_id = p_deal AND h.owner_user_id = p_owner;
   DELETE FROM public.cloud_deals d WHERE d.id = p_deal AND d.owner_user_id = p_owner;               /*PURGEDEAL:delete*/
   PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);                                      /*PURGEDEAL:fence*/
-  UPDATE public.cloud_todo_feed_head h SET forgotten_through_seq = greatest(h.forgotten_through_seq, coalesce(v_max, 0))
+  v_mark := (public._cloud_todo_take_seq(p_owner, 1))[1];                                         /*MARK:purge_deal*/
+  UPDATE public.cloud_todo_feed_head h SET forgotten_through_seq = greatest(h.forgotten_through_seq, coalesce(v_max, 0)),
+         forgotten_at = v_mark
    WHERE h.owner_user_id = p_owner;
   RETURN 'purged';
 END $f$;
@@ -1305,6 +1310,10 @@ BEGIN
       SELECT max(del.change_seq) INTO v_m FROM del;
       v_max := greatest(v_max, coalesce(v_m, 0));
       DELETE FROM public.cloud_todo_ops o WHERE o.owner_user_id = v_owner AND o.applied_at < now() - interval '90 days';
+      IF v_max > 0 THEN
+        v_m := (public._cloud_todo_take_seq(v_owner, 1))[1];
+        UPDATE public.cloud_todo_feed_head h SET forgotten_at = v_m WHERE h.owner_user_id = v_owner;   /*MARK:purge*/
+      END IF;
       UPDATE public.cloud_todo_feed_head h SET forgotten_through_seq = greatest(h.forgotten_through_seq, v_max)   /*PURGE:forget*/
        WHERE h.owner_user_id = v_owner;
     EXCEPTION WHEN OTHERS THEN

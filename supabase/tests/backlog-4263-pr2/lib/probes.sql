@@ -268,7 +268,7 @@ BEGIN
   PERFORM pg_temp.deldeal(A, D1);
   h1 := pg_temp.head(A);
   r := pg_temp.deal(A, pg_temp.dp(pg_temp.id('I1'), 'd1'));
-  p := pg_temp.pull(A, pg_temp.id('I1'), h1, 500);
+  p := pg_temp.pull(A, pg_temp.id('I1'), h1, 500, pg_temp.hz(A));
   SELECT array_agg(x ->> 'cloud_id' ORDER BY x ->> 'cloud_id') INTO ids FROM jsonb_array_elements(p -> 'rows') x;
   want := ARRAY[D1::text, pg_temp.id('cl1')::text, pg_temp.id('my1')::text, pg_temp.id('i1')::text, pg_temp.id('i2')::text, pg_temp.id('m1')::text];
   SELECT array_agg(x ORDER BY x) INTO want FROM unnest(want) x;
@@ -278,7 +278,7 @@ BEGIN
   PERFORM pg_temp.deldeal(A, D1);
   h2 := pg_temp.head(A);
   rr := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'deal', D1));
-  p2 := pg_temp.pull(A, pg_temp.id('I1'), h2, 500);
+  p2 := pg_temp.pull(A, pg_temp.id('I1'), h2, 500, pg_temp.hz(A));
   SELECT array_agg(x ->> 'cloud_id' ORDER BY x ->> 'cloud_id') INTO ids2 FROM jsonb_array_elements(p2 -> 'rows') x WHERE x ->> 'entity' <> 'event';
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.r0(r) ->> 'status' = 'unchanged' AND (pg_temp.r0(r) ->> 'restored')::boolean, 'upsert ' || r::text),
@@ -301,7 +301,7 @@ BEGIN
   END LOOP;
   r := pg_temp.push(A, pg_temp.id('I1'), s, ops);
   SELECT array_agg(x ->> 'cloud_id' ORDER BY x ->> 'cloud_id') INTO created FROM jsonb_array_elements(r -> 'results') x;
-  pa := pg_temp.pull_all(A, pg_temp.id('I1'), h0, 7);
+  pa := pg_temp.pull_all(A, pg_temp.id('I1'), h0, 7, pg_temp.hz(A));
   SELECT array_agg(x ORDER BY x) INTO got FROM jsonb_array_elements_text(pa -> 'ids') x;
   SELECT array_agg(x::bigint ORDER BY o) INTO seqs FROM jsonb_array_elements_text(pa -> 'seqs') WITH ORDINALITY y(x, o);
   hd0 := pg_temp.head(A);
@@ -415,7 +415,7 @@ BEGIN
   PERFORM pg_temp.clear_claims();
   r := public._cloud_todo_purge();
   role_after := current_setting('request.jwt.claim.role', true);
-  pr := pg_temp.pull(A, pg_temp.id('I1'), 1, 500);
+  pr := pg_temp.pull(A, pg_temp.id('I1'), 1, 500, 0);
   rs := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', i2));
   hi := pg_temp.rpc(A, format('SELECT public.cloud_todo_history(%L::uuid, %L, %L::uuid, 20)', A, 'item', i2));
   RETURN pg_temp.all_of(
@@ -560,15 +560,16 @@ BEGIN
   PERFORM pg_temp.ai(A, jsonb_build_array(pg_temp.op_set(i2, 'note', '"AI"')));
   PERFORM pg_temp.desk_note(i2, 'old', 1, interval '1 day', 3);
   PERFORM pg_temp.push(A, pg_temp.id('I1'), pg_temp.nowt(), jsonb_build_array(pg_temp.op_set(pg_temp.id('i1'), 'note', '"n"', 1, 5, pg_temp.nowt())));
-  p := pg_temp.pull(A, pg_temp.id('I1'), h0, 500);
+  p := pg_temp.pull(A, pg_temp.id('I1'), h0, 500, pg_temp.hz(A));
   pz := pg_temp.pull(A, pg_temp.id('I1'), 0, 500);
-  px := pg_temp.pull(A, pg_temp.id('I1'), pg_temp.head(A) + 1000, 500);
+  px := pg_temp.pull(A, pg_temp.id('I1'), pg_temp.head(A) + 1000, 500, pg_temp.hz(A));
   pi2 := pg_temp.pull(A, pg_temp.id('I2'), 0, 500);
   FOR n IN 1..201 LOOP big := big || pg_temp.op_set(i2, 'note', '"x"'); END LOOP;
   RETURN pg_temp.all_of(
     pg_temp.pass((SELECT count(*) FROM jsonb_array_elements(p -> 'rows') x WHERE x ->> 'entity' = 'event' AND x ->> 'outcome' = 'lost') = 1, 'event ' || p::text),
     pg_temp.pass((pz ->> 'resync_required')::boolean IS NOT TRUE AND (pz ->> 'next_after')::bigint = pg_temp.head(A), 'full ' || left(pz::text, 200)),
     pg_temp.pass((px ->> 'resync_required')::boolean, 'above head'),
+    pg_temp.pass(pg_temp.pull(A, pg_temp.id('I1'), 3, 500) ->> 'error' = 'horizon_required', 'cursor without horizon'),
     pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_array_elements(pi2 -> 'rows') x WHERE x ->> 'cloud_deal_id' = pg_temp.id('D1')::text OR x ->> 'cloud_id' = pg_temp.id('D1')::text), 'I2 sees I1 rows'),
     pg_temp.pass((pz ->> 'install_max_edit_seq')::bigint = 5, 'max edit_seq ' || (pz ->> 'install_max_edit_seq')),
     pg_temp.pass(pg_temp.ai(A, big) ->> 'error' = 'batch_too_large', '201 ops'),
@@ -771,18 +772,19 @@ END $p$;
 
 -- R1: a paged full pull across a purge horizon finishes; a stale cursor resyncs; a purge between two pages resyncs
 CREATE FUNCTION pg_temp.p_resync() RETURNS text LANGUAGE plpgsql AS $p$
-DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb; pa jsonb; p1 jsonb; p2 jsonb; old_cursor bigint; old_hz bigint; st jsonb; f bigint;
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb; pa jsonb; p1 jsonb; p2 jsonb; old_cursor bigint; old_hz bigint; st jsonb; f bigint; cu jsonb;
 BEGIN
   -- a cursor that was current before the purge
-  p1 := pg_temp.pull(A, I1, 0, 500);
-  old_cursor := 2; old_hz := (p1 ->> 'horizon')::bigint;
   PERFORM pg_temp.deldeal(A, pg_temp.id('D2'));
   UPDATE public.cloud_deals SET restorable_until = now() - interval '1 day' WHERE id = pg_temp.id('D2');
+  p1 := pg_temp.pull(A, I1, 0, 500);
+  old_cursor := 2; old_hz := (p1 ->> 'horizon')::bigint;
   PERFORM pg_temp.clear_claims();
   r := public._cloud_todo_purge();
   f := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
   pa := pg_temp.pull_all(A, I1, 0, 1);
   st := pg_temp.pull(A, I1, old_cursor, 500, old_hz);
+  cu := pg_temp.pull(A, I1, (p1 ->> 'next_after')::bigint, 500, old_hz);   -- caught up before the purge: everything deleted is below it
   -- a purge between two pages of a full pull
   p1 := pg_temp.pull(A, I1, 0, 1);
   PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('i2'), pg_temp.nowt())));
@@ -793,7 +795,8 @@ BEGIN
   RETURN pg_temp.all_of(
     pg_temp.pass((pa ->> 'resync')::boolean IS NOT TRUE AND (pa ->> 'pages')::int > 3, 'limit-1 full pull after purge: ' || left(pa::text, 200) || ' forgotten ' || f),
     pg_temp.pass((st ->> 'resync_required')::boolean, 'stale cursor ' || old_cursor || '/' || old_hz || ' forgotten ' || f || ': ' || left(st::text, 120)),
-    pg_temp.pass((p2 ->> 'resync_required')::boolean, 'purge between pages: ' || left(p2::text, 160) || ' page1 ' || left(p1::text, 80)));
+    pg_temp.pass((p2 ->> 'resync_required')::boolean, 'purge between pages: ' || left(p2::text, 160) || ' page1 ' || left(p1::text, 80)),
+    pg_temp.pass((cu ->> 'resync_required')::boolean IS NOT TRUE AND (cu ->> 'horizon')::bigint > old_hz, 'caught-up cursor after a purge: ' || left(cu::text, 120)));
 END $p$;
 
 -- R5: the horizon moves for tombstone and history deletes on their own (no deal purged)
@@ -998,3 +1001,66 @@ BEGIN
   RETURN pg_temp.pass(pg_temp.st(rr) = 'install_removed' AND (SELECT removed_at IS NOT NULL FROM public.cloud_deals WHERE id = D3), rr::text);
 END $p$;
 
+
+
+-- DR1 (SR d1_masked_deletion): a tombstone deleted after the cursor's horizon, while the horizon's highest number
+-- stays above it, must still resync the cursor
+CREATE FUNCTION pg_temp.dr1_masked_deletion() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); i2 uuid := pg_temp.id('i2'); i1x uuid := pg_temp.id('i1');
+        a0 bigint; h0 bigint; s_tomb bigint; r jsonb; p1 jsonb; p2 jsonb; full0 jsonb; got boolean; f_before bigint; f_after bigint;
+BEGIN
+  full0 := pg_temp.pull(A, I1, 0, 500, NULL);
+  a0 := (full0 ->> 'next_after')::bigint; h0 := (full0 ->> 'horizon')::bigint;
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op_set(i1x, 'note', '"filler"', 1, 1, pg_temp.nowt())));
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', i2, pg_temp.nowt())));
+  UPDATE public.cloud_deal_checklist_items SET removed_at = now() - interval '31 days' WHERE id = i2;
+  PERFORM pg_temp.clear_claims(); r := public._cloud_todo_purge();
+  s_tomb := (SELECT change_seq FROM public.cloud_deal_checklist_items WHERE id = i2);
+  PERFORM pg_temp.deldeal(A, pg_temp.id('D2'));
+  UPDATE public.cloud_deals SET removed_at = now() - interval '31 days', restorable_until = now() - interval '1 day' WHERE id = pg_temp.id('D2');
+  PERFORM pg_temp.clear_claims(); r := public._cloud_todo_purge();
+  -- the desktop starts over at its own pace: page 1 from its old cursor carries today's horizon
+  p1 := pg_temp.pull(A, I1, a0, 1, (pg_temp.pull(A, I1, a0, 1, h0) ->> 'horizon')::bigint);
+  f_before := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  UPDATE public.cloud_deal_checklist_items SET purged_at = now() - interval '366 days' WHERE id = i2;
+  PERFORM pg_temp.clear_claims(); r := public._cloud_todo_purge();
+  f_after := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  p2 := pg_temp.pull(A, I1, (p1 ->> 'next_after')::bigint, 500, (p1 ->> 'horizon')::bigint);
+  got := EXISTS (SELECT 1 FROM jsonb_array_elements(p1 -> 'rows') x WHERE x ->> 'cloud_id' = i2::text);
+  RETURN pg_temp.pass(got OR (p2 ->> 'resync_required')::boolean,
+    format('cursor a0=%s h0=%s; tombstone seq=%s; page1 next_after=%s horizon=%s had tombstone=%s; forgotten_through before=%s after=%s; page2 resync=%s',
+           a0, h0, s_tomb, p1 ->> 'next_after', p1 ->> 'horizon', got, f_before, f_after, p2 ->> 'resync_required'));
+END $p$;
+
+-- DR1 (SR d1_horizon_cases, copied verbatim from scratchpad/4263/sr-pr2/sr_probes.sql)
+CREATE FUNCTION pg_temp.dr1_horizon_cases() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); I1 uuid := pg_temp.id('I1'); IB uuid := pg_temp.id('IB');
+        p1 jsonb; p2 jsonb; pa jsonb; r jsonb; h1 bigint; a1 bigint; q1 jsonb; q2 jsonb; ob jsonb; nb jsonb; c1 jsonb; c2 jsonb; old_after bigint; old_h bigint; e jsonb; f jsonb;
+BEGIN
+  -- (a) full pull at limit 1 after a purge, horizon carried from page 1: must finish without resync
+  PERFORM pg_temp.deldeal(A, pg_temp.id('D2'));
+  UPDATE public.cloud_deals SET removed_at = now() - interval '31 days', restorable_until = now() - interval '1 day' WHERE id = pg_temp.id('D2');
+  PERFORM pg_temp.clear_claims(); r := public._cloud_todo_purge();
+  pa := pg_temp.pull_all(A, I1, 0, 1, NULL);
+  -- (b) a purge between two pages of a full pull: must resync
+  p1 := pg_temp.pull(A, I1, 0, 1, NULL); a1 := (p1 ->> 'next_after')::bigint; h1 := (p1 ->> 'horizon')::bigint;
+  PERFORM pg_temp.deldeal(A, pg_temp.id('D1'));
+  UPDATE public.cloud_deals SET removed_at = now() - interval '31 days', restorable_until = now() - interval '1 day' WHERE id = pg_temp.id('D1');
+  PERFORM pg_temp.clear_claims(); r := public._cloud_todo_purge();
+  p2 := pg_temp.pull(A, I1, a1, 1, h1);
+  -- (c) horizon equal to after, (d) no horizon with after>0 below the horizon
+  e := pg_temp.pull(A, I1, (p2 ->> 'horizon')::bigint, 1, (p2 ->> 'horizon')::bigint);
+  f := pg_temp.pull(A, I1, a1, 1, NULL);
+  -- (e) turn-off/turn-on cycle: B's cursor from before, before and after B's first new write
+  ob := pg_temp.pull(B, IB, 0, 500, NULL); old_after := (ob ->> 'next_after')::bigint; old_h := (ob ->> 'horizon')::bigint;
+  PERFORM pg_temp.onoff(B, false); PERFORM pg_temp.onoff(B, true);
+  c1 := pg_temp.pull(B, IB, old_after, 500, old_h);
+  nb := pg_temp.deal(B, pg_temp.dp(IB, 'db-new'));
+  c2 := pg_temp.pull(B, IB, old_after, 500, old_h);
+  q1 := pg_temp.pull(B, IB, 0, 500, NULL);
+  RETURN pg_temp.pass((pa ->> 'resync')::boolean IS NOT TRUE AND (p2 ->> 'resync_required')::boolean AND (e ->> 'resync_required')::boolean IS NOT TRUE
+                      AND (c1 ->> 'resync_required')::boolean AND (c2 ->> 'resync_required')::boolean AND (q1 ->> 'resync_required')::boolean IS NOT TRUE,
+    format('(a) full pull lim1 resync=%s pages=%s | (b) purge between pages: page1 after=%s h=%s -> page2 resync=%s horizon now=%s | (c) h=after resync=%s | (d) no horizon after=%s resync=%s | (e) off/on: old cursor before write resync=%s, after write=%s (upload %s), fresh full pull resync=%s',
+      pa ->> 'resync', pa ->> 'pages', a1, h1, p2 ->> 'resync_required', p2 ->> 'horizon', e ->> 'resync_required', a1, f ->> 'resync_required',
+      c1 ->> 'resync_required', c2 ->> 'resync_required', pg_temp.st(nb), q1 ->> 'resync_required'));
+END $p$;

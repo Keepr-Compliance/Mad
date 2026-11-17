@@ -9,12 +9,12 @@
       "bytes": 1048576
     },
     "errors": [
-      "not_authorized",
-      "wrong_account",
-      "invalid_input",
-      "not_entitled",
+      "batch_too_large",
       "install_removed",
-      "batch_too_large"
+      "invalid_input",
+      "not_authorized",
+      "not_entitled",
+      "wrong_account"
     ],
     "effective_time": "receive time - (p_sent_at - op.edited_at); -infinity (unknowable) when the age is below 0, above 365 days, either reading is missing or unparseable, or op.clock_stepped is true"
   },
@@ -146,8 +146,9 @@
       "event"
     ],
     "limit": 500,
-    "cursor": "The desktop stores the pair (next_after, horizon) from every page it has applied, in the same local transaction as the page, and sends both back as p_after_seq and p_horizon. A full pull starts with p_after_seq 0 and p_horizon omitted (NULL), and keeps the horizon of each page it applies. When resync_required is true the desktop applies nothing from that answer, drops its cursor and starts a full pull (p_after_seq 0, no p_horizon).",
-    "resync_rule": "resync_required = p_after_seq > head OR (horizon > p_after_seq AND horizon > coalesce(p_horizon, CASE WHEN p_after_seq = 0 THEN horizon ELSE 0 END)), where horizon is the owner's forgotten_through_seq read in the same snapshot as the page."
+    "cursor": "The desktop stores the pair (next_after, horizon) from every page it has applied, in the same local transaction as that page, and sends both back as p_after_seq and p_horizon. A full pull starts with p_after_seq 0 and p_horizon omitted (NULL) and keeps the horizon of each page it applies. p_after_seq > 0 without p_horizon answers {ok:false, error:'horizon_required'}. When resync_required is true the desktop applies nothing from that answer, drops its cursor and starts a full pull (p_after_seq 0, no p_horizon).",
+    "resync_rule": "resync_required = p_after_seq > head OR (p_after_seq > 0 AND forgotten_at > p_horizon AND forgotten_through_seq > p_after_seq). A cursor at or above forgotten_through_seq (caught up) never resyncs; a full pull from 0 never resyncs.",
+    "horizon": "horizon is the owner's forgotten_at marker read in the same snapshot as the page: a fresh number taken by every purge run that deletes anything, so it only moves forward. It is not a row number and is only compared with the horizon the desktop sends back."
   },
   "history_outcomes": [
     "applied",
@@ -265,5 +266,75 @@
       "null"
     ],
     "value": "per part (done boolean|{is_checked, checked_at}; title string; note string|null; due YYYY-MM-DD|null; order integer|null)"
+  },
+  "pull_errors": [
+    "not_authorized",
+    "wrong_account",
+    "invalid_input",
+    "not_entitled",
+    "horizon_required"
+  ],
+  "wire_types": {
+    "rule": "Every value is sent as the JSON type listed in field_types; the server does not convert. Booleans are JSON true/false (never 0/1 or strings). A set op's value is the bare part value, never wrapped in an object keyed by the part name. Times are ISO 8601 strings with a zone (for example 2026-11-17T04:05:08.266Z); due_date is a YYYY-MM-DD string; ids are uuid strings; integers are JSON numbers without a fraction.",
+    "examples_accepted": [
+      {
+        "kind": "set",
+        "entity": "item",
+        "id": "<uuid>",
+        "part": "done",
+        "value": {
+          "is_checked": true,
+          "checked_at": "2026-11-17T04:05:08.266Z"
+        },
+        "base_rev": 1,
+        "edit_seq": 3,
+        "edited_at": "2026-11-17T04:05:08.266Z"
+      },
+      {
+        "kind": "set",
+        "entity": "item",
+        "id": "<uuid>",
+        "part": "title",
+        "value": "Call lender"
+      },
+      {
+        "kind": "create_item",
+        "deal_id": "<uuid>",
+        "checklist_local_id": "cl1",
+        "local_id": "i9",
+        "title": "Order survey",
+        "is_required": false,
+        "done": false
+      }
+    ],
+    "examples_refused": [
+      {
+        "why": "is_required as 1",
+        "op": {
+          "kind": "create_item",
+          "is_required": 1
+        }
+      },
+      {
+        "why": "done.is_checked as 1",
+        "op": {
+          "kind": "set",
+          "part": "done",
+          "value": {
+            "is_checked": 1
+          }
+        }
+      },
+      {
+        "why": "part value wrapped by part name",
+        "op": {
+          "kind": "set",
+          "part": "title",
+          "value": {
+            "title": "Call lender"
+          }
+        }
+      }
+    ]
   }
 }

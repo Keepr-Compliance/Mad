@@ -146,3 +146,8 @@ BEGIN
   END LOOP;
   RETURN jsonb_build_object('ids', ids, 'seqs', seqs, 'pages', n, 'resync', rs, 'last', r);
 END $h$;
+
+-- the owner's current horizon marker (what a caught-up desktop holds)
+CREATE FUNCTION pg_temp.hz(u uuid) RETURNS bigint LANGUAGE sql STABLE AS $h$
+  SELECT coalesce((SELECT forgotten_at FROM public.cloud_todo_feed_head WHERE owner_user_id = u), 0)
+$h$;

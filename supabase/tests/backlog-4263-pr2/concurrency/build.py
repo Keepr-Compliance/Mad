@@ -22,7 +22,7 @@ def unit(name):
 
 take = unit('_cloud_todo_take_seq')
 pull = unit('cloud_todo_pull')
-for line in ["SELECT h.last_seq, h.forgotten_through_seq INTO v_head, v_forgot FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = v_uid;",
+for line in ["SELECT h.last_seq, h.forgotten_through_seq, h.forgotten_at INTO v_head, v_forgot, v_mark\n    FROM public.cloud_todo_feed_head h WHERE h.owner_user_id = v_uid;",
              "AND t.change_seq > v_after AND t.change_seq <= v_head",
              "'next_after', CASE WHEN v_n = v_lim THEN v_last ELSE greatest(v_head, v_after) END"]:
     assert line in pull, line
@@ -51,7 +51,7 @@ else:
     head = "SELECT x.last_seq INTO h FROM %s.cloud_todo_feed_head x WHERE x.owner_user_id = p_owner;" % sch
 sql = """CREATE SCHEMA %(s)s;
 CREATE SEQUENCE %(s)s.cloud_todo_seq AS bigint;
-CREATE TABLE %(s)s.cloud_todo_feed_head (owner_user_id uuid PRIMARY KEY, last_seq bigint NOT NULL, forgotten_through_seq bigint NOT NULL);
+CREATE TABLE %(s)s.cloud_todo_feed_head (owner_user_id uuid PRIMARY KEY, last_seq bigint NOT NULL, forgotten_through_seq bigint NOT NULL, forgotten_at bigint NOT NULL);
 CREATE TABLE %(s)s.feed_rows (owner_user_id uuid NOT NULL, tag text NOT NULL, change_seq bigint NOT NULL, UNIQUE (owner_user_id, change_seq));
 %(take)s;
 CREATE FUNCTION %(s)s.writer(p_owner uuid, p_tag text, p_sleep float8 DEFAULT 0) RETURNS bigint LANGUAGE plpgsql SET search_path = '' AS $w$

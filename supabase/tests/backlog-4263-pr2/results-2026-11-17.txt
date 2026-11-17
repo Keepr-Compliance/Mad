@@ -1,4 +1,6 @@
-BACKLOG-4263 PR-2 results, measured on the test database (rolled back), tree = int-portal/hosted-mcp-1 @ 02b2a8fd6 merged (c51452760) plus the review fixes of the commit that adds this file.
+BACKLOG-4263 PR-2 results, measured on the test database (rolled back), tree = int-portal/hosted-mcp-1 @ 8c1ac0fc1 merged plus the delta-review fixes of the commit that adds this file.
+PASS   C_dr1_horizon_cases 
+PASS   C_dr1_masked_deletion 
 PASS   C_p_a1 
 PASS   C_p_ai_restore 
 PASS   C_p_ai_rules 
@@ -47,61 +49,64 @@ PASS   C_sr_bad_boolean_aborts
 PASS   C_sr_ledger_transient 
 PASS   C_sr_removed_reorder 
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=47 mutants=0 problems=0
-CAUGHT M_C1_retried_create_overwrites want=red -> FAIL: #3 FAIL: retried create {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:39.498732+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_
-CAUGHT M_C1_stale_base_applies want=red -> FAIL: #3 FAIL: stale note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
-CAUGHT M_C22_edit_seq_dropped want=red -> FAIL: #2 FAIL: A {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
-CAUGHT M_C28_equal_is_conflict want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
-CAUGHT M_C29_parents_ignored want=red -> FAIL: #2 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
-CAUGHT M_C31_negative_age_valid want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "ed
-CAUGHT M_C31_wider_upper_bound want=red -> FAIL: #4 FAIL: 365d_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit
-CAUGHT M_C38_age_from_receive_time want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, 
+controls=49 mutants=0 problems=0
+CAUGHT M_C1_retried_create_overwrites want=red -> FAIL: #3 FAIL: retried create {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:14.224369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_
+CAUGHT M_C1_stale_base_applies want=red -> FAIL: #3 FAIL: stale note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
+CAUGHT M_C22_edit_seq_dropped want=red -> FAIL: #2 FAIL: A {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
+CAUGHT M_C28_equal_is_conflict want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
+CAUGHT M_C29_parents_ignored want=red -> FAIL: #2 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
+CAUGHT M_C31_negative_age_valid want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "ed
+CAUGHT M_C31_wider_upper_bound want=red -> FAIL: #4 FAIL: 365d_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit
+CAUGHT M_C37_stepped_ignored want=red -> FAIL: #7 FAIL: stepped want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_se
+CAUGHT M_C38_age_from_receive_time want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, 
 CAUGHT M_C7_loser_not_in_history want=red -> FAIL: #5 FAIL: lost row
-CAUGHT M_D8_history_shares_row_number want=red -> FAIL: #5 FAIL: two parts: head +2 {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "e
-CAUGHT M_F4_children_not_renumbered want=red -> FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,<uuid> want <uuid>,<uuid>,ae38eda8-74e0-4a2c-b4dd-c3
+CAUGHT M_D8_history_shares_row_number want=red -> FAIL: #5 FAIL: two parts: head +2 {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "e
+CAUGHT M_F4_children_not_renumbered want=red -> FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,<uuid> want <uuid>,<uuid>,349c9583-0de1-4acc-b682-ae
 CAUGHT M_F4_unremove_only_on_new_hash want=red -> FAIL: #1 FAIL: upsert {"ok": true, "results": [{"status": "unchanged", "version": 1, "cloud_id": "<uuid>", "local_id": "d1", "restored": false, "content_hash": "009a1c7c71566207efc7ed74a1180a2979c56ef552a699b49db56a6333f
 CAUGHT M_R2_removed_skips_merge want=red -> FAIL: remove=removed first=applied_to_removed second=applied_to_removed final note=earlier edit
-CAUGHT M_W_ai_edits_removed want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
-CAUGHT M_W_concurrent_always_wins want=red -> FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": 
-CAUGHT M_W_edit_resurrects want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:38.983864+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"
+CAUGHT M_W_ai_edits_removed want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
+CAUGHT M_W_concurrent_always_wins want=red -> FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": 
+CAUGHT M_W_edit_resurrects want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:13.687044+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=16 problems=0
-CAUGHT M_C19_window_dropped want=red -> FAIL: #7 FAIL: repeat add {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:43.810722+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T06:05
+controls=0 mutants=17 problems=0
+CAUGHT M_C19_window_dropped want=red -> FAIL: #7 FAIL: repeat add {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.714251+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T07:14
+CAUGHT M_C27_resync_from_head_only want=red -> FAIL: #2 FAIL: stale cursor 2/13 forgotten 143: {"ok": true, "head": 144, "rows": [{"entity": "deal", "cloud_id": "<uuid>", "local_id": "d | #3 FAIL: purge between pages: {"ok": true, "head": 148, "rows": [{"parts": {"order
 CAUGHT M_C36_claim_not_restored want=red -> FAIL: #13 FAIL: claim after purge: service_role
 CAUGHT M_C36_purge_without_claim want=red -> FAIL: #1 FAIL: purge {"deals_purged": 0, "failed_owners": 1, "rows_scrubbed": 0, "skipped_owners": 0} | #2 FAIL: i2 purged | #3 FAIL: i2 history 2 | #5 FAIL: D2 deleted | #6 FAIL: blob fenced | #8 FAIL: horizon | #10 FAIL: pull tombstone | #11 FAIL: resto
-CAUGHT M_C37_stepped_ignored want=red -> FAIL: #7 FAIL: stepped want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_se
-CAUGHT M_C8a_lock_reason_dropped want=red -> FAIL: #1 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
+CAUGHT M_C8a_lock_reason_dropped want=red -> FAIL: #1 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
 CAUGHT M_C8b_oldest_submission want=red -> FAIL: #3 FAIL: needs_changes v2 {"ok": true, "results": [{"op_id": "<uuid>", "entity": "item", "status": "locked", "cloud_id": "<uuid>", "cloud_deal_id": "<uuid>"}]}
-CAUGHT M_C8b_submission_dropped want=red -> FAIL: #2 FAIL: submitted {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
+CAUGHT M_C8b_submission_dropped want=red -> FAIL: #2 FAIL: submitted {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
 CAUGHT M_C8c_uploading_locked want=red -> FAIL: #1 FAIL: uploading {"ok": true, "results": [{"op_id": "<uuid>", "entity": "item", "status": "locked", "cloud_id": "<uuid>", "cloud_deal_id": "<uuid>"}]}
+CAUGHT M_P_deal_purged_early want=red -> FAIL: #7 FAIL: D3 kept (within 30 days)
 CAUGHT M_P_purge_before_30_days want=red -> FAIL: #4 FAIL: m1 kept (29 days)
 CAUGHT M_P_purge_leaves_blobs want=red -> FAIL: #6 FAIL: blob fenced
-CAUGHT M_Q1_ai_removes_template want=red -> FAIL: #2 FAIL: remove template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
-CAUGHT M_Q1_ai_renames_template want=red -> FAIL: #1 FAIL: rename template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
-CAUGHT M_R10_6_strip_dropped want=red -> FAIL: #1 FAIL: note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done"
+CAUGHT M_Q1_ai_removes_template want=red -> FAIL: #2 FAIL: remove template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
+CAUGHT M_Q1_ai_renames_template want=red -> FAIL: #1 FAIL: rename template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
+CAUGHT M_R10_6_strip_dropped want=red -> FAIL: #1 FAIL: note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done"
 EQUIV  M_X_item_owner_only want=green -> PASS
-CAUGHT M_X_other_install want=red -> FAIL: #3 FAIL: install {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:42.971297+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done":
+CAUGHT M_X_other_install want=red -> FAIL: #3 FAIL: install {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:17.048369+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done":
 CAUGHT M_X_owner_filters_dropped want=red -> FAIL: #1 FAIL: ai "ERR 23503 insert or update on table \"cloud_todo_history\" violates foreign key constraint \"cloud_todo_history_deal_fk\""
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=16 problems=0
+controls=0 mutants=17 problems=0
 CAUGHT M_C16_restore_purged want=red -> FAIL: #3 FAIL: i2 history 1 | #11 FAIL: restore purged {"ok": true, "results": [{"op_id": "<uuid>", "parts": null, "entity": "item", "status": "restored", "cloud_id": "<uuid>", "conflict": false, "loc
-CAUGHT M_C27_resync_from_head_only want=red -> FAIL: #2 FAIL: stale cursor 2/13 forgotten 40: {"ok": true, "head": 40, "rows": [{"entity": "deal", "cloud_id": "<uuid>", "local_id": "d1 | #3 FAIL: purge between pages: {"ok": true, "head": 43, "rows": [{"parts": {"order":
-CAUGHT M_C30_push_ignores_register want=red -> FAIL: #4 FAIL: push {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:46.412698+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, 
+CAUGHT M_C30_push_ignores_register want=red -> FAIL: #4 FAIL: push {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:20.269926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, 
 CAUGHT M_C30_upsert_ignores_register want=red -> FAIL: #3 FAIL: upload {"ok": true, "results": [{"status": "unchanged", "version": 1, "cloud_id": "<uuid>", "local_id": "d3", "restored": true, "content_hash": "5eab11f11ed0d41a1389a2f21cebdcc7262f7547e857994547435dd71d00d
-CAUGHT M_C5_replay_dropped want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:46.412698+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at"
+CAUGHT M_C5_replay_dropped want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:20.269926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at"
 CAUGHT M_CL_core_owner_check want=red -> FAIL: #1 FAIL: core no claims {"ok": false, "error": "not_entitled"} | #6 FAIL: core other owner {"ok": true, "results": []}
 CAUGHT M_CL_purge_deal_trusts_empty_claims want=red -> FAIL: #2 FAIL: purge_deal no claims ERR 42501 not allowed
 CAUGHT M_D2_reclaim_keys_on_argument want=red -> FAIL: #6 FAIL: reclaim {"ok": true, "removed_entry": true}{"ok": true, "removed_entry": false}
-CAUGHT M_P_deal_purged_early want=red -> FAIL: #7 FAIL: D3 kept (within 30 days)
+CAUGHT M_DR1_caught_up_resyncs want=red -> FAIL: #4 FAIL: caught-up cursor after a purge: {"ok": true, "head": 59, "rows": [], "horizon": 59, "next_after": 59, "resync_required": true, "install_max_edit_seq": n
+CAUGHT M_DR1_horizon_is_forgotten_seq want=red -> FAIL: cursor a0=27 h0=13; tombstone seq=41; page1 next_after=37 horizon=44 had tombstone=f; forgotten_through before=44 after=44; page2 resync=false
+CAUGHT M_DR1_marker_not_moved want=red -> FAIL: cursor a0=27 h0=13; tombstone seq=51; page1 next_after=47 horizon=55 had tombstone=f; forgotten_through before=54 after=54; page2 resync=false
 CAUGHT M_Q8_purge_live_deal want=red -> FAIL: #1 FAIL: live {"ok": true, "status": "purged"}
 CAUGHT M_Q8_purge_other_owner want=red -> FAIL: #5 FAIL: purge step as other owner "purged" kept
-CAUGHT M_R1_horizon_dropped want=red -> FAIL: #1 FAIL: limit-1 full pull after purge: {"ids": ["<uuid>", "<uuid>", "<uuid>", "<uuid>", "44105117-20fd-44f5-8f41-d7dbba forgotten 45
+CAUGHT M_R1_horizon_dropped want=red -> FAIL: #1 FAIL: limit-1 full pull after purge: {"ids": ["<uuid>", "<uuid>", "<uuid>", "<uuid>", "e190f582-7c40-46e5-bbba-c414f5 forgotten 31
 CAUGHT M_R6_delete_is_hard want=red -> FAIL: #1 FAIL: delete {"ok": true, "deleted": {"files": 1, "parties": 0, "messages": 0, "checklists": 1, "checklist_items": 1}, "restorable": true, "blobs_fenced": 0} | #2 FAIL: files and blob kept | #3 FAIL: repeat {"ok": false, "error": "not_found"} head +0 |
-CAUGHT M_W23_get_deal_shows_removed want=red -> FAIL: #8 FAIL: get {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "status": "active", "street": null, "address": "Fixture d2 Way", "deal_id": "<uuid>", "details": {"stage": null, "sale_price": 
-CAUGHT M_W23_installs_count_removed want=red -> FAIL: #6 FAIL: installs {"installs": [{"deals": 2, "last_synced_at": "2026-11-17T06:05:46.76017+00:00", "source_install_id": "<uuid>"}, {"deals": 1, "last_synced_at": "2026-11-17T06:05:46.745482+00:00", "source_install_id"
-CAUGHT M_W23_lir_deal_not_removed want=red -> FAIL: #4 FAIL: lir deal {"ok": true, "rows": [{"removed": false, "cloud_id": "<uuid>", "local_id": "d2", "content_hash": "fb69e6e57c90658caecf35f432be8c6771e89f24f61f78fd1a6a84ece9aa1e5d", "cloud_deal_id": "0cf4e534-b50e-4c2
+CAUGHT M_SF_no_horizon_resyncs want=red -> FAIL: #4 FAIL: cursor without horizon
+CAUGHT M_W23_installs_count_removed want=red -> FAIL: #6 FAIL: installs {"installs": [{"deals": 2, "last_synced_at": "2026-11-17T07:14:20.520095+00:00", "source_install_id": "<uuid>"}, {"deals": 1, "last_synced_at": "2026-11-17T07:14:20.504713+00:00", "source_install_id
+CAUGHT M_W23_lir_deal_not_removed want=red -> FAIL: #4 FAIL: lir deal {"ok": true, "rows": [{"removed": false, "cloud_id": "<uuid>", "local_id": "d1", "content_hash": "009a1c7c71566207efc7ed74a1180a2979c56ef552a699b49db56a6333fea55e", "cloud_deal_id": "305ce860-f6b9-4d3
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=16 problems=0
+controls=0 mutants=17 problems=0
 CAUGHT M_C15_my_items_index_dropped want=red -> FAIL: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "my2", "content_hash": "bbd8ed20a9f5c7d4d26a3fffd127ed6f6a3c314c9e87b7b59ce9f7d7e24641eb"}]}
 CAUGHT M_C17_head_left want=red -> FAIL: #2 FAIL: left: cloud_todo_feed_head=1 
 EQUIV  M_C17_history_left want=green -> PASS
@@ -117,10 +122,12 @@ CAUGHT M_R10_table_select want=red -> FAIL: table privileges: cloud_todo_history
 CAUGHT M_R6_counts_ignore_checklist want=red -> FAIL: #1 FAIL: 3/3
 CAUGHT M_SR2_direct_seq_inside_allocator_user want=red -> FAIL: change_seq written without the allocator in the same statement: _cloud_todo_apply_op:  UPDATE public.cloud_deal_checklist_items SET change_seq = -change_seq WHERE id = v_id | 
 CAUGHT M_V_ids_cast_inline want=red -> FAIL: "ERR 22P02 invalid input syntax for type uuid: \"abc\""
+CAUGHT M_W23_get_deal_shows_removed want=red -> FAIL: #8 FAIL: get {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "status": "active", "street": null, "address": "Fixture d2 Way", "deal_id": "<uuid>", "details": {"stage": null, "sale_price": 
 CAUGHT M_W23_list_shows_removed want=red -> FAIL: #7 FAIL: list_deals
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=16 problems=0
+controls=0 mutants=17 problems=0
 CAUGHT M_G_install_gate_parties want=red -> FAIL: #1 FAIL: cloud_upsert_parties removed install: {"ok": false, "error": "not_found"}
+CAUGHT M_G_live_gate_parties want=red -> FAIL: #2 FAIL: cloud_upsert_parties removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gp", "content_hash": "9c85a566149556f8208bdb9b5f32b06626a86e2be5d6b73811c9e95933f5d
 CAUGHT M_R3_type_gate_dropped want=red -> FAIL: #2 FAIL: set.id -> not_found  | #4 FAIL: set.base_rev -> applied  | #5 FAIL: set.base_rev -> unchanged  | #6 FAIL: set.edit_seq -> unchanged  | #7 FAIL: set.edit_seq -> unchanged  | #8 FAIL: set.clock_stepped -> unchanged  | #9 FAIL: set.held_locked ->
 CAUGHT M_R4_ledger_keeps_everything want=red -> FAIL: #1 FAIL: parent_missing then rejected | #2 FAIL: not_found then not_found
 CAUGHT M_R6_delete_deal_makes_head want=red -> FAIL: #2 FAIL: register 0 head 1
@@ -128,16 +135,16 @@ CAUGHT M_R6_delete_install_while_off want=red -> FAIL: #2 FAIL: register 1 head 
 CAUGHT M_R6_purge_now_makes_head want=red -> FAIL: #2 FAIL: register 0 head 1
 CAUGHT M_R7_catalogue_sees_missing_filter want=red -> FAIL: readers 4, reads without the filter: _mcp_r_list_all_deals#2 
 CAUGHT M_R7_list_all_returns_removed want=red -> FAIL: #1 FAIL: before <uuid>,<uuid>,<uuid> after <uuid>,<uuid>,<uuid>
-CAUGHT M_S1_ai_restore_unrestricted want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:52.889873+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq
-CAUGHT M_S1_switch_on want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:52.889873+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
-CAUGHT M_S2_ai_on_unconfirmed want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T06:05:53.612808+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T06:05:53.61280
+CAUGHT M_S1_ai_restore_unrestricted want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:26.753948+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq
+CAUGHT M_S1_switch_on want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:26.753948+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
+CAUGHT M_S2_ai_on_unconfirmed want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T07:14:27.414848+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T07:14:27.41484
 CAUGHT M_S2_owner_refused_too want=red -> FAIL: #2 FAIL: owner restore on an unconfirmed deal: {"ok": true, "results": [{"op_id": "<uuid>", "status": "not_found"}]}
 CAUGHT M_S3_restore_under_removed_install want=red -> FAIL: {"ok": true, "results": [{"status": "restored", "cloud_id": "<uuid>", "renumbered": 3}]}
 CAUGHT M_SR3_restore_deal_without_head want=red -> FAIL: public.cloud_todo_restore(uuid,text,uuid,uuid) first@897 head@0 deal@1326; 
-CAUGHT M_SR6_purge_forget_dropped want=red -> FAIL: #1 FAIL: tombstone: seq 29 f0 13 f1 13 | #2 FAIL: history: left 50 max deleted 31 f2 13
+CAUGHT M_SR6_purge_forget_dropped want=red -> FAIL: #1 FAIL: tombstone: seq 29 f0 13 f1 13 | #2 FAIL: history: left 50 max deleted 32 f2 13
 CAUGHT M_SR9_push_rows_locked_before_head want=red -> FAIL: _cloud_todo_apply: head not taken in both arms before the row locks; 
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=16 problems=0
+controls=0 mutants=17 problems=0
 CAUGHT M_G_install_gate_checklists want=red -> FAIL: #3 FAIL: cloud_upsert_checklists removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_files want=red -> FAIL: #9 FAIL: cloud_upsert_files removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_items want=red -> FAIL: #5 FAIL: cloud_upsert_checklist_items removed install: {"ok": false, "error": "not_found"}
@@ -147,12 +154,11 @@ CAUGHT M_G_install_gate_tombstone want=red -> FAIL: #13 FAIL: tombstone removed 
 CAUGHT M_G_live_gate_checklists want=red -> FAIL: #4 FAIL: cloud_upsert_checklists removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gc", "content_hash": "fb286cc32d28911df75210cb85bca14e8d2cdc790b9515db7c4edcd
 CAUGHT M_G_live_gate_files want=red -> FAIL: #10 FAIL: cloud_upsert_files removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gf", "content_hash": "eb5a7896cb9a257b80d64678982c09dcfb58b3b791a756397179cec2c873e643
 CAUGHT M_G_live_gate_items want=red -> FAIL: #6 FAIL: cloud_upsert_checklist_items removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gi", "content_hash": "113aff791372bb03166b89c6d74782baf8ef45ceb15cb150e0315a7
-CAUGHT M_G_live_gate_mark_synced want=red -> FAIL: #12 FAIL: mark removed deal: {"ok": true, "last_full_sync_at": "2026-11-17T06:05:57.089985+00:00"}
+CAUGHT M_G_live_gate_mark_synced want=red -> FAIL: #12 FAIL: mark removed deal: {"ok": true, "last_full_sync_at": "2026-11-17T07:14:31.239731+00:00"}
 CAUGHT M_G_live_gate_messages want=red -> FAIL: #8 FAIL: cloud_upsert_messages removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gm", "content_hash": "be19b650cd3fbbaef2c83588dab289b8da14e46f7769886fda688de2478
-CAUGHT M_G_live_gate_parties want=red -> FAIL: #2 FAIL: cloud_upsert_parties removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gp", "content_hash": "9c85a566149556f8208bdb9b5f32b06626a86e2be5d6b73811c9e95933f5d
 CAUGHT M_G_new_writer_without_gate want=red -> FAIL: #1 FAIL: writers without the install gate: _p4263_writer
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=13 problems=0
+controls=0 mutants=12 problems=0
 a: [{"r":3,"hold":""}]
 b: [{"r":4}]
 c: [{"r1":{"head":2,"tags":["seed"],"next_after":2},"waiters":1}]
@@ -172,12 +178,18 @@ d: [{"r2":{"head":3,"tags":[],"next_after":4},"committed":["seed","w1","w2"]}]
 residue check: schema p4263cc_<run> gone (0)
 C14 sr7: FAIL (seen ['w2'] of ['w1', 'w2'], waiters 0)
 
-SR review scripts (scratchpad/4263/sr-pr2), run from copies: WT path -> backlog-4263-pr2; sr_removed_reorder, sr_bad_boolean_aborts, sr_ledger_transient taken from this harness (same names); SR1 and SR4 dropped (their fragments no longer exist).
+SR review scripts (scratchpad/4263/sr-pr2, current copy, WT path unchanged) on this tree:
+PASS   C_d1_horizon_cases 
+FAIL   C_d1_ledger FAIL: applied then retry: applied/applied head moved t history moved f | not_found=not_found -> after upload added -> again added same id t rows 1
+INFO   C_d1_masked_deletion INFO true client cursor a0=29 h0=13; tombstone seq=80; page1 next_after=76 horizon=84 (page1 had tombstone: f); horizon before tombstone delete=83 after=83; page2 resync=true; i2 row exists=f
+INFO   C_d1_outbox_shapes INFO raw outbox create (is_required 1, is_checked 0)=rejected/is_required; JSON-typed create=added; done {is_checked:1}=rejected/done; title as {"title":..}=rejected/title; done {is_checked:true, sqlite t
+INFO   C_d1_replay_dbg INFO h0=29 h1=100 h2=100 ledger_for_op=1 r1=applied r2_same=t
+INFO   C_d1_saved_from INFO before: all_deals rows=3 saved_from=[1, 1, 2] list_deals saved_from=[1, 2, 1] computers=2 | install I1 removed: all_deals rows=1 saved_from=[2] list_deals saved_from=[2] computers=1
 PASS   C_sr_ai_restore_template 
 PASS   C_sr_ai_unconfirmed 
 PASS   C_sr_bad_boolean_aborts 
-INFO   C_sr_catalog INFO purge_deal callers=[_cloud_todo_purge,cloud_purge_deal_now] seq{cache=1 cycle=f} cron{cloud-todo-purge [37 4 * * *] SELECT public._cloud_todo_purge() as postgres} null-role-in-new=[] new anon=[] 
-INFO   C_sr_child_before_parent INFO order change=applied; full pull position item i1=5 checklist cl1=9 (child first: t)
+INFO   C_sr_catalog INFO purge_deal callers=[_cloud_todo_purge,cloud_purge_deal_now] seq{cache=1 cycle=f} cron{cloud-todo-purge [37 4 * * *] SELECT public._cloud_todo_purge() as postgres} null-role-in-new=[] new anon=[] anon fns n
+INFO   C_sr_child_before_parent INFO order change=applied; full pull position item i1=6 checklist cl1=9 (child first: t)
 PASS   C_sr_delete_install_while_off 
 PASS   C_sr_full_tie 
 PASS   C_sr_ledger_transient 
@@ -185,14 +197,16 @@ FAIL   C_sr_old_path_unnumbered FAIL: upsert=applied change_seq=NULL created_by_
 PASS   C_sr_op_id_cross_owner 
 PASS   C_sr_removed_reorder 
 INFO   C_sr_restore_deal_kind_with_register INFO delete deal D3=true; then delete install I2=true; restore D3 (kind deal)=install_removed; D3 live=f; upload from I2=install_removed
-FAIL   C_sr_resync_full_pull FAIL: purge={"deals_purged": 1, "failed_owners": 0, "rows_scrubbed": 0, "skipped_owners": 0} forgotten=31 page1.next_after=14 page2.resync=true pull_all(lim 2).resync=false pages=4 items_of_I
+PASS   C_sr_resync_full_pull 
 PASS   C_sr_strip_then_length 
 PASS   C_sr_unchanged_cost 
-INFO   C_sr_unchanged_cost_info INFO equal value: status=unchanged head+43 ledger+1
+INFO   C_sr_unchanged_cost_info INFO equal value: status=unchanged head+38 ledger+1
+CAUGHT     M_SR1_write_part_nextval want=red -> FAIL: p_seq_catalog()=FAIL: sequence readers: _cloud_todo_take_seq, _cloud_todo_write_part
 CAUGHT     M_SR2_direct_seq_inside_allocator_user want=red -> FAIL: p_seq_catalog()=FAIL: change_seq written without the allocator in the same statement: _cloud_todo_apply_op:  UPDATE public.cloud_dea
 CAUGHT     M_SR3_restore_deal_without_head want=red -> FAIL: p_lock_order()=FAIL: public.cloud_todo_restore(uuid,text,uuid,uuid) first@897 head@0 deal@1326; 
+MISSED     M_SR4_winner_branch_no_change_history want=red -> PASS
 CAUGHT     M_SR5_definer_chain_to_purge want=red -> FAIL: anon-callable list changed: mcp_p4263_rogue(uuid,uuid)
 MISSED     M_SR6_purge_forget_dropped want=red -> PASS
 MISSED     M_SR7_take_seq_without_lock want=red -> PASS
-CAUGHT     M_SR8_unremove_checklists_not_renumbered want=red -> FAIL: p_f4()=FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,8e31e954-341b
+CAUGHT     M_SR8_unremove_checklists_not_renumbered want=red -> FAIL: p_f4()=FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,c6ef7c9d-dea9
 CAUGHT     M_SR9_push_rows_locked_before_head want=red -> FAIL: p_lock_order()=FAIL: _cloud_todo_apply: head not taken in both arms before the row locks; 

@@ -123,7 +123,7 @@ def unit_decls():
 CONTROLS = ['p_parts', 'p_later_wins', 'p_equal', 'p_replay', 'p_edit_seq', 'p_parents', 'p_removal_wins', 'p_ai_rules', 'p_strip',
             "p_lock('reason')", "p_lock('sub')", 'p_cross_owner', 'p_e2', 'p_a1', 'p_f4', 'p_feed', 'p_install', 'p_install_restore',
             'p_soft_delete', 'p_reader_counts', 'p_purge', 'p_purge_now', 'p_claims', 'p_turnoff', 'p_idem', 'p_create',
-            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog', 'p_bad_ids', 'p_resync', 'p_purge_horizon', 'p_off_writes', 'p_types', 'p_reader_catalog', 'p_list_all', 'sr_removed_reorder', 'sr_bad_boolean_aborts', 'sr_ledger_transient', 'p_ai_restore', 'p_ai_unconfirmed', 'p_restore_under_removed_install']
+            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog', 'p_bad_ids', 'p_resync', 'p_purge_horizon', 'p_off_writes', 'p_types', 'p_reader_catalog', 'p_list_all', 'sr_removed_reorder', 'sr_bad_boolean_aborts', 'sr_ledger_transient', 'p_ai_restore', 'p_ai_unconfirmed', 'p_restore_under_removed_install', 'dr1_masked_deletion', 'dr1_horizon_cases']
 
 AO = '_cloud_todo_apply_op'
 
@@ -170,9 +170,13 @@ def mutants():
     m.append(fn_mutant('C36_purge_without_claim', '_cloud_todo_purge', [("PERFORM set_config('request.jwt.claim.role', 'service_role', true);", "NULL;", 1)], P('p_purge')))
     m.append(fn_mutant('C36_claim_not_restored', '_cloud_todo_purge', [("PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);", "NULL;", 1)], P('p_purge')))
     m.append(fn_mutant('P_deal_purged_early', '_cloud_todo_purge', [("d.restorable_until < now()   /*PURGE:deal_age*/", "d.restorable_until < now() + interval '31 days'", 1)], P('p_purge')))
-    m.append(fn_mutant('C27_resync_from_head_only', 'cloud_todo_pull', [("""       OR (v_forgot > v_after
-           AND v_forgot > coalesce(p_horizon, CASE WHEN v_after = 0 THEN v_forgot ELSE 0 END)));""", ");", 1)], P('p_resync')))
-    m.append(fn_mutant('R1_horizon_dropped', 'cloud_todo_pull', [("AND v_forgot > coalesce(p_horizon, CASE WHEN v_after = 0 THEN v_forgot ELSE 0 END)", "AND v_after > 0", 1)], P('p_resync')))
+    m.append(fn_mutant('C27_resync_from_head_only', 'cloud_todo_pull', [("\n       OR (v_after > 0 AND v_mark > p_horizon AND v_forgot > v_after));", ");", 1)], P('p_resync')))
+    m.append(fn_mutant('R1_horizon_dropped', 'cloud_todo_pull', [("OR (v_after > 0 AND v_mark > p_horizon AND v_forgot > v_after));", "OR (v_after > 0 AND v_forgot > v_after));", 1)], P('p_resync')))
+    m.append(fn_mutant('DR1_horizon_is_forgotten_seq', 'cloud_todo_pull', [("'horizon', v_mark,", "'horizon', v_forgot,", 1),
+                                                                         ("OR (v_after > 0 AND v_mark > p_horizon AND v_forgot > v_after));", "OR (v_after > 0 AND v_forgot > p_horizon AND v_forgot > v_after));", 1)], P('dr1_masked_deletion')))
+    m.append(fn_mutant('DR1_marker_not_moved', '_cloud_todo_purge', [("UPDATE public.cloud_todo_feed_head h SET forgotten_at = v_m WHERE h.owner_user_id = v_owner;   /*MARK:purge*/", "NULL; /*MARK:purge*/", 1)], P('dr1_masked_deletion')))
+    m.append(fn_mutant('DR1_caught_up_resyncs', 'cloud_todo_pull', [("OR (v_after > 0 AND v_mark > p_horizon AND v_forgot > v_after));", "OR (v_after > 0 AND v_mark > p_horizon));", 1)], P('p_resync')))
+    m.append(fn_mutant('SF_no_horizon_resyncs', 'cloud_todo_pull', [("IF v_after > 0 AND p_horizon IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'horizon_required'); END IF;", "", 1)], P('p_pull')))
     m.append(fn_mutant('C16_restore_purged', AO, [("IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN", "IF false THEN", 1)], P('p_purge')))
     m.append(fn_mutant('Q8_purge_live_deal', '_cloud_todo_purge_deal', [("IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;", "", 1)], P('p_purge_now')))
     m.append(fn_mutant('Q8_purge_other_owner', '_cloud_todo_purge_deal', [("WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;", "WHERE d.id = p_deal FOR UPDATE;", 1)], P('p_purge_now')))
@@ -342,6 +346,9 @@ if __name__ == '__main__':
                 continue
             want = "('%s', ARRAY[%s])" % (k, ','.join("'%s'" % ('number' if t == 'integer' else t) for t in types))
             assert want in MIG, 'field_types out of step with the migration: ' + want
+        for e in C['pull_errors']:
+            assert "'%s'" % e in MIG, e
+        assert "'horizon', v_mark" in MIG
         for st in C['ledger']['not_kept']:
             assert "'%s'" % st.split('/')[-1] in MIG, st
         print('contract cloud-todo-change-v1: %d names found in the migration' % (len(words) + len(C['pull']['fields']) + len(C['result']) + len(C['part_shape'])))
