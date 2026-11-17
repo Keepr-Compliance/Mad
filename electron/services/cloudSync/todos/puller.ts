@@ -14,7 +14,11 @@
 import type { CallResult, CloudClient } from "../cloudClient";
 import type { SqlDb } from "../../db/cloudSyncSqlDb";
 import { getTodoCursor } from "../../db/cloudSyncTodoDbService";
-import { applyTodoPage, resetTodoCursorForFullPull, type PageCounts } from "../../db/cloudSyncTodoPullDb";
+import {
+  applyTodoPage,
+  resetTodoCursorForFullPull,
+  type PageCounts,
+} from "../../db/cloudSyncTodoPullDb";
 
 /** Contract `pull.limit`. */
 export const PULL_PAGE_SIZE = 500;
@@ -57,7 +61,17 @@ function int(v: unknown): number | null {
 export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
   const { db, projectRef, userId } = deps;
   const limit = deps.pageSize ?? PULL_PAGE_SIZE;
-  const summary: TodoPullSummary = { outcome: "idle", pages: 0, rows: 0, resyncs: 0, fullPullDone: false, scanned: 0, localWrites: 0, parked: 0, held: 0 };
+  const summary: TodoPullSummary = {
+    outcome: "idle",
+    pages: 0,
+    rows: 0,
+    resyncs: 0,
+    fullPullDone: false,
+    scanned: 0,
+    localWrites: 0,
+    parked: 0,
+    held: 0,
+  };
   const add = (c: PageCounts) => {
     summary.localWrites += c.localWrites;
     summary.parked += c.parked;
@@ -66,18 +80,40 @@ export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
     if (c.fullPullDone) summary.fullPullDone = true;
   };
   for (;;) {
-    const cur = getTodoCursor(db, projectRef, userId);
-    if (!cur) return summary;
-    let after = cur.last_seq > 0 && (cur.horizon === null || cur.horizon === undefined) ? 0 : cur.last_seq;
-    let horizon = after > 0 ? (cur.horizon as number) : null;
-    if (after === 0 && cur.last_seq > 0) resetTodoCursorForFullPull(db, projectRef, userId, deps.now());
+    // The start pair, read in one transaction: a stored last_seq without its horizon (never written by this
+    // build) cannot be sent (horizon_required), so it becomes a full pull from 0.
+    const start = db.transaction(() => {
+      const cur = getTodoCursor(db, projectRef, userId);
+      if (!cur) return null;
+      if (
+        cur.last_seq > 0 &&
+        (cur.horizon === null || cur.horizon === undefined)
+      ) {
+        resetTodoCursorForFullPull(db, projectRef, userId, deps.now());
+        return { after: 0, horizon: null as number | null };
+      }
+      return {
+        after: cur.last_seq,
+        horizon: cur.last_seq > 0 ? (cur.horizon as number) : null,
+      };
+    })();
+    if (!start) return summary;
+    let after = start.after;
+    let horizon = start.horizon;
     let restart = false;
     for (let page = 0; page < PULL_MAX_PAGES; page++) {
       deps.guard();
-      const res = await deps.client.todoPull(userId, deps.installId, after, limit, horizon);
+      const res = await deps.client.todoPull(
+        userId,
+        deps.installId,
+        after,
+        limit,
+        horizon,
+      );
       deps.stopOn(res);
       const resync = res.kind === "ok" && res.body.resync_required === true;
-      const horizonRequired = res.kind === "refused" && res.code === "horizon_required";
+      const horizonRequired =
+        res.kind === "refused" && res.code === "horizon_required";
       if (resync || horizonRequired) {
         // Contract: apply nothing from this answer, drop the cursor, start a full pull.
         resetTodoCursorForFullPull(db, projectRef, userId, deps.now());
@@ -86,20 +122,32 @@ export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
         break;
       }
       if (res.kind !== "ok") {
-        deps.log?.warn("[CloudSync] Todo changes not fetched (will retry)", { code: res.code });
+        deps.log?.warn("[CloudSync] Todo changes not fetched (will retry)", {
+          code: res.code,
+        });
         return { ...summary, outcome: "failed" };
       }
-      const rows = Array.isArray(res.body.rows) ? (res.body.rows as Array<Record<string, unknown>>) : [];
+      const rows = Array.isArray(res.body.rows)
+        ? (res.body.rows as Array<Record<string, unknown>>)
+        : [];
       const nextAfter = int(res.body.next_after);
       const nextHorizon = int(res.body.horizon);
       if (nextAfter === null || nextHorizon === null) {
-        deps.log?.warn("[CloudSync] Todo changes not applied: unexpected page", { code: "bad_page" });
+        deps.log?.warn(
+          "[CloudSync] Todo changes not applied: unexpected page",
+          { code: "bad_page" },
+        );
         return { ...summary, outcome: "failed" };
       }
       const counts = applyTodoPage(
         db,
         { projectRef, userId, installId: deps.installId, now: deps.now() },
-        { rows, next_after: nextAfter, horizon: nextHorizon, install_max_edit_seq: int(res.body.install_max_edit_seq) },
+        {
+          rows,
+          next_after: nextAfter,
+          horizon: nextHorizon,
+          install_max_edit_seq: int(res.body.install_max_edit_seq),
+        },
         limit,
       );
       summary.pages++;
@@ -111,7 +159,9 @@ export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
     }
     if (!restart) return { ...summary, outcome: "partial" };
     if (summary.resyncs > PULL_MAX_RESTARTS) {
-      deps.log?.warn("[CloudSync] Todo pull restarted too often this pass", { code: "resync_loop" });
+      deps.log?.warn("[CloudSync] Todo pull restarted too often this pass", {
+        code: "resync_loop",
+      });
       return { ...summary, outcome: "failed" };
     }
   }

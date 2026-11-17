@@ -1,0 +1,636 @@
+/**
+ * @jest-environment node
+ *
+ * BACKLOG-4263 PR-4b — the todo puller (todos/puller.ts) and the page applier (db/cloudSyncTodoPullDb.ts),
+ * driven through the real runner pass, the real capture triggers and the app's own checklist statements. The
+ * server is the fake (helpers/fakeServer.ts): its cloud_todo_pull and the calls around it are transcribed from
+ * migration 20261118110000 and checked against the real functions (supabase/tests/backlog-4263-pr4b/harness-4b.sql).
+ *
+ *   APPLY   another side's change reaches the local row and the shadow; nothing echoes back as an op (W10)
+ *   PEND    a part waiting in the outbox is never overwritten by a pull (W2); removal while a local edit waits (W26)
+ *   REM     removed online -> deleted here and archived (D7); restored -> created again with its links (W35);
+ *           a checklist's items come back with it; purged -> gone; new online -> created here, never sent back (W5)
+ *   PARK    a child before its parent is parked and applied in the same pull (PR-2 review carry list); a deal that
+ *           is not on this computer is skipped
+ *   ACID    the page and its cursor pair commit together (W4); a crash between pages resumes from the stored
+ *           cursor with its horizon; a re-delivered page applies to the same result; a user edit during a pull
+ *           call still records its op (C24)
+ *   CUR     the cursor pair (next_after, horizon); resync applies nothing from its answer (W22)
+ *   LOCK    another side's change on a locked deal: held_locked
+ *   EVT     conflict events become notices once
+ *   R3      the rewound counter is raised from install_max_edit_seq; rewound_at clears when no restore pull is owed
+ *   LOOP    ops of a todo whose create was answered with a kept refusal are dropped, not resent
+ *   LWF     a failed local write-back is re-applied before the scan
+ *   W28     install_removed: persisted per user, no calls, once-per-launch status check, reclaim for this user only
+ *   ORPH    the Settings orphan count skips deals removed online
+ */
+import { DRIVER, type TestDb } from "./helpers/sqlite";
+import { dealId, freshDb, insertDeal, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
+import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
+import { FakeServer, type FakeTodo } from "./helpers/fakeServer";
+import { enableForUser } from "../../db/cloudSyncDbService";
+import * as todos from "../../db/cloudSyncTodoDbService";
+import { applyTodoPage } from "../../db/cloudSyncTodoPullDb";
+import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
+import { pullTodos } from "../todos/puller";
+import { CloudClient, type RpcTransport } from "../cloudClient";
+import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
+import { INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
+import type { JsonValue } from "../jcs";
+
+type Row = Record<string, unknown>;
+const fid = (kind: number, n: number) => `00000000-0000-0000-${String(kind).padStart(4, "0")}-${String(n).padStart(12, "0")}`;
+const INSTALL = fid(98, 4263);
+const CL = fid(3, 1);
+const MY = fid(3, 2);
+const I1 = fid(4, 1);
+const I2 = fid(4, 2);
+
+const outbox = (db: TestDb, user = USER_A) =>
+  db.prepare("SELECT * FROM cloud_sync_todo_outbox WHERE owner_user_id = ? ORDER BY entity, local_id, part").all(user) as Row[];
+const shadow = (db: TestDb, localId: string) => db.prepare("SELECT * FROM cloud_sync_todo_state WHERE local_id = ?").get(localId) as Row | undefined;
+const item = (db: TestDb, id: string) => db.prepare("SELECT * FROM transaction_checklist_items WHERE id = ?").get(id) as Row | undefined;
+const n = (db: TestDb, sql: string, ...p: unknown[]) => (db.prepare(sql).get(...p) as { n: number }).n;
+const pushes = (e: Engine) => e.server.callsTo("cloud_todo_push");
+const pulls = (e: Engine) => e.server.callsTo("cloud_todo_pull");
+const allOps = (e: Engine) => pushes(e).flatMap((c) => c.args.p_ops as Array<Record<string, JsonValue>>);
+const onlineItem = (e: Engine, local: string) => e.server.todos.find((t) => t.entity === "item" && t.localId === local) as FakeTodo;
+const onlineList = (e: Engine, local: string) => e.server.todos.find((t) => t.entity === "checklist" && t.localId === local) as FakeTodo;
+const cursor = (db: TestDb, user = USER_A) => todos.getTodoCursor(db, PROJECT, user);
+
+function setTransport(e: Engine, t: RpcTransport): void {
+  (e.service as unknown as { deps: { client: { transport: RpcTransport } } }).deps.client.transport = t;
+}
+
+function profile(): { db: TestDb; deal: string } {
+  const db = freshDb();
+  db.prepare("INSERT INTO cloud_sync_install (project_ref, install_id, machine_hash, created_at) VALUES (?, ?, NULL, '2026-11-01T00:00:00.000Z')").run(PROJECT, INSTALL);
+  const deal = dealId();
+  insertDeal(db, deal, USER_A);
+  db.prepare(INSERT_CHECKLIST_SQL).run(CL, deal, "tpl-1", "Purchase", 0);
+  db.prepare(INSERT_PRIVATE_CHECKLIST_SQL).run(MY, deal, MY_ITEMS_TEMPLATE_ID, "My items", 1);
+  db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(I1, CL, "Inspection", null, 1, "inspection", 0);
+  db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(I2, MY, "Call lender", null, 0, null, 0);
+  enableForUser(db, PROJECT, USER_A, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" }, new Date());
+  return { db, deal };
+}
+
+function engine(db: TestDb, server?: FakeServer, user = USER_A): Engine {
+  const e = makeEngine(db, { server, user });
+  Object.defineProperty(e.clock, "now", { get: () => new Date(), set: () => undefined, configurable: true });
+  e.server.serverNow = () => Date.now();
+  return e;
+}
+
+/** Turned on, one pass: everything online, the full pull done. */
+async function synced(): Promise<{ db: TestDb; deal: string; e: Engine }> {
+  const { db, deal } = profile();
+  const e = engine(db);
+  await startAndPass(e);
+  expect(outbox(db)).toEqual([]);
+  expect(cursor(db)).toMatchObject({ full_pull_owed: 0 });
+  expect(e.server.todos).toHaveLength(4);
+  return { db, deal, e };
+}
+
+/** A local edit that the capture triggers do not see (as a restored file or a missed change would hold it). */
+function quietly(db: TestDb, fn: () => void): void {
+  db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
+  fn();
+  db.exec("DELETE FROM cloud_sync_applying");
+}
+
+describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
+  // ================================================================ APPLY
+  describe("APPLY: another side's change", () => {
+    it("an AI change to a part reaches the local row and the shadow in the next pass; no op echoes back (W10)", async () => {
+      const { db, e } = await synced();
+      const t = onlineItem(e, I1);
+      expect(e.server.aiSet(t, "note", "from the phone")).toBe("applied");
+      expect(e.server.aiSet(t, "done", { is_checked: true, checked_at: "2026-11-17T04:05:08.266Z" })).toBe("applied");
+      const before = pushes(e).length;
+      await pass(e);
+      expect(item(db, I1)).toMatchObject({ note: "from the phone", is_checked: 1 });
+      expect(shadow(db, I1)).toMatchObject({ note_rev: t.parts.note.rev, done_rev: t.parts.done.rev, note_json: JSON.stringify("from the phone") });
+      expect(outbox(db)).toEqual([]);
+      expect(pushes(e)).toHaveLength(before);
+      await pass(e);
+      expect(pushes(e)).toHaveLength(before);
+    });
+
+    it("this computer's own change comes back with the rev the answer already gave: nothing is written locally and no op is made", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      const r = await pass(e);
+      expect(onlineItem(e, I1).parts.note.value).toBe("mine");
+      expect(r.pull).toMatchObject({ outcome: "done", localWrites: 0 });
+      expect(r.pull!.rows).toBeGreaterThan(0);
+      expect(outbox(db)).toEqual([]);
+    });
+  });
+
+  // ================================================================ PEND
+  describe("PEND: a waiting local part is never overwritten (W2, W26)", () => {
+    it("a part whose op is still waiting keeps the local value and the shadow's rev while another side's change to it is pulled; the server then judges the op", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("local, waiting", I1);
+      const shadowRev = shadow(db, I1)!.note_rev;
+      e.server.aiSet(onlineItem(e, I1), "note", "from the phone", Date.now() - 60_000);
+      e.server.aiSet(onlineItem(e, I1), "title", "Inspection report");
+      // the push answers `locked` (not kept by the server: retried), so the op stays waiting through the pull
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_push"
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((o) => ({ op_id: o.op_id, status: "locked" })) }, error: null, status: 200 }
+          : undefined;
+      await pass(e);
+      expect(item(db, I1)).toMatchObject({ note: "local, waiting", title: "Inspection report" });
+      expect(shadow(db, I1)!.note_rev).toBe(shadowRev);
+      expect(outbox(db).map((r) => `${r.local_id}:${r.part}`)).toEqual([`${I1}:note`]);
+      e.server.override = null;
+      await pass(e);
+      // the local edit was made after the phone's: it wins by time, everywhere
+      expect(onlineItem(e, I1).parts.note.value).toBe("local, waiting");
+      expect(item(db, I1)!.note).toBe("local, waiting");
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("W26: an AI app removes an item while a local note edit waits: after one pass the item is gone here, its note is in the trash and online (kept for a restore), nothing waits", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("edited offline", I2);
+      e.server.removeOnline(onlineItem(e, I2));
+      await pass(e);
+      expect(item(db, I2)).toBeUndefined();
+      const trash = db.prepare("SELECT payload_json FROM cloud_sync_todo_trash WHERE local_id = ?").get(I2) as { payload_json: string };
+      expect(JSON.parse(trash.payload_json).item.note).toBe("edited offline");
+      expect(onlineItem(e, I2).parts.note.value).toBe("edited offline");
+      expect(onlineItem(e, I2).removed).toBe(true);
+      expect(outbox(db)).toEqual([]);
+    });
+  });
+
+  // ================================================================ REM
+  describe("REM: removal, restore, purge, new todos", () => {
+    function linkEvidence(db: TestDb, itemId: string): void {
+      db.prepare("INSERT INTO emails (id, user_id, external_id, source, subject) VALUES (?, ?, 'ext-1', 'gmail', 'Report')").run(fid(9, 1), USER_A);
+      db.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES (?, ?, 'email', 'Report', 0)").run(fid(10, 1), itemId);
+      db.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)").run(fid(11, 1), fid(10, 1), fid(9, 1));
+    }
+
+    it("removed online: deleted here under the guard, archived to the trash with its links (D7), no op; restored online: created again with its pulled values and the links whose evidence still exists (W35)", async () => {
+      const { db, e } = await synced();
+      linkEvidence(db, I1);
+      db.prepare("INSERT INTO messages (id, user_id, channel, direction, body_text, sent_at) VALUES (?, ?, 'sms', 'inbound', 'x', '2026-11-01T00:00:00Z')").run(fid(12, 1), USER_A);
+      db.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES (?, ?, 'text', 'Text', 1)").run(fid(10, 2), I1);
+      db.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, message_id) VALUES (?, ?, 'text', ?)").run(fid(11, 2), fid(10, 2), fid(12, 1));
+      const t = onlineItem(e, I1);
+      e.server.removeOnline(t);
+      await pass(e);
+      expect(item(db, I1)).toBeUndefined();
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE local_id = ?", I1)).toBe(1);
+      expect(outbox(db)).toEqual([]);
+      expect(shadow(db, I1)).toMatchObject({ removed_rev: t.parts.removed.rev });
+      // the text the second link pointed at is gone before the restore
+      db.prepare("DELETE FROM messages WHERE id = ?").run(fid(12, 1));
+      e.server.restoreOnline(t);
+      e.server.aiSet(t, "note", "changed while removed");
+      await pass(e);
+      expect(item(db, I1)).toMatchObject({ checklist_id: CL, title: "Inspection", note: "changed while removed", is_required: 1 });
+      expect(db.prepare("SELECT id FROM transaction_checklist_links WHERE item_id = ? ORDER BY id").all(I1)).toEqual([{ id: fid(10, 1) }, { id: fid(10, 2) }]);
+      expect(db.prepare("SELECT id FROM transaction_checklist_link_members ORDER BY id").all()).toEqual([{ id: fid(11, 1) }]);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE local_id = ?", I1)).toBe(0);
+      expect(outbox(db)).toEqual([]);
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("a checklist removed online goes here with its items (archived); restored online, it comes back with its items although their rows were not renumbered (observed O5f)", async () => {
+      const { db, e } = await synced();
+      const cl = onlineList(e, CL);
+      e.server.removeOnline(cl);
+      await pass(e);
+      expect(db.prepare("SELECT id FROM transaction_checklists WHERE id = ?").get(CL)).toBeUndefined();
+      expect(item(db, I1)).toBeUndefined();
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE removed_with = ?", CL)).toBe(1);
+      expect(outbox(db)).toEqual([]);
+      e.server.restoreOnline(cl);
+      await pass(e);
+      expect(db.prepare("SELECT template_name FROM transaction_checklists WHERE id = ?").get(CL)).toEqual({ template_name: "Purchase" });
+      expect(item(db, I1)).toMatchObject({ checklist_id: CL, title: "Inspection" });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash")).toBe(0);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("purged online: the local row, the shadow and the trash row go", async () => {
+      const { db, e } = await synced();
+      const t = onlineItem(e, I2);
+      e.server.removeOnline(t);
+      await pass(e);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE local_id = ?", I2)).toBe(1);
+      e.server.purgeOnline(t);
+      await pass(e);
+      expect(shadow(db, I2)).toBeUndefined();
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE local_id = ?", I2)).toBe(0);
+      expect(item(db, I2)).toBeUndefined();
+    });
+
+    it("a todo added online (an AI app) is created here with the cloud's id, never sent back as a create (W5); a later local tick goes as a set and applies", async () => {
+      const { db, e } = await synced();
+      const added = e.server.aiAdd(onlineList(e, MY), "Book the movers");
+      const before = allOps(e).length;
+      await pass(e);
+      expect(item(db, added.id)).toMatchObject({ checklist_id: MY, title: "Book the movers", is_checked: 0 });
+      expect(shadow(db, added.id)).toMatchObject({ cloud_id: added.id, title_rev: 1 });
+      expect(allOps(e)).toHaveLength(before);
+      // the daily scan finds nothing to send for it
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, added.id);
+      await pass(e);
+      expect(allOps(e).slice(before).map((o) => `${o.kind}:${o.part}`)).toEqual(["set:done"]);
+      expect((onlineItem(e, added.id).parts.done.value as Row).is_checked).toBe(true);
+      expect(e.server.todos.filter((x) => x.entity === "item")).toHaveLength(3);
+    });
+  });
+
+  // ================================================================ PARK
+  describe("PARK: rows that cannot be applied yet", () => {
+    it("an item that arrives before its checklist (one row a page) is parked, then applied in the same pull once the checklist arrives; nothing stays parked", async () => {
+      const { db, e } = await synced();
+      // a new My items list online (the server makes one when an AI app adds to a deal without it) is renumbered
+      // after its item, as a later order change would (PR-2 review: child before parent)
+      const list: FakeTodo = {
+        ...onlineList(e, MY),
+        id: fid(97, 1),
+        localId: fid(97, 1),
+        templateId: "tpl-new",
+        fields: { template_name: "Closing", is_private: false },
+        changeSeq: e.server.nextSeq(USER_A),
+        parts: { ...onlineList(e, MY).parts, order: { rev: 1, value: 5, at: Date.now(), by: "ai_app:conn-1", edit_seq: null } },
+      };
+      e.server.todos.push(list);
+      const child = e.server.aiAdd(list, "Final walk-through");
+      list.changeSeq = e.server.nextSeq(USER_A);
+      expect((child.changeSeq as number) < list.changeSeq).toBe(true);
+      const client = new CloudClient(e.server.transport, 5_000);
+      const r = await pullTodos({
+        db, client, projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: () => new Date(), guard: () => undefined, stopOn: () => undefined, pageSize: 1,
+      });
+      expect(r.outcome).toBe("done");
+      expect(r.parked).toBeGreaterThan(0);
+      expect(db.prepare("SELECT template_name FROM transaction_checklists WHERE id = ?").get(list.id)).toEqual({ template_name: "Closing" });
+      expect(item(db, child.id)).toMatchObject({ checklist_id: list.id, title: "Final walk-through" });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(0);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("a todo of a deal no longer on this computer is skipped (not parked, not created)", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(deal);
+      await pass(e);
+      expect(e.server.softRemovedDeals).toHaveLength(1);
+      // a full pull returns the removed deal's todos again
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
+      const r = await pass(e);
+      expect(r.pull).toMatchObject({ outcome: "done", fullPullDone: true, parked: 0, localWrites: 0 });
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklist_items")).toBe(0);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(0);
+    });
+  });
+
+  // ================================================================ ACID
+  describe("ACID: the page and its cursor pair are one transaction", () => {
+    it("W4: a failure at the cursor write rolls the page back: the local row, the shadow and the cursor stay as before, no guard row; the next pass applies the page", async () => {
+      const { db, e } = await synced();
+      const c0 = cursor(db);
+      e.server.aiSet(onlineItem(e, I1), "note", "from the phone");
+      const real = db.prepare.bind(db);
+      (db as { prepare: unknown }).prepare = (sql: string) => {
+        if (sql.startsWith("UPDATE cloud_sync_todo_cursor SET last_seq = ?, horizon = ?")) throw Object.assign(new Error("disk"), { code: "SQLITE_FULL" });
+        return real(sql);
+      };
+      await expect(pass(e)).rejects.toThrow("disk");
+      (db as { prepare: unknown }).prepare = real;
+      expect(item(db, I1)!.note).toBeNull();
+      expect(shadow(db, I1)!.note_json).toBe("null");
+      expect(cursor(db)).toEqual(c0);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I2);
+      expect(outbox(db).map((r) => r.part)).toEqual(["done"]);
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("from the phone");
+      expect(cursor(db)!.last_seq).toBeGreaterThan(c0!.last_seq);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("a crash between pages: the pages before it stay applied with their (next_after, horizon); the next pull resumes from there and ends equal to an uninterrupted pull; a re-delivered page changes nothing", async () => {
+      const { db, e } = await synced();
+      await pass(e); // the cursor passes this computer's own creates
+      for (const [local, note] of [[I1, "one"], [I2, "two"]] as const) e.server.aiSet(onlineItem(e, local), "note", note);
+      e.server.aiAdd(onlineList(e, CL), "Three");
+      const c0 = cursor(db)!;
+      const client = new CloudClient(e.server.transport, 5_000);
+      let calls = 0;
+      const flaky = new CloudClient(async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull" && ++calls === 2) throw new Error("network");
+        return e.server.transport(fn, args, signal);
+      }, 5_000);
+      const deps = { db, projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: () => new Date(), guard: () => undefined, stopOn: () => undefined, pageSize: 1 };
+      const first = await pullTodos({ ...deps, client: flaky });
+      expect(first).toMatchObject({ outcome: "failed", pages: 1 });
+      const mid = cursor(db)!;
+      expect(mid.last_seq).toBeGreaterThan(c0.last_seq);
+      expect(mid.horizon).toBe(0);
+      expect(item(db, I1)!.note).toBe("one");
+      expect(item(db, I2)!.note).toBeNull();
+      // the resumed pull sends the stored pair
+      const before = pulls(e).length;
+      const second = await pullTodos({ ...deps, client });
+      expect(second.outcome).toBe("done");
+      const sent = e.server.calls.filter((c) => c.fn === "cloud_todo_pull").slice(before);
+      expect(sent[0].args).toMatchObject({ p_after_seq: mid.last_seq, p_horizon: mid.horizon });
+      expect(item(db, I2)!.note).toBe("two");
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE title = 'Three'")).toBe(1);
+      // re-delivery: the same pages from the earlier cursor (a crash after commit, before the next page)
+      const snap = JSON.stringify([db.prepare("SELECT * FROM transaction_checklist_items ORDER BY id").all(), db.prepare("SELECT * FROM cloud_sync_todo_state ORDER BY local_id").all()]);
+      db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = ?, horizon = ?").run(c0.last_seq, c0.horizon);
+      const again = await pullTodos({ ...deps, client });
+      expect(again.outcome).toBe("done");
+      expect(again.localWrites).toBe(0);
+      const snap2 = JSON.stringify([db.prepare("SELECT * FROM transaction_checklist_items ORDER BY id").all(), db.prepare("SELECT * FROM cloud_sync_todo_state ORDER BY local_id").all().map((r) => ({ ...(r as Row), updated_at: (JSON.parse(snap)[1] as Row[]).find((x) => x.local_id === (r as Row).local_id)?.updated_at }))]);
+      expect(snap2).toBe(snap);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("C24: a user edit made while a pull call is in flight is recorded by the capture trigger (the page is applied after it, synchronously) and sent", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "title", "Inspection (phone)");
+      const t = e.server.transport;
+      let edited = false;
+      setTransport(e, async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull" && !edited) {
+          edited = true;
+          db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("typed during the pull", I1);
+        }
+        return t(fn, args, signal);
+      });
+      await pass(e);
+      expect(item(db, I1)).toMatchObject({ note: "typed during the pull", title: "Inspection (phone)" });
+      expect(outbox(db).map((r) => r.part)).toEqual(["note"]);
+      await pass(e);
+      expect(onlineItem(e, I1).parts.note.value).toBe("typed during the pull");
+      expect(outbox(db)).toEqual([]);
+    });
+  });
+
+  // ================================================================ CUR
+  describe("CUR: the cursor pair and resync", () => {
+    it("a full pull starts at 0 without a horizon; every later call sends the stored next_after and horizon; no pass restarts a full pull", async () => {
+      const { db, e } = await synced();
+      expect(pulls(e)[0].args).toMatchObject({ p_after_seq: 0, p_horizon: null });
+      e.server.aiSet(onlineItem(e, I1), "note", "x");
+      const r = await pass(e);
+      const last = pulls(e).at(-1)!.args;
+      expect(last.p_after_seq).toBeGreaterThan(0);
+      expect(typeof last.p_horizon).toBe("number");
+      expect(r.pull).toMatchObject({ resyncs: 0, fullPullDone: false });
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0, horizon: 0 });
+    });
+
+    it("resync_required: nothing of that answer is applied, the cursor goes back to 0 with no horizon and a full pull owed; the full pull then deletes nothing (W22)", async () => {
+      const { db, e } = await synced();
+      // a todo removed and purged online while this computer's cursor sits below it
+      const gone = e.server.aiAdd(onlineList(e, CL), "Temporary");
+      await pass(e);
+      expect(item(db, gone.id)).toBeDefined();
+      const c = cursor(db)!;
+      db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = ?").run(c.last_seq - 1);
+      e.server.removeOnline(gone);
+      e.server.purgeOnline(gone);
+      e.server.aiSet(onlineItem(e, I1), "note", "in the resync answer");
+      // the answer says resync; the next call fails, so only that answer is seen this pass
+      const t = e.server.transport;
+      let k = 0;
+      setTransport(e, async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull" && ++k === 2) throw new Error("network");
+        return t(fn, args, signal);
+      });
+      const r = await pass(e);
+      expect(r.pull).toMatchObject({ outcome: "failed", resyncs: 1, pages: 0 });
+      expect(item(db, I1)!.note).toBeNull();
+      expect(item(db, gone.id)).toBeDefined();
+      expect(cursor(db)).toMatchObject({ last_seq: 0, horizon: null, full_pull_owed: 1 });
+      setTransport(e, t);
+      const r2 = await pass(e);
+      expect(r2.pull).toMatchObject({ outcome: "done", fullPullDone: true });
+      expect(item(db, I1)!.note).toBe("in the resync answer");
+      // the purged todo goes because its row says purged; every other local todo stays
+      expect(item(db, gone.id)).toBeUndefined();
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklist_items")).toBe(2);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0 });
+    });
+  });
+
+  // ================================================================ LOCK
+  describe("LOCK: a locked deal (plan §2.4)", () => {
+    it("another side's change on a deal locked here is not applied: the shadow takes it and this computer's value is sent back with held_locked, which wins causally", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai during review");
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      const held = allOps(e).filter((o) => o.held_locked === true);
+      expect(held.map((o) => `${o.kind}:${o.part}:${o.local_id}`)).toEqual([`set:note:${I1}`]);
+      expect(onlineItem(e, I1).parts.note.value).toBeNull();
+      expect(outbox(db)).toEqual([]);
+      // unlocked: another side's change applies again
+      db.prepare("UPDATE transactions SET submission_status = 'not_submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai after review");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("ai after review");
+    });
+  });
+
+  // ================================================================ EVT
+  describe("EVT: conflict events", () => {
+    it("a conflict event becomes one notice; a re-delivered pull adds none", async () => {
+      const { db, e } = await synced();
+      // a newer phone change, then this computer's older edit of the same part (made before, sent after)
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "phone, newer");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("phone, newer");
+      const notices = () => db.prepare("SELECT entity, local_id, part, kind, actor_kind, change_seq FROM cloud_sync_todo_notices WHERE kind = 'conflict'").all() as Row[];
+      expect(notices()).toEqual([{ entity: "item", local_id: I1, part: "note", kind: "conflict", actor_kind: "desktop", change_seq: expect.any(Number) }]);
+      const other = JSON.parse((db.prepare("SELECT other_json FROM cloud_sync_todo_notices WHERE kind = 'conflict'").get() as { other_json: string }).other_json);
+      expect(other).toMatchObject({ outcome: "lost", loser_value: "mine, older", winner_value: "phone, newer" });
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(notices()).toHaveLength(1);
+    });
+  });
+
+  // ================================================================ R3
+  describe("R3: the counter after a restore", () => {
+    it("the restore pull raises the rewound counter to install_max_edit_seq and clears rewound_at; the next edit outranks this computer's stored edit_seq", async () => {
+      const { db, e } = await synced();
+      for (let i = 0; i < 4; i++) {
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(`v${i}`, I1);
+        await pass(e);
+      }
+      const stored = onlineItem(e, I1).parts.note.edit_seq as number;
+      db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = 1").run();
+      prepareRestoredFile(db);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter WHERE rewound_at IS NOT NULL")).toBe(1);
+      await pass(e);
+      expect(db.prepare("SELECT edit_seq, rewound_at FROM cloud_sync_todo_counter").get()).toEqual({ edit_seq: stored, rewound_at: null });
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after the restore", I1);
+      expect((outbox(db)[0].edit_seq as number) > stored).toBe(true);
+    });
+
+    it("two local users: the counter stays rewound until the second user's restore pull is done too", async () => {
+      const { db, e } = await synced();
+      const deal = dealId();
+      insertDeal(db, deal, USER_B);
+      db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 80), deal, "tpl-b", "B list", 0);
+      enableForUser(db, PROJECT, USER_B, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" }, new Date());
+      prepareRestoredFile(db);
+      expect(cursor(db, USER_B)).toMatchObject({ full_pull_kind: "restore" });
+      await pass(e);
+      expect(cursor(db, USER_A)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter WHERE rewound_at IS NOT NULL")).toBe(1);
+      const eb = engine(db, new FakeServer(USER_B), USER_B);
+      await startAndPass(eb);
+      expect(cursor(db, USER_B)).toMatchObject({ full_pull_owed: 0 });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter WHERE rewound_at IS NOT NULL")).toBe(0);
+    });
+  });
+
+  // ================================================================ LOOP
+  describe("LOOP: a create answered with a kept refusal", () => {
+    it("the todo's later part and removal ops are dropped with a notice instead of answering not_found every pass, and no later scan queues the create again", async () => {
+      const { db, e } = await synced();
+      db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 9), CL, "Refused", null, 0, null, 5);
+      e.server.override = (fn, args) => {
+        if (fn !== "cloud_todo_push") return undefined;
+        const ops = args.p_ops as Array<Record<string, JsonValue>>;
+        if (!ops.some((o) => o.local_id === fid(4, 9) && o.kind === "create_item")) return undefined;
+        return { data: { ok: true, results: ops.map((o) => ({ op_id: o.op_id, status: "rejected", reason: "invalid_value", field: "title" })) }, error: null, status: 200 };
+      };
+      await pass(e);
+      e.server.override = null;
+      expect(outbox(db)).toEqual([]);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("note on it", fid(4, 9));
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, fid(4, 9));
+      const before = allOps(e).length;
+      await pass(e);
+      await pass(e);
+      expect(allOps(e).slice(before).filter((o) => o.local_id === fid(4, 9))).toEqual([]);
+      expect(outbox(db)).toEqual([]);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_notices WHERE kind = 'dropped_not_online' AND local_id = ?", fid(4, 9))).toBe(2);
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+    });
+  });
+
+  // ================================================================ LWF
+  describe("LWF: a failed local write-back (PR-4a review A)", () => {
+    it("is re-applied from the shadow before the scan, so the scan never sends the old local value against the matching base", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "the winner");
+      await pass(e);
+      // as a confirm whose write-back failed leaves it: shadow on the winner, local row on the old value, a notice
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("the loser", I1));
+      db.prepare(
+        "INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, created_at) VALUES (?, ?, 'item', ?, 'note', 'local_write_failed', 'x')",
+      ).run(PROJECT, USER_A, I1);
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
+      const before = allOps(e).length;
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("the winner");
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_notices WHERE kind = 'local_write_failed' AND dismissed_at IS NULL")).toBe(0);
+      expect(allOps(e)).toHaveLength(before);
+      expect(onlineItem(e, I1).parts.note.value).toBe("the winner");
+    });
+  });
+
+  // ================================================================ W28
+  describe("W28: install_removed (D2, E1)", () => {
+    it("user A is stopped (persisted, no server call on later passes); user B on the same computer keeps saving under the same install id; A's reclaim resumes A on the same id; nothing of B changes", async () => {
+      const { db, e } = await synced();
+      const deal = dealId();
+      insertDeal(db, deal, USER_B);
+      db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 80), deal, "tpl-b", "B list", 0);
+      enableForUser(db, PROJECT, USER_B, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" }, new Date());
+      const serverB = new FakeServer(USER_B);
+      const eb = engine(db, serverB, USER_B);
+      await startAndPass(eb);
+      expect(serverB.deals.map((d) => d.install)).toEqual([INSTALL]);
+      // another computer removes A's copy of this computer
+      e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("while removed", I1);
+      const r = await pass(e);
+      expect(r.outcome).toBe("install_removed");
+      expect(todos.installRemovedAt(db, PROJECT, USER_A)).not.toBeNull();
+      // the once-per-launch status check, then no call at all
+      const calls = e.server.calls.length;
+      const r2 = await pass(e);
+      expect(r2.outcome).toBe("install_removed");
+      expect(e.server.calls.slice(calls).map((c) => c.fn)).toEqual(["cloud_install_status"]);
+      const calls2 = e.server.calls.length;
+      await pass(e);
+      expect(e.server.calls.length).toBe(calls2);
+      expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
+      // B: unaffected
+      expect(todos.installRemovedAt(db, PROJECT, USER_B)).toBeNull();
+      db.prepare("UPDATE transaction_checklists SET sort_order = 4 WHERE id = ?").run(fid(3, 80));
+      await pass(eb);
+      expect(serverB.todos.find((t) => t.localId === fid(3, 80))!.parts.order.value).toBe(4);
+      const bState = JSON.stringify(db.prepare("SELECT * FROM cloud_sync_todo_state WHERE owner_user_id = ? ORDER BY local_id").all(USER_B));
+      // A's reclaim: only A's register row, only A's local state; same install id
+      const res = await e.service.reclaimInstall();
+      expect(res).toEqual({ success: true });
+      expect(e.server.removedInstalls.size).toBe(0);
+      expect(todos.installRemovedAt(db, PROJECT, USER_A)).toBeNull();
+      await e.service.runner!.whenIdle();
+      expect(e.server.deals.map((d) => [d.id, d.install])).toHaveLength(1);
+      expect(e.server.deals[0].install).toBe(INSTALL);
+      expect(e.server.todos.filter((t) => t.entity === "item")).toHaveLength(2);
+      expect(JSON.stringify(db.prepare("SELECT * FROM cloud_sync_todo_state WHERE owner_user_id = ? ORDER BY local_id").all(USER_B))).toBe(bState);
+      expect(db.prepare("SELECT install_id FROM cloud_sync_install").all()).toEqual([{ install_id: INSTALL }]);
+    });
+
+    it("the once-per-launch status check resumes a stopped user whose copy was restored elsewhere (no register row), on the same install id", async () => {
+      const { db, e } = await synced();
+      e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      expect((await pass(e)).outcome).toBe("install_removed");
+      // restored from another computer: the register row is gone and the deals are live again
+      e.server.removedInstalls.clear();
+      for (const d of [...e.server.softRemovedDeals]) e.server.respond("cloud_upsert_deal", { p_expected_user_id: USER_A, p_deal: { source_install_id: d.install, local_id: d.localId, content_hash: d.hash } });
+      const later = engine(db, e.server); // a new launch
+      const r = await startAndPass(later);
+      expect(r!.outcome).toBe("done");
+      expect(todos.installRemovedAt(db, PROJECT, USER_A)).toBeNull();
+      expect(onlineItem(later, I1).parts.note.value).toBe("kept");
+    });
+  });
+
+  // ================================================================ ORPH
+  describe("ORPH: Settings' 'saved online but not on this computer'", () => {
+    it("a deal deleted here is removed online (kept 30 days): the daily reconcile does not count it, and 'Delete them' sends no delete for it", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(deal);
+      await pass(e);
+      expect(e.server.softRemovedDeals).toHaveLength(1);
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      await pass(e);
+      const listed = e.server.calls.filter((c) => c.fn === "cloud_list_install_rows" && c.args.p_kind === "deal");
+      expect(listed.length).toBeGreaterThan(0);
+      const summary = JSON.parse((db.prepare("SELECT last_state_json FROM cloud_sync_settings WHERE user_id = ?").get(USER_A) as { last_state_json: string }).last_state_json);
+      expect(summary.orphanDeals).toBe(0);
+      const deletes = e.server.callsTo("cloud_delete_deal").length;
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(deletes);
+    });
+  });
+});
