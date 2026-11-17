@@ -902,6 +902,24 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ deals and waiting
   describe("ops wait for their deal; ops of a deal gone everywhere are dropped", () => {
+    it("a deal deleted online and purged there (30 days), then eligible again under a NEW online id: its todos are created on the new deal", async () => {
+      const { db, deal, e } = await sentOnce();
+      db.prepare("UPDATE transactions SET status = 'rejected' WHERE id = ?").run(deal);
+      await pass(e);
+      const oldId = e.server.softRemovedDeals.find((d) => d.localId === deal)!.id;
+      // the purge: the deal and its todos are gone online
+      e.server.softRemovedDeals = [];
+      e.server.todos = [];
+      db.prepare("UPDATE transactions SET status = 'active' WHERE id = ?").run(deal);
+      await pass(e);
+      const newDeal = e.server.deals.find((d) => d.localId === deal)!;
+      expect(newDeal.id).not.toBe(oldId);
+      expect(e.server.todos.filter((t) => t.dealId === newDeal.id).map((t) => `${t.entity}:${t.localId}`).sort()).toEqual(
+        [`checklist:${CL}`, `checklist:${MY}`, `item:${I1}`, `item:${I2}`],
+      );
+      expect(outbox(db)).toEqual([]);
+    });
+
     it("a deal deleted online (no longer eligible), then eligible again (un-removed under the same online id): its todos are sent again and answer exists, none duplicated", async () => {
       const { db, deal, e } = await sentOnce();
       db.prepare("UPDATE transactions SET status = 'rejected' WHERE id = ?").run(deal);
