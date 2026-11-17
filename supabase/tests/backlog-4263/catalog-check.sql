@@ -1,7 +1,7 @@
 -- BACKLOG-4263 PR-1 catalogue check. Read-only, one statement (kt-sql or execute_sql).
 -- Lists every anon-callable public mcp function with md5(prosrc); after the apply of 20261118100000:
 -- anon_mcp_count 10 (the nine earlier ones plus mcp_list_all_deals), mcp_function_count 41,
--- reader_md5 411e8f14f218bd9fcc85444bb7a4e240, tool_md5 5b12fa79e9f010af2c7c8752f23d3c9c, ledger_4263 1.
+-- reader_md5 6ea286c67274464080b19fa439b5d9ac, tool_md5 5b12fa79e9f010af2c7c8752f23d3c9c, ledger_4263 1.
 SELECT jsonb_build_object(
  'anon_mcp', (SELECT jsonb_object_agg(p.oid::regprocedure::text, md5(p.prosrc)) FROM pg_proc p
                WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_' AND has_function_privilege('anon', p.oid, 'EXECUTE')),

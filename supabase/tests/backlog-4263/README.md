@@ -19,6 +19,10 @@ every number at 30 characters) and requires it under 2000 bytes, so the first ro
 | `catalog-check.sql` | Read-only, one statement: every anon-callable mcp function with md5(prosrc), and the new objects. |
 | `rollback-4263.sql` | Deletes the tool's call-log rows, restores the 4244 tool CHECK, drops both functions and the ledger row. |
 
+Runbook: rolling back the migration deletes every `mcp_call_log` row of the tool `list_all_deals` (the earlier tool CHECK would refuse them); count them first with `catalog-check.sql` (`call_log_rows_new_tool`) if they are needed.
+
+Known: with `--only`, compose still prints `MUTATION APPLIED` for every mutant it builds, including those it then leaves out; only the selected ones run.
+
 Mutants: exact-string replaces on one function's text from the working tree (the script stops when a
 fragment does not match its stated count), each created in a subtransaction (the reader as
 `mcp_reader`) and checked by `md5(prosrc)`, ACL or a DDL condition before its probe runs. Mutants

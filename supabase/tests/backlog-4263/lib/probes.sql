@@ -120,9 +120,28 @@ BEGIN
     pg_temp.pass(pg_temp.err(pg_temp.la('a1')) = 'OK', 'valid token refused'));
 END $h$;
 
+-- each term of the entitlement check alone: Cloud switched off (d1); licence revoked after Cloud was on,
+-- settings.enabled still true (c1); a state answer of another schema_version (a1, the state function
+-- replaced inside this subtransaction by one that reports schema_version 2)
 CREATE FUNCTION pg_temp.p_ent() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE st jsonb := pg_temp.j(pg_temp.call_as(pg_temp.fx(3), 'SELECT public.get_my_cloud_autosave_state()')); r1 text; r2 text; r3 text; r0 text;
 BEGIN
-  RETURN pg_temp.pass(pg_temp.err(pg_temp.la('d1')) = 'not_entitled' AND pg_temp.nlog('list_all_deals', 'not_entitled') >= 1, pg_temp.la('d1'));
+  r1 := pg_temp.la('d1');
+  r2 := pg_temp.la('c1');
+  r0 := pg_temp.la('a1');
+  ALTER FUNCTION public.get_my_cloud_autosave_state() RENAME TO p4263_state_orig;
+  CREATE FUNCTION public.get_my_cloud_autosave_state() RETURNS jsonb LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
+    AS 'SELECT public.p4263_state_orig() || ''{"schema_version": 2}''::jsonb';
+  GRANT EXECUTE ON FUNCTION public.get_my_cloud_autosave_state() TO authenticated, mcp_reader;
+  r3 := pg_temp.la('a1');
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.err(r1) = 'not_entitled', 'cloud off: ' || left(r1, 120)),
+    pg_temp.pass(st -> 'licensed' = 'false'::jsonb AND st -> 'settings' -> 'enabled' = 'true'::jsonb AND st -> 'schema_version' = '1'::jsonb,
+                 'C fixture state: ' || coalesce(st::text, 'null')),
+    pg_temp.pass(pg_temp.err(r2) = 'not_entitled', 'licence revoked, enabled true: ' || left(r2, 120)),
+    pg_temp.pass(pg_temp.err(r0) = 'OK', 'entitled user refused: ' || left(r0, 120)),
+    pg_temp.pass(pg_temp.err(r3) = 'not_entitled', 'schema_version 2: ' || left(r3, 120)),
+    pg_temp.pass(pg_temp.nlog('list_all_deals', 'not_entitled') >= 3, 'not_entitled not logged'));
 END $h$;
 
 -- every page bounded; at least one row; next_cursor on both stop reasons; maximal page; every deal once

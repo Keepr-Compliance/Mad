@@ -189,6 +189,10 @@ def mutants():
                        [("  IF g.outcome IS DISTINCT FROM 'ok' THEN\n    RETURN public._mcp_refuse(g.outcome);\n  END IF;\n", '', 1)], 'pg_temp.p_tokens()'))
     b.append(fn_mutant('RO_no_read_only', TOOL, [(RO_LINE, '', 1)], 'pg_temp.p_ro()'))
     b.append(fn_mutant('READER_volatile', READER, [('RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER', 'RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER', 1)], P))
+    for tag, old in (('schema_version', "(v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1)\n     OR "),
+                     ('licensed', "\n     OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)"),
+                     ('enabled', "\n     OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true)")):
+        b.append(fn_mutant('ENT_term_dropped_' + tag, READER, [(old, '', 1)], 'pg_temp.p_ent()'))
     b.append(fn_mutant('ENT_no_check', READER,
                        [("  IF (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1)\n     OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)\n"
                          "     OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true) THEN\n    RETURN '{\"not_entitled\":true}'::jsonb;\n  END IF;\n", '', 1)],
@@ -226,6 +230,8 @@ def mutants():
                            [("jsonb_typeof(c.details -> '%s') = 'number' AND " % col, '', 1)], 'pg_temp.p_values()'))
         b.append(fn_mutant('NUM_length_not_checked_' + col, READER,
                            [(" AND octet_length(c.details ->> '%s') <= 30" % col, '', 1)], 'pg_temp.p_values()'))
+        b.append(fn_mutant('NUM_length_31_' + col, READER,
+                           [("octet_length(c.details ->> '%s') <= 30" % col, "octet_length(c.details ->> '%s') <= 31" % col, 1)], 'pg_temp.p_values()'))
     for col, src in (('transaction_type', 'transaction_type'), ('status', 'status'), ('locked', 'lock_reason')):
         b.append(fn_mutant('TXT_not_cut_' + col, READER, [("public._mcp_txt(c.%s, 20)" % src, "c.%s" % src, 1)], 'pg_temp.p_values()'))
     b.append(fn_mutant('ROWMAX_address_not_cut', READER, [("public._mcp_clean(c.property_address, 300)", "public._mcp_strip(c.property_address)", 1)], 'pg_temp.p_rowmax()'))

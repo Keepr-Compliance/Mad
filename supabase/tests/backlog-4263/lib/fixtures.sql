@@ -4,15 +4,16 @@
 --     1 A Cloud on: A1 closed 2026-03-15 (full details, card number in the address), A2 on install I2
 --       (hostile values: type, status and lock text over 20 characters with an invisible character;
 --       sale_price, earnest_money_amount, commission_actual_rate as strings; listing_price,
---       commission_offered_rate, commission_gross_amount as 40-digit numbers; dates not dates),
+--       commission_offered_rate, commission_gross_amount as 31-character numbers; dates not dates),
 --       A3 pending detection, A4 rejected, A5 deleted, A6 closed 2025-12-31 (the other half: the
---       string columns of A2 as 40-digit numbers and the reverse), A7 pending, found by Keepr, locked
+--       string columns of A2 as 31-character numbers and the reverse), A7 pending, found by Keepr, locked
 --     2 B Cloud on: B1
+--     3 C Cloud on, deal DC1, then the licence assignment revoked (settings.enabled stays true)
 --     4 D Cloud on, deal DD1, then settings.enabled false
 --     6 F Cloud on: 420 deals with 78-character addresses (the byte bound binds)
 --     7 G Cloud on: 600 deals with short addresses (the 500-row bound binds)
 --   installs: 301 I1, 302 I2 (A), 303 (B), 306 (F), 307 (G)
---   AI-app tokens: a1 (A), ax (A, expired), b1, d1, f1, g1
+--   AI-app tokens: a1 (A), ax (A, expired), b1, c1, d1, f1, g1
 CREATE TEMP TABLE p4263_fx (k text PRIMARY KEY, v text);
 CREATE FUNCTION pg_temp.id(k text) RETURNS uuid LANGUAGE sql STABLE AS $h$ SELECT v::uuid FROM pg_temp.p4263_fx WHERE p4263_fx.k = id.k $h$;
 CREATE FUNCTION pg_temp.put(k text, v text) RETURNS void LANGUAGE sql AS $h$
@@ -71,7 +72,7 @@ BEGIN
 END $h$;
 
 CREATE FUNCTION pg_temp.base4263() RETURNS jsonb LANGUAGE plpgsql AS $h$
-DECLARE A uuid := pg_temp.fx(1); B uuid := pg_temp.fx(2); D uuid := pg_temp.fx(4); F uuid := pg_temp.fx(6); G uuid := pg_temp.fx(7);
+DECLARE A uuid := pg_temp.fx(1); B uuid := pg_temp.fx(2); C uuid := pg_temp.fx(3); D uuid := pg_temp.fx(4); F uuid := pg_temp.fx(6); G uuid := pg_temp.fx(7);
         O uuid := pg_temp.fx(101); I1 uuid := pg_temp.fx(301); I2 uuid := pg_temp.fx(302);
         t text; dd uuid; out jsonb := '{}';
 BEGIN
@@ -80,19 +81,19 @@ BEGIN
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   SELECT pg_temp.fx(x), 'p4263-' || substr(md5('__RUN__'), 1, 8) || '-' || x || '@example.test', 'authenticated', 'authenticated',
          '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-    FROM unnest(ARRAY[1, 2, 4, 6, 7]) x;
+    FROM unnest(ARRAY[1, 2, 3, 4, 6, 7]) x;
   INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
   SELECT pg_temp.fx(x), 'p4263-' || substr(md5('__RUN__'), 1, 8) || '-' || x || '@example.test', 'email', pg_temp.fx(x)::text, 'Fixture user ' || x
-    FROM unnest(ARRAY[1, 2, 4, 6, 7]) x ON CONFLICT (id) DO NOTHING;
+    FROM unnest(ARRAY[1, 2, 3, 4, 6, 7]) x ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.organizations (id, name, slug, personal_owner_user_id) VALUES
     (O, 'Fixture O', 'p4263-o-' || substr(md5('__RUN__'), 1, 8), NULL);
   INSERT INTO public.organization_members (id, organization_id, user_id, role, license_status)
-  SELECT pg_temp.fx(200 + x), O, pg_temp.fx(x), 'agent', 'active' FROM unnest(ARRAY[1, 2, 4, 6, 7]) x;
+  SELECT pg_temp.fx(200 + x), O, pg_temp.fx(x), 'agent', 'active' FROM unnest(ARRAY[1, 2, 3, 4, 6, 7]) x;
   INSERT INTO public.organization_plans (organization_id, plan_id, feature_overrides)
   SELECT O, (SELECT id FROM public.plans WHERE tier = 'team' ORDER BY sort_order, name LIMIT 1), '{"cloud_autosave_assignable":{"enabled":true}}'::jsonb;
   SET LOCAL session_replication_role = origin;
 
-  FOREACH dd IN ARRAY ARRAY[A, B, D, F, G] LOOP
+  FOREACH dd IN ARRAY ARRAY[A, B, C, D, F, G] LOOP
     out := out || jsonb_build_object('assign_' || dd, pg_temp.err(pg_temp.assign(O, dd, true)), 'on_' || dd, pg_temp.err(pg_temp.onoff(dd, true)));
   END LOOP;
 
@@ -107,9 +108,9 @@ BEGIN
   t := pg_temp.deal(A, pg_temp.dp(I2, 'a2', jsonb_build_object('property_address', '52 Cobble Wren Ct, Larchmont Bay, WA 98998',
          'transaction_type', 'sa' || chr(8203) || 'le-' || repeat('t', 60), 'status', 'act' || chr(8238) || 'ive-' || repeat('s', 60),
          'lock_reason', 'sub' || chr(173) || 'mitted-' || repeat('l', 60),
-         'details', jsonb_build_object('v', 1, 'sale_price', '4111 1111 1111 1111', 'listing_price', 1234567890123456789012345678901234567890::numeric,
-           'earnest_money_amount', '5000', 'commission_offered_rate', 1234567890123456789012345678901234567890::numeric,
-           'commission_actual_rate', '2.5', 'commission_gross_amount', 1234567890123456789012345678901234567890::numeric,
+         'details', jsonb_build_object('v', 1, 'sale_price', '4111 1111 1111 1111', 'listing_price', 1234567890123456789012345678901::numeric,
+           'earnest_money_amount', '5000', 'commission_offered_rate', 1234567890123456789012345678901::numeric,
+           'commission_actual_rate', '2.5', 'commission_gross_amount', 1234567890123456789012345678901::numeric,
            'closing_deadline', 'soon', 'mutual_acceptance_date', 20261201))));
   PERFORM pg_temp.put('A2', pg_temp.cid(t)::text); out := out || jsonb_build_object('A2', pg_temp.st(t));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a3', jsonb_build_object('property_address', '77 Heron Spit Way, Fernhollow, WA 98999',
@@ -122,8 +123,8 @@ BEGIN
   out := out || jsonb_build_object('A5', pg_temp.st(t), 'del_A5', pg_temp.err(pg_temp.deldeal(A, pg_temp.id('A5'))));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a6', jsonb_build_object('property_address', '9 Thistle Gap Rd, Fernhollow, WA 98999', 'status', 'closed',
          'transaction_type', 'purchase', 'closed_at', '2025-12-31T23:30:00.000Z', 'details', jsonb_build_object('v', 1,
-           'sale_price', 1234567890123456789012345678901234567890::numeric, 'listing_price', '480000', 'earnest_money_amount', 1234567890123456789012345678901234567890::numeric,
-           'commission_offered_rate', '2.5', 'commission_actual_rate', 1234567890123456789012345678901234567890::numeric, 'commission_gross_amount', '12000'))));
+           'sale_price', 1234567890123456789012345678901::numeric, 'listing_price', '480000', 'earnest_money_amount', 1234567890123456789012345678901::numeric,
+           'commission_offered_rate', '2.5', 'commission_actual_rate', 1234567890123456789012345678901::numeric, 'commission_gross_amount', '12000'))));
   PERFORM pg_temp.put('A6', pg_temp.cid(t)::text); out := out || jsonb_build_object('A6', pg_temp.st(t));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a7', jsonb_build_object('property_address', '300 Quarry Bend Ave, Larchmont Bay, WA 98998', 'status', 'pending',
          'detection_source', 'auto', 'lock_reason', 'submitted')));
@@ -135,6 +136,10 @@ BEGIN
   t := pg_temp.deal(B, pg_temp.dp(pg_temp.fx(303), 'b1', jsonb_build_object('property_address', '8 Fixture Lane, Larchmont Bay, WA 98998', 'status', 'closed',
          'closed_at', '2026-03-15T12:00:00.000Z', 'details', jsonb_build_object('v', 1, 'sale_price', 999999))));
   PERFORM pg_temp.put('B1', pg_temp.cid(t)::text); out := out || jsonb_build_object('B1', pg_temp.st(t));
+
+  t := pg_temp.deal(C, pg_temp.dp(I1, 'c1', jsonb_build_object('property_address', '5 Lapsed Row, Fernhollow, WA 98999')));
+  out := out || jsonb_build_object('DC1', pg_temp.st(t), 'revoke_C', pg_temp.err(pg_temp.assign(O, C, false)),
+                                   'C_state', pg_temp.call_as(C, 'SELECT public.get_my_cloud_autosave_state()'));
 
   t := pg_temp.deal(D, pg_temp.dp(I1, 'dd1', jsonb_build_object('property_address', '6 Switched Off Ct, Fernhollow, WA 98999')));
   out := out || jsonb_build_object('DD1', pg_temp.st(t));
@@ -165,6 +170,6 @@ BEGIN
 
   PERFORM pg_temp.put('CONN_A1', pg_temp.conn(A, 'a1')::text);
   PERFORM pg_temp.conn(A, 'ax', 'anthropic', true);
-  PERFORM pg_temp.conn(B, 'b1'); PERFORM pg_temp.conn(D, 'd1'); PERFORM pg_temp.conn(F, 'f1'); PERFORM pg_temp.conn(G, 'g1');
+  PERFORM pg_temp.conn(B, 'b1'); PERFORM pg_temp.conn(C, 'c1'); PERFORM pg_temp.conn(D, 'd1'); PERFORM pg_temp.conn(F, 'f1'); PERFORM pg_temp.conn(G, 'g1');
   RETURN out;
 END $h$;
