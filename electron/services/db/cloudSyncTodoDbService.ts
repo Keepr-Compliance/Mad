@@ -123,7 +123,7 @@ export function todoScanAllowed(db: SqlDb, projectRef: string, userId: string): 
  * keeps a part this computer wrote last (PR-4b, see cloudSyncTodoPullDb.ts; 'resync' is set only by
  * resetTodoCursorForFullPull). Callers pass the kind; startTodoTracking keeps a 'restore' still owed.
  */
-export function writeCursorOwed(db: SqlDb, projectRef: string, userId: string, now: Date, kind: "restore" | null = null): void {
+export function writeCursorOwed(db: SqlDb, projectRef: string, userId: string, now: Date, kind: "restore" | "behind" | null = null): void {
   if (hasColumn(db, "cloud_sync_todo_cursor", "horizon")) {
     db.prepare(
       `INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at, horizon, full_pull_kind) VALUES (?, ?, 0, 1, ?, NULL, ?)
@@ -356,9 +356,11 @@ export function scanTodosAllEnabled(db: SqlDb, now: Date): number {
 export function startTodoTracking(db: SqlDb, projectRef: string, userId: string, now: Date): number {
   if (!hasTable(db, "cloud_sync_todo_outbox")) return 0;
   return db.transaction(() => {
-    // A restore pull still owed is never downgraded: an account reset or a reclaim on a restored file must still
-    // let the cloud win (plan §3.4).
-    const owedRestore = getTodoCursor(db, projectRef, userId)?.full_pull_kind === "restore";
+    // A cloud-wins full pull still owed is never downgraded: an account reset or a reclaim on a restored file
+    // ('restore', plan §3.4) or on a file found older than its own online history ('behind', which cannot be
+    // detected again once its first page raised the counter) must still let the cloud win.
+    const owedKind = getTodoCursor(db, projectRef, userId)?.full_pull_kind;
+    const carried = owedKind === "restore" || owedKind === "behind" ? owedKind : null;
     clearTodoStateForUser(db, projectRef, userId);
     // PR-4b: an old one-way record of a checklist or item saved online whose local row is gone (deleted here,
     // the one-way removal never sent) becomes a removal op before the record goes, so the full pull does not
@@ -386,7 +388,7 @@ export function startTodoTracking(db: SqlDb, projectRef: string, userId: string,
       userId,
     );
     seedTodoCounter(db, projectRef);
-    writeCursorOwed(db, projectRef, userId, now, owedRestore ? "restore" : null);
+    writeCursorOwed(db, projectRef, userId, now, carried);
     return 0;
   })();
 }

@@ -1031,6 +1031,49 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "behind" });
     });
 
+    /** A rolled-back file, reclaimed, whose 'behind' pull applied page 1 (the counter is now raised) and then stopped. */
+    async function behindAfterPage1(page2?: "resync") {
+      const { db, e } = await rolledBack();
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      let k = 0;
+      const client = new CloudClient(async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull") {
+          k++;
+          if (k === 2 && page2 === "resync")
+            return { data: { ok: true, head: 999, rows: [], horizon: 998, next_after: 999, install_max_edit_seq: null, resync_required: true }, error: null, status: 200 };
+          if (k === (page2 === "resync" ? 3 : 2)) throw new Error("network");
+        }
+        return e.server.transport(fn, args, signal);
+      }, 5_000);
+      await pullTodos({ db, client, projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: () => new Date(), guard: () => undefined, stopOn: () => undefined, pageSize: 1 });
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "behind" });
+      // page 1 raised the counter to the online max: a new first page could not detect the file again
+      expect((db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter").get() as { edit_seq: number }).edit_seq).toBe(onlineItem(e, I1).parts.note.edit_seq);
+      return { db, e };
+    }
+
+    it("R7a: a resync_required during a 'behind' pull keeps it 'behind' (cloud-wins) to the end: the newer online value comes back and nothing older is pushed", async () => {
+      const { db, e } = await behindAfterPage1("resync");
+      expect(cursor(db)).toMatchObject({ last_seq: 0, horizon: null });
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("newer, from here");
+      expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
+      expect(outbox(db)).toEqual([]);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+    });
+
+    it("R7b: a reclaim while a 'behind' pull is owed carries 'behind' (as a restore is carried); an account reset does the same; the pull stays cloud-wins", async () => {
+      const { db, e } = await behindAfterPage1();
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "behind", last_seq: 0 });
+      preparePass(db, PROJECT, USER_A, "2026-11-21T00:00:00.000Z", undefined, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "behind" });
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("newer, from here");
+      expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
+      expect(outbox(db)).toEqual([]);
+    });
+
     it("R6: a reclaim on a file that is NOT behind stays keep-local: a local value of a part this computer wrote last, never sent, reaches the cloud", async () => {
       const { db, e } = await synced();
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("sent", I1);
