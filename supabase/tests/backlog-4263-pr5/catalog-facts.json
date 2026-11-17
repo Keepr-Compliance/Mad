@@ -1,0 +1,61 @@
+{
+  "migration": "supabase/migrations/20261118130000_backlog_4263_mcp_todo_write_tools.sql",
+  "migration_md5": "5e29e0273ddbde1c1196194f0dba70a5",
+  "replaced": {
+    "public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)": {
+      "old": "bf7192517604c2db532312a7e071a751",
+      "new": "01af714f0b1b252b224077f1bf023e2f"
+    },
+    "public.mcp_authorize_view(text,bytea)": {
+      "old": "879b6c01072494b931e782a6f07b463d",
+      "new": "8e6dc7162dedefd9f8ced48fc26fc8c1"
+    },
+    "public.mcp_authorize_approve(text,bytea,text,bytea)": {
+      "old": "90eac2594c015edc44b3fecc9ec0209b",
+      "new": "bddeb78139828a444715cc77d4482d78"
+    },
+    "public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)": {
+      "old": "cfb0787d8601435bbe47a575155866b8",
+      "new": "ab6a9345c55ab69c77347d9b37e92e9d"
+    },
+    "public.mcp_refresh(text,bytea,text,text,bytea,bytea)": {
+      "old": "b6ccefaa100e0b69df3e16e0a407d740",
+      "new": "a7797a967b1952dec493c48c62328530"
+    },
+    "public._mcp_r_deal_checklists(uuid,boolean,uuid)": {
+      "old": "f6a9f0336a1a070adcf66778afecbce7",
+      "new": "c8b91cac998caf8b9774f8970188574d"
+    }
+  },
+  "new": {
+    "public._mcp_writes_on()": "577abf8a7102c05a6bb43196cc254de2",
+    "public._mcp_granted_scope(text)": "4f7bb0215e9cab1bc998eeedd017bd3d",
+    "public._mcp_conn_can_write(uuid)": "b5ca801bf23e9cc20046c36b82efe416",
+    "public._mcp_todo_item_out(uuid,uuid)": "66ed6c0f610df5b910586b618ad14b8f",
+    "public._mcp_todo_call(text,bytea,text,text,jsonb)": "02f2f6a3ce4392f40d27e34defd1a106",
+    "public.mcp_write_access(text,bytea,text)": "7729e001d5bcfec47fba3abf79897d24",
+    "public.mcp_update_todo(text,bytea,text,text,jsonb,text)": "6e1b1653dea3374900d9a1cf8587323b",
+    "public.mcp_add_todo(text,bytea,text,text,text,text,text,text)": "95e1d7688be6adbfdf2d15a2d65a46af",
+    "public.mcp_remove_todo(text,bytea,text,text,text)": "87ba918ce134bd6b38902b87dbce5643",
+    "public.mcp_restore_todo(text,bytea,text,text,text)": "d2a773ec97e68b82ca267a21bd44cf2c"
+  },
+  "anon_callable_mcp_after": [
+    "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+    "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+    "mcp_check_access(text,bytea,text)",
+    "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+    "mcp_get_deal(text,bytea,text,text)",
+    "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+    "mcp_get_status(text,bytea,text)",
+    "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+    "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+    "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+    "mcp_register_client(text,text,text,text[],bytea)",
+    "mcp_remove_todo(text,bytea,text,text,text)",
+    "mcp_restore_todo(text,bytea,text,text,text)",
+    "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+    "mcp_write_access(text,bytea,text)"
+  ],
+  "apply_md5": "47f2f8626c93b27f24b323de25b81a5c",
+  "rollback_md5": "906220817ed6944985bdecbc0cc7a0b6"
+}
