@@ -28,9 +28,11 @@ import { DRIVER, type TestDb } from "./helpers/sqlite";
 import { dealId, freshDb, insertDeal, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
 import { FakeServer, type FakeTodo } from "./helpers/fakeServer";
-import { enableForUser } from "../../db/cloudSyncDbService";
+import { enableForUser, preparePass, reclaimInstallForUser } from "../../db/cloudSyncDbService";
 import * as todos from "../../db/cloudSyncTodoDbService";
 import { applyTodoPage } from "../../db/cloudSyncTodoPullDb";
+import * as todosPull from "../../db/cloudSyncTodoPullDb";
+import { MAX_BYTES_PER_CALL, MAX_OPS_PER_CALL } from "../todos/sender";
 import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import { pullTodos } from "../todos/puller";
 import { CloudClient, type RpcTransport } from "../cloudClient";
@@ -700,6 +702,119 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(asked).toBe(2);
       expect(r.outcome).toBe("done");
       expect(todos.installRemovedAt(db, PROJECT, USER_A)).toBeNull();
+    });
+  });
+
+  // ================================================================ KIND (SR review of #3594: R1-R4)
+  describe("KIND: whose value wins in a pull", () => {
+    it("R2: an incremental pull writes the cloud's value locally even for a part this computer wrote last", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("sent from here", I1);
+      await pass(e);
+      const online = onlineItem(e, I1).parts.note;
+      expect(online.by).toBe(`desktop:${INSTALL}`);
+      // the shadow one rev behind and the local row on another value, with no op waiting (as after a lost write-back)
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("stale here", I1));
+      db.prepare("UPDATE cloud_sync_todo_state SET note_rev = ? WHERE local_id = ?").run(online.rev - 1, I1);
+      onlineItem(e, I1).changeSeq = e.server.nextSeq(USER_A);
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("sent from here");
+      expect(outbox(db)).toEqual([]);
+      expect(onlineItem(e, I1).parts.note.value).toBe("sent from here");
+    });
+
+    it("R1: a full pull owed by resync_required lets the cloud win: a profile rolled back on this computer does not push its older values over newer ones", async () => {
+      const { db, e } = await synced();
+      await pass(e);
+      const old = { cursor: cursor(db)!, shadow: shadow(db, I1)!, note: item(db, I1)!.note };
+      // newer values sent from this computer after that point
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer, from here", I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I1);
+      await pass(e);
+      expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
+      // a purge online moves the horizon past the old cursor
+      const gone = e.server.aiAdd(onlineList(e, CL), "Temporary");
+      e.server.removeOnline(gone);
+      e.server.purgeOnline(gone);
+      // the file is rolled back (Time Machine, a copy): the old local values, shadow and cursor, no outbox
+      quietly(db, () => {
+        db.prepare("UPDATE transaction_checklist_items SET note = ?, is_checked = 0, checked_at = NULL WHERE id = ?").run(old.note, I1);
+        db.prepare("UPDATE cloud_sync_todo_state SET note_rev = ?, note_json = ?, done_rev = ?, done_json = ? WHERE local_id = ?").run(
+          old.shadow.note_rev, old.shadow.note_json, old.shadow.done_rev, old.shadow.done_json, I1);
+        db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = ?, horizon = ?").run(old.cursor.last_seq, old.cursor.horizon);
+      });
+      expect(outbox(db)).toEqual([]);
+      const r = await pass(e);
+      expect(r.pull).toMatchObject({ resyncs: 1, fullPullDone: true });
+      expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
+      expect((onlineItem(e, I1).parts.done.value as Row).is_checked).toBe(true);
+      expect(item(db, I1)).toMatchObject({ note: "newer, from here", is_checked: 1 });
+      expect(outbox(db)).toEqual([]);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+    });
+
+    it("R1: a resync during the full pull a turn-on owes keeps that pull's kind (its outbox was cleared, so this computer's own values stay)", () => {
+      const { db } = profile();
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: null });
+      todosPull.resetTodoCursorForFullPull(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: null });
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 0, last_seq = 9, horizon = 0").run();
+      todosPull.resetTodoCursorForFullPull(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "resync", last_seq: 0, horizon: null });
+    });
+
+    it("R3: a resync_required answered in the middle of a restore pull keeps it a restore pull", async () => {
+      const { db, e } = await synced();
+      prepareRestoredFile(db);
+      expect(cursor(db)).toMatchObject({ full_pull_kind: "restore" });
+      // page 1 applies; page 2 answers resync (the shape cloud_todo_pull gives, observed O8c); page 3 fails
+      let k = 0;
+      const client = new CloudClient(async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull") {
+          k++;
+          if (k === 2) return { data: { ok: true, head: 99, rows: [], horizon: 98, next_after: 99, install_max_edit_seq: null, resync_required: true }, error: null, status: 200 };
+          if (k === 3) throw new Error("network");
+        }
+        return e.server.transport(fn, args, signal);
+      }, 5_000);
+      const r = await pullTodos({ db, client, projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: () => new Date(), guard: () => undefined, stopOn: () => undefined, pageSize: 1 });
+      expect(r).toMatchObject({ outcome: "failed", resyncs: 1 });
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "restore", last_seq: 0 });
+    });
+
+    it("R4: an account reset (or a reclaim) while a restore pull is owed does not downgrade it", async () => {
+      const { db } = await synced();
+      prepareRestoredFile(db);
+      // the account was turned off and on elsewhere: accepted_at changed
+      preparePass(db, PROJECT, USER_A, "2026-11-20T00:00:00.000Z", undefined, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "restore" });
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "restore" });
+    });
+  });
+
+  // ================================================================ BATCH
+  describe("BATCH: the sender's caps on a full batch", () => {
+    it("250 todos with long notes go out in calls of at most 200 ops and 921,600 bytes of compact JSON (server: 200 ops, 1,048,576 bytes); every op applies", async () => {
+      const { db, deal, e } = await synced();
+      expect([MAX_OPS_PER_CALL, MAX_BYTES_PER_CALL]).toEqual([200, 921_600]);
+      db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 50), deal, "tpl-bulk", "Bulk", 5);
+      for (let i = 0; i < 250; i++) {
+        db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title, description, note, sort_order) VALUES (?, ?, ?, ?, ?, ?)").run(
+          fid(5, i), fid(3, 50), `Bulk ${i}`, "d".repeat(600), "n".repeat(3900), i);
+      }
+      const before = pushes(e).length;
+      await pass(e);
+      const calls = pushes(e).slice(before);
+      const sizes = calls.map((c) => ({ ops: (c.args.p_ops as unknown[]).length, bytes: Buffer.byteLength(JSON.stringify(c.args.p_ops), "utf8") }));
+      expect(calls.length).toBeGreaterThan(1);
+      for (const z of sizes) {
+        expect(z.ops).toBeLessThanOrEqual(200);
+        expect(z.bytes).toBeLessThanOrEqual(921_600);
+      }
+      expect(Math.max(...sizes.map((z) => z.bytes))).toBeGreaterThan(800_000);
+      expect(e.server.todos.filter((t) => t.checklistId === onlineList(e, fid(3, 50)).id)).toHaveLength(250);
+      expect(outbox(db)).toEqual([]);
     });
   });
 

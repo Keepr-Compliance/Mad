@@ -1023,7 +1023,16 @@ ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
     pre.prepare("UPDATE transaction_checklist_items SET note = 'after last sync' WHERE id = ?").run(I2);
     pre.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at, attempts) VALUES (?, 1, ?, 0)").run(D1, at);
     pre.prepare("DELETE FROM transaction_checklist_items WHERE id = ?").run(I3);
-    const localBefore = pre.prepare("SELECT id, checklist_id, title, is_checked, note, sort_order FROM transaction_checklist_items ORDER BY id").all();
+    // evidence linked to an item (an email the v79 fixture holds), so links and members are compared too
+    pre.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES (?, ?, 'email', 'Report', 0)").run(id(96, 1), I1);
+    pre.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)").run(id(96, 2), id(96, 1), id(9, 1));
+    const todoTables = ["transaction_checklists", "transaction_checklist_items", "transaction_checklist_links", "transaction_checklist_link_members"];
+    // every column of every row (the v80 file's columns; v81 adds due_date, NULL, compared below)
+    const fullRows = (d: DatabaseType, cols?: Record<string, string[]>) =>
+      Object.fromEntries(todoTables.map((t) => [t, d.prepare(`SELECT ${(cols?.[t] ?? ["*"]).join(", ")} FROM ${t} ORDER BY id`).all()]));
+    const localBefore = fullRows(pre);
+    const colsBefore = Object.fromEntries(todoTables.map((t) => [t, columns(pre, t)]));
+    expect(localBefore.transaction_checklist_link_members).toHaveLength(1);
     pre.close();
 
     const { svc, db } = await openWithThisBuild();
@@ -1040,8 +1049,9 @@ ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
     // the local delete reached the cloud as a removal (it is not brought back by the pull)
     expect(e.server.todos.find((t) => t.localId === I3)!.removed).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE id = ?").get(I3)).toEqual({ n: 0 });
-    // nothing local was lost or changed by the pull
-    expect(db.prepare("SELECT id, checklist_id, title, is_checked, note, sort_order FROM transaction_checklist_items ORDER BY id").all()).toEqual(localBefore);
+    // nothing local was lost or changed by the pull: full rows of checklists, items, links and members
+    expect(fullRows(db, colsBefore)).toEqual(localBefore);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE due_date IS NOT NULL").get()).toEqual({ n: 0 });
     // the old one-way records of todos are gone; the cursor is a normal one; nothing waits
     expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_state WHERE entity IN ('checklist', 'checklist_item')").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT full_pull_owed, full_pull_kind FROM cloud_sync_todo_cursor").all()).toEqual([{ full_pull_owed: 0, full_pull_kind: null }]);

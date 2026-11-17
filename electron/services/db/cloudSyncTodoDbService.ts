@@ -119,15 +119,16 @@ export function todoScanAllowed(db: SqlDb, projectRef: string, userId: string): 
 
 /**
  * A full pull from 0 is owed (contract `pull.cursor`: it starts with no horizon). `kind` 'restore' (after a
- * backup restore) makes the cloud's values win in that pull; otherwise a part this computer wrote last keeps
- * the local value (PR-4b, see cloudSyncTodoPullDb.ts).
+ * backup restore) makes the cloud's values win in that pull; NULL (turn-on, the one-time step, an account reset)
+ * keeps a part this computer wrote last (PR-4b, see cloudSyncTodoPullDb.ts; 'resync' is set only by
+ * resetTodoCursorForFullPull). Callers pass the kind; startTodoTracking keeps a 'restore' still owed.
  */
 export function writeCursorOwed(db: SqlDb, projectRef: string, userId: string, now: Date, kind: "restore" | null = null): void {
   if (hasColumn(db, "cloud_sync_todo_cursor", "horizon")) {
     db.prepare(
       `INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at, horizon, full_pull_kind) VALUES (?, ?, 0, 1, ?, NULL, ?)
        ON CONFLICT (project_ref, owner_user_id) DO UPDATE SET last_seq = 0, full_pull_owed = 1, updated_at = excluded.updated_at,
-         horizon = NULL, full_pull_kind = CASE WHEN cloud_sync_todo_cursor.full_pull_kind = 'restore' THEN 'restore' ELSE excluded.full_pull_kind END`,
+         horizon = NULL, full_pull_kind = excluded.full_pull_kind`,
     ).run(projectRef, userId, now.toISOString(), kind);
     return;
   }
@@ -355,6 +356,9 @@ export function scanTodosAllEnabled(db: SqlDb, now: Date): number {
 export function startTodoTracking(db: SqlDb, projectRef: string, userId: string, now: Date): number {
   if (!hasTable(db, "cloud_sync_todo_outbox")) return 0;
   return db.transaction(() => {
+    // A restore pull still owed is never downgraded: an account reset or a reclaim on a restored file must still
+    // let the cloud win (plan §3.4).
+    const owedRestore = getTodoCursor(db, projectRef, userId)?.full_pull_kind === "restore";
     clearTodoStateForUser(db, projectRef, userId);
     // PR-4b: an old one-way record of a checklist or item saved online whose local row is gone (deleted here,
     // the one-way removal never sent) becomes a removal op before the record goes, so the full pull does not
@@ -382,7 +386,7 @@ export function startTodoTracking(db: SqlDb, projectRef: string, userId: string,
       userId,
     );
     seedTodoCounter(db, projectRef);
-    writeCursorOwed(db, projectRef, userId, now);
+    writeCursorOwed(db, projectRef, userId, now, owedRestore ? "restore" : null);
     return 0;
   })();
 }

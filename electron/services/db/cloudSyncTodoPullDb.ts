@@ -183,7 +183,8 @@ class Page {
     private readonly db: SqlDb,
     private readonly ctx: PullCtx,
     private readonly full: boolean,
-    private readonly restore: boolean,
+    /** A full pull in which the cloud's value always wins (owed after a backup restore or a resync). */
+    private readonly cloudWins: boolean,
   ) {
     this.by = `desktop:${ctx.installId}`;
     this.at = ctx.now.toISOString();
@@ -650,7 +651,9 @@ class Page {
         if (!this.full && !newer) continue;
         changed = changed || newer;
         if (samePart(p, partValue(p, local), a.value)) continue;
-        if (this.full && !this.restore && a.by === this.by) continue; // this computer's own value stays; the scan sends it
+        // Only in the full pull a turn-on, the one-time step or an account reset owes: this computer's own value
+        // stays (it may be an edit no outbox row holds any more); the scan after the pull sends it.
+        if (this.full && !this.cloudWins && a.by === this.by) continue;
         if (locked && a.by !== this.by) {
           this.queueHeld(entity, localId, tx, p, local, a.rev);
           continue;
@@ -1010,11 +1013,14 @@ export function applyTodoPage(
   return db.transaction(() => {
     const cur = getTodoCursor(db, ctx.projectRef, ctx.userId);
     const full = cur?.full_pull_owed === 1;
-    const restore = full && cur?.full_pull_kind === "restore";
+    // The full pull's kind (cloudSyncTodoDbService.writeCursorOwed / resetTodoCursorForFullPull): 'restore' and
+    // 'resync' let the cloud's value win everywhere; NULL (turn-on, the one-time step, an account reset) keeps a
+    // part this computer wrote last.
+    const cloudWins = full && (cur?.full_pull_kind === "restore" || cur?.full_pull_kind === "resync");
     db.prepare(
       "INSERT OR REPLACE INTO cloud_sync_applying (id, started_at) VALUES (1, ?)",
     ).run(ctx.now.toISOString());
-    const p = new Page(db, ctx, full, restore);
+    const p = new Page(db, ctx, full, cloudWins);
     for (const r of page.rows) if (str(r.entity) === "deal") p.noteDealRow(r);
     for (const r of page.rows) p.applyRow(r);
     p.retryParked();
@@ -1064,7 +1070,14 @@ export function applyTodoPage(
   })();
 }
 
-/** resync_required / horizon_required: nothing of that answer is applied; the cursor owes a full pull from 0. */
+/**
+ * resync_required / horizon_required / a stored last_seq without its horizon: nothing of that answer is applied;
+ * the cursor owes a full pull from 0 with no horizon. Its kind: 'resync' (the cloud's value wins: every unsent
+ * local edit is still in the outbox and is judged by the server, so nothing local is lost, and a profile rolled
+ * back on this computer cannot push its older values over newer online ones). A full pull already owed keeps its
+ * kind: a restore pull stays a restore pull, and the pull a turn-on owes stays one (its outbox was cleared, so
+ * this computer's own values must not be overwritten).
+ */
 export function resetTodoCursorForFullPull(
   db: SqlDb,
   projectRef: string,
@@ -1072,6 +1085,6 @@ export function resetTodoCursorForFullPull(
   now: Date,
 ): void {
   db.prepare(
-    "UPDATE cloud_sync_todo_cursor SET last_seq = 0, horizon = NULL, full_pull_owed = 1, updated_at = ? WHERE project_ref = ? AND owner_user_id = ?",
+    "UPDATE cloud_sync_todo_cursor SET last_seq = 0, horizon = NULL, full_pull_kind = CASE WHEN full_pull_owed = 1 THEN full_pull_kind ELSE 'resync' END, full_pull_owed = 1, updated_at = ? WHERE project_ref = ? AND owner_user_id = ?",
   ).run(now.toISOString(), projectRef, userId);
 }

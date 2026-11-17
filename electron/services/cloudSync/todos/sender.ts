@@ -73,8 +73,8 @@ function chunks(ops: Array<{ op: WireOp; row: todos.SendableRow }>): Array<Array
 export async function sendTodos(deps: TodoSendDeps): Promise<TodoSendSummary> {
   const { db, projectRef, userId } = deps;
   const summary: TodoSendSummary = { outcome: "idle", sent: 0, confirmed: 0, retried: 0, dropped: 0, waiting: 0, calls: 0 };
-  // R8 / D2 (persisted stop): a removed install sends nothing; only a turn-off or a rebind clears it in this build.
-  if (todos.installRemovedAt(db, projectRef, userId)) return { ...summary, outcome: "install_removed" };
+  // R8 / D2 (persisted stop): a stopped user's pass returns before any call (runner.ts, before the state read), so
+  // the sender never runs for that user; the stop is recorded below when a push itself answers install_removed.
 
   const read = db.transaction(() => {
     todos.seedTodoCounter(db, projectRef);
