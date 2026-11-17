@@ -117,18 +117,22 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     expect(dirty(db).map((d) => d.transaction_id)).toEqual([id]);
   });
 
-  it("C2.11b: an item insert, update and delete mark the item's deal", () => {
+  it("C2.11b (BACKLOG-4263 PR-4a): an item insert, update and delete record todo ops and no longer mark the item's deal", () => {
     const db = freshDb();
     enableUser(db);
     const id = dealId();
     insertDeal(db, id);
     db.prepare("INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('c1', ?, 't1', 'List')").run(id);
     db.exec("DELETE FROM cloud_sync_dirty");
+    db.exec("DELETE FROM cloud_sync_todo_outbox");
     db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES ('i1', 'c1', 'One')").run();
-    expect(dirty(db)).toMatchObject([{ transaction_id: id, generation: 1 }]);
     db.prepare("UPDATE transaction_checklist_items SET title = 'Uno' WHERE id = 'i1'").run();
+    expect(dirty(db)).toEqual([]);
+    const ops = () => (db.prepare("SELECT part FROM cloud_sync_todo_outbox WHERE local_id = 'i1' ORDER BY part").all() as Array<{ part: string }>).map((r) => r.part);
+    expect(ops()).toEqual(["create", "title"]);
     db.prepare("DELETE FROM transaction_checklist_items WHERE id = 'i1'").run();
-    expect(dirty(db)[0].generation).toBe(3);
+    expect(ops()).toEqual(["create", "removed", "title"]);
+    expect(dirty(db)).toEqual([]);
   });
 
   it("C2.12: after a rebuild of a trigger's table the create step restores the triggers; a changed body replaces the old", () => {
@@ -154,7 +158,7 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     expect(dirty(db).map((d) => d.transaction_id)).toEqual([id]);
   });
 
-  it("C2.29: a migration that rebuilds transaction_checklists and its items runs with drop-before/create-after, then triggers exist and mark", () => {
+  it("C2.29: a migration that rebuilds transaction_checklists and its items runs with drop-before/create-after, then triggers exist and record", () => {
     const db = freshDb();
     enableUser(db);
     const id = dealId();
@@ -173,7 +177,9 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     expect(markAllEligibleAfterMigration(db)).toBe(true);
     expect(dirty(db).map((d) => d.transaction_id)).toEqual([id]);
     db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES ('i9', 'c1', 'New')").run();
-    expect(dirty(db)[0].generation).toBe(2);
+    // BACKLOG-4263 PR-4a: the item is recorded as a todo op (the deal is not marked again).
+    expect(dirty(db)[0].generation).toBe(1);
+    expect((db.prepare("SELECT part FROM cloud_sync_todo_outbox WHERE local_id = 'i9'").all() as Array<{ part: string }>).map((r) => r.part)).toEqual(["create"]);
   });
 
   it("C2.29 control: the same rebuild WITH the item trigger present (no drop first) does not leave a working database", () => {

@@ -39,6 +39,8 @@ export const KNOWN_ENVELOPE_ERRORS = [
   "too_large",
   "object_missing",
   "size_mismatch",
+  "install_removed",
+  "busy",
 ] as const;
 
 export type CallResult =
@@ -138,17 +140,13 @@ export class CloudClient {
     return this.call("cloud_delete_deal", { p_expected_user_id: expectedUserId, p_cloud_deal_id: cloudDealId });
   }
 
-  /** cloud_upsert_parties / cloud_upsert_checklists / cloud_upsert_checklist_items. */
-  upsertChildren(
-    kind: "party" | "checklist" | "checklist_item",
-    expectedUserId: string,
-    installId: string,
-    cloudDealId: string,
-    rows: JsonValue[],
-  ): Promise<CallResult> {
-    const fn =
-      kind === "party" ? "cloud_upsert_parties" : kind === "checklist" ? "cloud_upsert_checklists" : "cloud_upsert_checklist_items";
-    return this.call(fn, {
+  /**
+   * cloud_upsert_parties. Checklists and items no longer go this way (BACKLOG-4263 PR-4a): they are sent
+   * as todo changes through todoPush, and migration 20261118120000 drops the two old item functions.
+   */
+  upsertChildren(kind: "party", expectedUserId: string, installId: string, cloudDealId: string, rows: JsonValue[]): Promise<CallResult> {
+    void kind;
+    return this.call("cloud_upsert_parties", {
       p_expected_user_id: expectedUserId,
       p_source_install_id: installId,
       p_cloud_deal_id: cloudDealId,
@@ -183,6 +181,20 @@ export class CloudClient {
 
   deleteInstall(expectedUserId: string, installId: string): Promise<CallResult> {
     return this.call("cloud_delete_install", { p_expected_user_id: expectedUserId, p_source_install_id: installId });
+  }
+
+  /**
+   * cloud_todo_push (migration 20261118110000; contract supabase/contracts/cloud-todo-change-v1.json):
+   * at most 200 ops and 1 MB; envelope {ok, results[]} or {ok:false, error}. `sentAt` is this computer's
+   * wall time just before the call (the server computes each op's age as sentAt - edited_at).
+   */
+  todoPush(expectedUserId: string, installId: string, sentAt: string, ops: JsonValue[]): Promise<CallResult> {
+    return this.call("cloud_todo_push", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_sent_at: sentAt,
+      p_ops: ops,
+    });
   }
 
   markDealSynced(expectedUserId: string, installId: string, cloudDealId: string): Promise<CallResult> {

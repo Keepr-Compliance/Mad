@@ -170,7 +170,9 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     const db = svc.db as DatabaseType;
     seed(db);
     turnOn(db);
-    expect(names(db, "trigger", "trg_cloud_sync_item_%").length).toBe(3);
+    // BACKLOG-4263 PR-4a: the item triggers are the todo capture ones now (3 on the items table).
+    expect(names(db, "trigger", "trg_cloud_sync_todo_item_%").length).toBe(3);
+    expect(names(db, "trigger", "trg_cloud_sync_item_%")).toEqual([]);
     const rebuild = (d: DatabaseType, table: string) => {
       const ddl = (d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql;
       d.exec(`${ddl.replace(/^CREATE TABLE\s+("?)[A-Za-z_]+\1/, `CREATE TABLE ${table}_new`)};

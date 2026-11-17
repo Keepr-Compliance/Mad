@@ -26,6 +26,7 @@ import {
   RESET_STATE_AFTER_RESTORE_SQL,
 } from "./cloudSyncSql";
 import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
+import { resetTodosAfterRestore, scanTodosAllEnabled } from "./cloudSyncTodoDbService";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -243,11 +244,13 @@ export function repairCloudSyncTriggersIfMissing(db: SqlDb, log: TriggerLog = si
  * are kept so the delete direction still works. No-op on a file without the
  * Keepr Cloud tables. Returns false when it could not run.
  */
-export function resetSyncStateAfterRestore(db: SqlDb): boolean {
+export function resetSyncStateAfterRestore(db: SqlDb, now: Date = new Date()): boolean {
   if (tableColumns(db, "cloud_sync_state").size === 0 || tableColumns(db, "cloud_sync_dirty").size === 0) return false;
   db.transaction(() => {
     db.prepare(RESET_STATE_AFTER_RESTORE_SQL).run();
     db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
+    // BACKLOG-4263 plan §3.4 / E4: the cloud's todos win; waiting ops of online todos go, a full pull is owed.
+    resetTodosAfterRestore(db, now);
   })();
   return true;
 }
@@ -256,12 +259,14 @@ export function resetSyncStateAfterRestore(db: SqlDb): boolean {
  * After an open in which a versioned migration ran: the triggers were absent
  * during it, so every eligible deal of every enabled user is marked (plan N3).
  */
-export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silentLog): boolean {
+export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silentLog, now: Date = new Date()): boolean {
   try {
     if (tableColumns(db, "cloud_sync_settings").size === 0 || tableColumns(db, "cloud_sync_dirty").size === 0) {
       return false;
     }
     db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
+    // BACKLOG-4263: the todo triggers were absent too; the gated scan (refused while a full pull is owed, E4).
+    scanTodosAllEnabled(db, now);
     return true;
   } catch (error) {
     log.warn("[CloudSync] Could not mark deals after a migration", { code: errorCode(error) });

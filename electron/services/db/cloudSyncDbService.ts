@@ -12,12 +12,10 @@ import {
   MARK_DEAL_SQL,
   NULL_CHILD_HASH_SQL,
   NULL_STATE_HASH_BY_CLOUD_ID_SQL,
-  SELECT_CHECKLIST_ROWS_SQL,
   SELECT_CHILD_STATE_BY_LOCAL_SQL,
   SELECT_CHILD_STATE_SQL,
   SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL,
   SELECT_ELIGIBLE_DEAL_IDS_SQL,
-  SELECT_ITEM_ROWS_SQL,
   SELECT_PARTY_CONTACTS_SQL,
   SELECT_PARTY_EMAILS_SQL,
   SELECT_PARTY_PHONES_SQL,
@@ -42,6 +40,16 @@ import {
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
+import {
+  clearTodoStateEverywhere,
+  clearTodoStateForUser,
+  forgetTodoOtherProjects,
+  prepareTodoPass,
+  resetTodoDeal,
+  scanTodosAllEnabled,
+  scanTodosIfAllowed,
+  startTodoTracking,
+} from "./cloudSyncTodoDbService";
 import {
   applyCloudSyncTriggerRule,
   repairCloudSyncTriggersIfMissing,
@@ -121,6 +129,8 @@ export function ensureInstall(db: SqlDb, projectRef: string, deviceId: string, n
       }
       db.exec("DELETE FROM cloud_sync_state");
       db.exec("DELETE FROM cloud_sync_dirty");
+      // BACKLOG-4263 D6/E1: every user's todo rows, every counter row and every stop go with the old install ids.
+      clearTodoStateEverywhere(db);
       db.exec("UPDATE cloud_sync_settings SET enabled = 0, local_confirmed_at = NULL");
       // R1: no user is enabled now; the triggers go unless a turn-off is still owed.
       applyCloudSyncTriggerRule(db);
@@ -171,6 +181,7 @@ export function forgetOtherProjects(db: SqlDb, projectRef: string): void {
     db.prepare("DELETE FROM cloud_sync_install WHERE project_ref <> ?").run(projectRef);
     db.prepare("DELETE FROM cloud_sync_settings WHERE project_ref <> ?").run(projectRef);
     db.prepare("DELETE FROM cloud_sync_state WHERE project_ref <> ?").run(projectRef);
+    forgetTodoOtherProjects(db, projectRef);
     const anyEnabled = db.prepare("SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 LIMIT 1").get();
     if (!anyEnabled) db.exec("DELETE FROM cloud_sync_dirty");
     applyCloudSyncTriggerRule(db);
@@ -227,6 +238,9 @@ export function enableForUser(
       // A fresh enable trusts no earlier record of what was saved online.
       db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
       db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+      // BACKLOG-4263 N3 / D6: the user's todos start afresh (clear, counter, full pull owed) and the initial
+      // scan queues every checklist and item, all in this transaction.
+      startTodoTracking(db, projectRef, userId, now);
     }
   })();
 }
@@ -263,6 +277,8 @@ export function clearUserSyncState(db: SqlDb, projectRef: string, userId: string
     db.prepare("DELETE FROM cloud_sync_dirty WHERE transaction_id IN (SELECT id FROM transactions WHERE user_id = ?)").run(
       userId,
     );
+    // BACKLOG-4263 D6/E1: outbox, shadow, cursor, parked rows, notices, trash and the stop.
+    clearTodoStateForUser(db, projectRef, userId);
   })();
 }
 
@@ -272,10 +288,23 @@ export function clearUserSyncState(db: SqlDb, projectRef: string, userId: string
  * upload" only while every trigger exists, so a missing one is recreated and
  * every eligible deal marked.
  */
-export function preparePass(db: SqlDb, projectRef: string, userId: string, acceptedAt: string | null, log?: TriggerLog): void {
+export function preparePass(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  acceptedAt: string | null,
+  log?: TriggerLog,
+  now: Date = new Date(),
+): void {
   db.transaction(() => {
-    applyAcceptedAt(db, projectRef, userId, acceptedAt);
-    repairCloudSyncTriggersIfMissing(db, log);
+    if (applyAcceptedAt(db, projectRef, userId, acceptedAt)) {
+      // The account was turned off and on elsewhere: everything online is new, so the todos start afresh.
+      startTodoTracking(db, projectRef, userId, now);
+    }
+    // A repaired trigger may have missed todo changes: the gated scan (refused while a full pull is owed, E4).
+    if (repairCloudSyncTriggersIfMissing(db, log) > 0) scanTodosAllEnabled(db, now);
+    // BACKLOG-4263 N1a (once per user) and N1b (counter seed).
+    prepareTodoPass(db, projectRef, userId, now);
   })();
 }
 
@@ -470,8 +499,6 @@ export interface DealChildRows {
   emails: Array<Record<string, unknown>>;
   phones: Array<Record<string, unknown>>;
   sourceLinks: Array<Record<string, unknown>>;
-  checklists: Array<Record<string, unknown>>;
-  items: Array<Record<string, unknown>>;
 }
 
 /** Every local row the child projections of one deal read. */
@@ -483,8 +510,6 @@ export function readDealChildren(db: SqlDb, transactionId: string): DealChildRow
     emails: all(SELECT_PARTY_EMAILS_SQL),
     phones: all(SELECT_PARTY_PHONES_SQL),
     sourceLinks: all(SELECT_PARTY_SOURCE_LINKS_SQL),
-    checklists: all(SELECT_CHECKLIST_ROWS_SQL),
-    items: all(SELECT_ITEM_ROWS_SQL),
   };
 }
 
@@ -567,7 +592,7 @@ export function readUserState(db: SqlDb, projectRef: string, userId: string): Us
 
 /** Deals of the user with a live local child that has no sync record yet (e.g. uploaded header-only). */
 export function readDealsWithUnsentChildren(db: SqlDb, projectRef: string, userId: string): string[] {
-  return (db.prepare(SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL).all(userId, projectRef, userId, userId, projectRef, userId, userId, projectRef, userId) as Array<{
+  return (db.prepare(SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL).all(userId, projectRef, userId) as Array<{
     id: string;
   }>).map((r) => r.id);
 }
@@ -578,6 +603,8 @@ export interface ReconcileWrites {
   /** Online deals of this install whose local deal exists with no record: record the cloud id, no hash. */
   adoptDeals?: Array<{ localId: string; cloudId: string }>;
   summaryJson: string;
+  /** BACKLOG-4263: deals the cloud no longer has; their todos are scanned again against an empty shadow. */
+  todoResetDeals?: string[];
 }
 
 /**
@@ -594,6 +621,9 @@ export function applyReconcile(db: SqlDb, projectRef: string, userId: string, w:
     const mark = db.prepare(MARK_DEAL_SQL);
     for (const id of w.markDeals) mark.run(id);
     db.prepare(UNPARK_USER_MARKS_SQL).run(userId);
+    for (const id of w.todoResetDeals ?? []) resetTodoDeal(db, projectRef, userId, id, now);
+    // The daily todo scan, refused while a full pull is owed (E4).
+    scanTodosIfAllowed(db, projectRef, userId, now);
     db.prepare("UPDATE cloud_sync_settings SET last_state_json = ?, last_state_at = ? WHERE project_ref = ? AND user_id = ?").run(
       w.summaryJson,
       nowIso(now),

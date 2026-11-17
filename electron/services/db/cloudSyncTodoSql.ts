@@ -223,12 +223,12 @@ function opInsert(a: OpArgs): string {
     generation = cloud_sync_todo_outbox.generation + 1;`;
 }
 
-/** JSON of one item row (create op value and trash payload). */
-const itemJson = (r: string) =>
+/** JSON of one item row (create op value and trash payload; also the scan's create value). */
+export const itemJson = (r: string) =>
   `json_object('id', ${r}.id, 'checklist_id', ${r}.checklist_id, 'title', ${r}.title, 'description', ${r}.description,
     'is_required', ${r}.is_required, 'expected_document_type', ${r}.expected_document_type, 'is_checked', ${r}.is_checked,
     'checked_at', ${r}.checked_at, 'note', ${r}.note, 'due_date', ${r}.due_date, 'sort_order', ${r}.sort_order, 'created_at', ${r}.created_at)`;
-const checklistJson = (r: string) =>
+export const checklistJson = (r: string) =>
   `json_object('id', ${r}.id, 'transaction_id', ${r}.transaction_id, 'template_id', ${r}.template_id,
     'template_name', ${r}.template_name, 'sort_order', ${r}.sort_order, 'selected_at', ${r}.selected_at)`;
 

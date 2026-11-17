@@ -215,6 +215,7 @@ import {
   markAllEligibleAfterMigration,
   prepareRestoredFile,
 } from "./db/cloudSyncTriggers";
+import { clearApplyGuard } from "./db/cloudSyncTodoDbService";
 
 // Re-export types for backward compatibility
 export type { ContactAssignmentOperation } from "./db/transactionContactDbService";
@@ -1968,6 +1969,8 @@ class DatabaseService implements IDatabaseService {
       throw error;
     }
     applyCloudSyncTriggerRule(currentDb, this._cloudSyncLog());
+    // BACKLOG-4263 N5: the todo apply guard exists only inside a confirm transaction; never at rest.
+    clearApplyGuard(currentDb);
     if (this._readSchemaVersionOrNull(currentDb) !== versionBefore) {
       markAllEligibleAfterMigration(currentDb, this._cloudSyncLog());
     }

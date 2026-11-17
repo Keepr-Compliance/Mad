@@ -20,9 +20,99 @@
  *   cloud_list_install_rows              migration 20261114130000 {ok, rows:[{cloud_id, cloud_deal_id,
  *     local_id, content_hash, removed}], next_after}
  * `wrong_account` whenever p_expected_user_id differs from the token's user.
+ *
+ * BACKLOG-4263 PR-4a — cloud_todo_push, transcribed (not run: PR-2 is not applied on the test database
+ * yet) from origin/feature/BACKLOG-4263-todo-server-core @ fa0d63778:
+ *   supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql
+ *     cloud_todo_push :948-977   refusals not_authorized / wrong_account / invalid_input / not_entitled /
+ *                                install_removed / batch_too_large; age = p_sent_at - edited_at, unknowable
+ *                                (-infinity) when < 0, > 365 d, missing, or clock_stepped
+ *     _cloud_todo_apply :862-941 {ok:true, results:[...]}; replay of a kept op_id; ledger rule
+ *                                _cloud_todo_recorded :246-250 (not kept: not_found, locked,
+ *                                refused_removed, install_removed, reason parent_missing / my_items_exists)
+ *     _cloud_todo_apply_op :513-854 the type gate :532-543, create_checklist (added / exists / mapped),
+ *                                create_item (added / exists merging every carried part with no base /
+ *                                rejected parent_missing), set (equal -> unchanged, causal on base or a
+ *                                later edit_seq of the same install, else later effective time wins ->
+ *                                applied with conflict or lost; on a removed row applied_to_removed), remove
+ *                                (removed / already_removed); answer {op_id, status, entity, cloud_id,
+ *                                local_id, cloud_deal_id, parts, conflict}
+ *     _cloud_todo_item_json :328-346, _cloud_todo_checklist_json :349-361 the parts shape {rev, value, at, by,
+ *                                edit_seq}
+ *   supabase/contracts/cloud-todo-change-v1.json field_types (the per-field JSON type lists below)
+ *   supabase/tests/backlog-4263-pr2/results-2026-11-17.txt answer samples, e.g.
+ *     {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "…", "by": "desktop:<uuid>", "rev": 1,
+ *      "value": null, "edit_seq": null}, …}, …}]} and {"op_id": "<uuid>", "entity": "item", "status": "locked", …}
+ * The answers to RE-CHECK against the applied functions are listed in the PR-4a handoff.
  */
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
+
+/** Contract field_types (cloud-todo-change-v1.json @ fa0d63778). base_rev / edit_seq: integers only. */
+export const TODO_FIELD_TYPES: Record<string, readonly string[]> = {
+  entity: ["string"],
+  id: ["string"],
+  deal_id: ["string"],
+  local_id: ["string"],
+  checklist_local_id: ["string"],
+  template_id: ["string"],
+  template_name: ["string", "null"],
+  sort_order: ["number", "null"],
+  is_private: ["boolean", "null"],
+  title: ["string"],
+  note: ["string", "null"],
+  due_date: ["string", "null"],
+  done: ["boolean", "object"],
+  description: ["string", "null"],
+  is_required: ["boolean", "null"],
+  expected_document_type: ["string", "null"],
+  local_created_at: ["string", "null"],
+  part: ["string"],
+  base_rev: ["integer", "null"],
+  edit_seq: ["integer", "null"],
+  clock_stepped: ["boolean", "null"],
+  held_locked: ["boolean", "null"],
+};
+
+export function jsonType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number") return "number";
+  return typeof v;
+}
+
+/** The per-op type gate (migration :532-543): the fields whose JSON type is outside their list. */
+export function badTodoFields(op: Record<string, unknown>): string[] {
+  const bad: string[] = [];
+  for (const [k, types] of Object.entries(TODO_FIELD_TYPES)) {
+    if (!(k in op)) continue;
+    const v = op[k];
+    const t = jsonType(v);
+    const ok = types.some((x) => (x === "integer" ? typeof v === "number" && Number.isInteger(v) : x === t));
+    if (!ok) bad.push(k);
+  }
+  return bad.sort();
+}
+
+export interface FakeTodoPart {
+  rev: number;
+  value: JsonValue;
+  /** Effective time in ms (-Infinity = unknowable). */
+  at: number;
+  by: string;
+  edit_seq: number | null;
+}
+export interface FakeTodo {
+  id: string;
+  owner: string;
+  dealId: string;
+  entity: "item" | "checklist";
+  localId: string;
+  checklistId: string | null;
+  templateId: string | null;
+  removed: boolean;
+  parts: Record<string, FakeTodoPart>;
+}
 
 export interface FakeDeal {
   id: string;
@@ -50,6 +140,7 @@ export interface FakeChild {
   row: Record<string, JsonValue>;
 }
 
+export const DROPPED_FUNCTIONS = ["cloud_upsert_checklists", "cloud_upsert_checklist_items"];
 export const READ_FUNCTIONS = ["get_my_cloud_autosave_state", "cloud_list_install_rows", "cloud_list_installs"];
 
 export type Override = (fn: string, args: Record<string, JsonValue>) => RpcResponse | Error | undefined;
@@ -70,6 +161,14 @@ export class FakeServer {
   children: FakeChild[] = [];
   calls: Array<{ fn: string; args: Record<string, JsonValue> }> = [];
   override: Override | null = null;
+  /** BACKLOG-4263: todo rows (cloud_deal_checklists / _items under the new protocol), ledger, register. */
+  todos: FakeTodo[] = [];
+  todoLedger = new Map<string, JsonValue>();
+  removedInstalls = new Set<string>();
+  /** Deals removed by cloud_delete_deal: PR-2 keeps them (soft) with their todos. */
+  softRemovedDeals: FakeDeal[] = [];
+  /** The server's clock for receive times (ms). */
+  serverNow = () => Date.parse("2026-11-14T12:00:05.000Z");
 
   constructor(user: string) {
     this.tokenUser = user;
@@ -92,6 +191,9 @@ export class FakeServer {
     const o = this.override?.(fn, args);
     if (o instanceof Error) throw o;
     if (o) return o;
+    // Dropped by migration 20261118120000 (BACKLOG-4263 PR-4a). PostgREST's answer for a function that does
+    // not exist: HTTP 404, code PGRST202 (UNOBSERVED on the test database; PostgREST error reference).
+    if (DROPPED_FUNCTIONS.includes(fn)) return { data: null, error: { code: "PGRST202", status: 404 }, status: 404 };
     return { data: this.handle(fn, args), error: null, status: 200 };
   };
 
@@ -137,6 +239,10 @@ export class FakeServer {
           return { success: true, enabled: true };
         }
         this.enabled = false;
+        this.todos = this.todos.filter((t) => t.owner !== uid);
+        for (const k of [...this.todoLedger.keys()]) if (k.startsWith(`${uid}|`)) this.todoLedger.delete(k);
+        for (const k of [...this.removedInstalls]) if (k.startsWith(`${uid}|`)) this.removedInstalls.delete(k);
+        this.softRemovedDeals = this.softRemovedDeals.filter((d) => d.owner !== uid);
         const n = this.deals.filter((d) => d.owner === uid).length;
         this.deals = this.deals.filter((d) => d.owner !== uid);
         this.children = this.children.filter((c) => c.owner !== uid);
@@ -164,6 +270,7 @@ export class FakeServer {
         if (i < 0) return { ok: false, error: "not_found" };
         const gone = this.deals.splice(i, 1)[0];
         this.children = this.children.filter((c) => c.dealId !== gone.id);
+        this.softRemovedDeals.push(gone);
         return { ok: true, deleted: { parties: 0, checklists: 0, checklist_items: 0, messages: 0, files: 0 }, blobs_fenced: 0 };
       }
       case "cloud_mark_deal_synced": {
@@ -173,6 +280,8 @@ export class FakeServer {
         d.fullSyncAt = "2026-11-14T10:00:01.000Z";
         return { ok: true, last_full_sync_at: d.fullSyncAt };
       }
+      case "cloud_todo_push":
+        return this.todoPush(uid, a);
       case "cloud_upsert_parties":
       case "cloud_upsert_checklists":
       case "cloud_upsert_checklist_items": {
@@ -266,6 +375,7 @@ export class FakeServer {
         return { installs: [...by.entries()].map(([k, v]) => ({ source_install_id: k, deals: v.n, last_synced_at: v.at })) };
       }
       case "cloud_delete_install": {
+        this.removedInstalls.add(`${uid}|${a.p_source_install_id}`);
         const gone = this.deals.filter((d) => d.owner === uid && d.install === a.p_source_install_id);
         this.deals = this.deals.filter((d) => !gone.includes(d));
         this.children = this.children.filter((c) => !gone.some((d) => d.id === c.dealId));
@@ -274,5 +384,169 @@ export class FakeServer {
       default:
         throw new Error(`unexpected rpc ${fn}`);
     }
+  }
+
+  // ------------------------------------------------------------ cloud_todo_push (BACKLOG-4263, see header)
+
+  private todoJson(t: FakeTodo): JsonValue {
+    const parts: Record<string, JsonValue> = {};
+    for (const [k, p] of Object.entries(t.parts)) {
+      parts[k] = { rev: p.rev, value: p.value, at: Number.isFinite(p.at) ? new Date(p.at).toISOString() : "-infinity", by: p.by, edit_seq: p.edit_seq };
+    }
+    return parts;
+  }
+
+  private todoAnswer(opId: string, status: string, t: FakeTodo, conflict = false): Record<string, JsonValue> {
+    return { op_id: opId, status, entity: t.entity, cloud_id: t.id, local_id: t.localId, cloud_deal_id: t.dealId, parts: this.todoJson(t), conflict };
+  }
+
+  private todoDeal(uid: string, install: string, dealId: unknown): { deal: FakeDeal; removed: boolean } | null {
+    const live = this.deals.find((d) => d.id === dealId && d.owner === uid && d.install === install);
+    if (live) return { deal: live, removed: false };
+    const soft = this.softRemovedDeals.find((d) => d.id === dealId && d.owner === uid && d.install === install);
+    return soft ? { deal: soft, removed: true } : null;
+  }
+
+  /** One part merge (migration :793-845), desktop actor. */
+  private mergePart(t: FakeTodo, part: string, value: JsonValue, op: Record<string, JsonValue>, by: string, eff: number, onRemoved: boolean) {
+    const cur = t.parts[part];
+    const same =
+      part === "done"
+        ? !!(cur.value as Record<string, JsonValue>)?.is_checked === !!(value as Record<string, JsonValue>)?.is_checked
+        : JSON.stringify(cur.value) === JSON.stringify(value);
+    if (same) return { status: "unchanged", conflict: false };
+    const base = typeof op.base_rev === "number" ? op.base_rev : null;
+    const es = typeof op.edit_seq === "number" ? op.edit_seq : null;
+    const write = () => {
+      t.parts[part] = { rev: cur.rev + 1, value, at: Math.max(cur.at, eff), by, edit_seq: es };
+    };
+    if (base === cur.rev || (cur.by === by && es !== null && es > (cur.edit_seq ?? -1))) {
+      write();
+      return { status: onRemoved ? "applied_to_removed" : "applied", conflict: false };
+    }
+    const curKind = cur.by.split(":")[0];
+    const wins = eff > cur.at || (eff === cur.at && "desktop" > curKind);
+    if (wins) {
+      write();
+      return { status: onRemoved ? "applied_to_removed" : "applied", conflict: true };
+    }
+    return { status: "lost", conflict: true };
+  }
+
+  private todoPush(uid: string, a: Record<string, JsonValue>): unknown {
+    if (!this.entitled()) return { ok: false, error: "not_entitled" };
+    const install = a.p_source_install_id as string;
+    if (!install) return { ok: false, error: "invalid_input" };
+    if (this.removedInstalls.has(`${uid}|${install}`)) return { ok: false, error: "install_removed" };
+    const ops = a.p_ops as Array<Record<string, JsonValue>>;
+    if (!Array.isArray(ops)) return { ok: false, error: "invalid_input" };
+    if (ops.length > 200 || JSON.stringify(ops).length > 1048576) return { ok: false, error: "batch_too_large" };
+    const hex = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      if (!op || typeof op !== "object" || typeof op.op_id !== "string" || !hex.test(op.op_id) || typeof op.kind !== "string" ||
+          !["create_checklist", "create_item", "set", "remove", "restore"].includes(op.kind as string)) {
+        return { ok: false, error: "invalid_input", detail: { index: i } };
+      }
+    }
+    const sent = typeof a.p_sent_at === "string" ? Date.parse(a.p_sent_at) : NaN;
+    const recv = this.serverNow();
+    const by = `desktop:${install}`;
+    const out: JsonValue[] = [];
+    for (const op of ops) {
+      const h = (op.op_id as string).replace(/-/g, "").toLowerCase();
+      const opId = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+      const lk = `${uid}|${opId}`;
+      const kept = this.todoLedger.get(lk);
+      if (kept !== undefined) {
+        out.push(kept);
+        continue;
+      }
+      const r = this.todoApplyOp(uid, install, by, op, opId, sent, recv);
+      const notKept = ["not_found", "locked", "refused_removed", "install_removed"].includes(String(r.status)) ||
+        ["parent_missing", "my_items_exists"].includes(String(r.reason ?? ""));
+      if (!notKept) this.todoLedger.set(lk, r);
+      out.push(r);
+    }
+    return { ok: true, results: out };
+  }
+
+  private todoApplyOp(uid: string, install: string, by: string, op: Record<string, JsonValue>, opId: string, sent: number, recv: number): Record<string, JsonValue> {
+    const bad = badTodoFields(op);
+    if (bad.length > 0) return { op_id: opId, status: "rejected", reason: "invalid_value", field: bad.join(",") };
+    const edited = typeof op.edited_at === "string" ? Date.parse(op.edited_at) : NaN;
+    const age = sent - edited;
+    const eff = !Number.isFinite(age) || age < 0 || age > 365 * 86400000 || op.clock_stepped === true ? -Infinity : recv - age;
+    const es = typeof op.edit_seq === "number" ? op.edit_seq : null;
+    const kind = op.kind as string;
+    if (kind === "create_checklist" || kind === "create_item") {
+      const dl = this.todoDeal(uid, install, op.deal_id);
+      if (!dl) return { op_id: opId, status: "not_found" };
+      const deal = dl.deal;
+      if (kind === "create_checklist") {
+        const ex = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.localId === op.local_id);
+        if (ex) return this.todoAnswer(opId, "exists", ex);
+        if (op.template_id === "keepr:my-items") {
+          const my = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.templateId === "keepr:my-items" && !t.removed);
+          if (my) return this.todoAnswer(opId, "mapped", my);
+        }
+        const t: FakeTodo = {
+          id: cloudId(), owner: uid, dealId: deal.id, entity: "checklist", localId: op.local_id as string, checklistId: null,
+          templateId: op.template_id as string, removed: false,
+          parts: {
+            order: { rev: 1, value: (op.sort_order ?? null) as JsonValue, at: eff, by, edit_seq: es },
+            removed: { rev: 1, value: { removed_at: null, kind: null }, at: eff, by, edit_seq: null },
+          },
+        };
+        this.todos.push(t);
+        return this.todoAnswer(opId, "added", t);
+      }
+      const cl = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.localId === op.checklist_local_id);
+      if (!cl) return { op_id: opId, status: "rejected", reason: "parent_missing" };
+      const done = op.done && typeof op.done === "object" ? (op.done as Record<string, JsonValue>) : { is_checked: op.done === true, checked_at: null };
+      const values: Record<string, JsonValue> = {
+        done: { is_checked: done.is_checked === true, checked_at: done.is_checked === true ? (done.checked_at ?? new Date(recv).toISOString()) : null },
+        title: (op.title ?? null) as JsonValue,
+        note: (op.note ?? null) as JsonValue,
+        due: (op.due_date ?? null) as JsonValue,
+        order: (op.sort_order ?? null) as JsonValue,
+      };
+      const ex = this.todos.find((t) => t.entity === "item" && t.dealId === deal.id && t.localId === op.local_id);
+      if (ex) {
+        let conflict = false;
+        for (const p of ["done", "title", "note", "due", "order"]) {
+          const r = this.mergePart(ex, p, values[p], { edit_seq: es } as Record<string, JsonValue>, by, eff, ex.removed || dl.removed);
+          conflict = conflict || r.conflict;
+        }
+        return this.todoAnswer(opId, "exists", ex, conflict);
+      }
+      const t: FakeTodo = {
+        id: cloudId(), owner: uid, dealId: deal.id, entity: "item", localId: op.local_id as string, checklistId: cl.id, templateId: null, removed: false,
+        parts: {
+          ...Object.fromEntries(["done", "title", "note", "due", "order"].map((p) => [p, { rev: 1, value: values[p], at: eff, by, edit_seq: es }])),
+          removed: { rev: 1, value: { removed_at: null, kind: null }, at: eff, by, edit_seq: null },
+        },
+      };
+      this.todos.push(t);
+      return this.todoAnswer(opId, "added", t);
+    }
+    const ent = (op.entity as string) ?? "item";
+    const dl = this.todoDeal(uid, install, op.deal_id);
+    const t = dl ? this.todos.find((x) => x.entity === ent && x.dealId === dl.deal.id && x.localId === op.local_id) : undefined;
+    if (!dl || !t) return { op_id: opId, status: "not_found" };
+    const parent = t.checklistId ? this.todos.find((x) => x.id === t.checklistId) : undefined;
+    const onRemoved = t.removed || dl.removed || !!parent?.removed;
+    if (kind === "remove") {
+      if (t.removed) return this.todoAnswer(opId, "already_removed", t);
+      const cur = t.parts.removed;
+      t.parts.removed = { rev: cur.rev + 1, value: { removed_at: new Date(recv).toISOString(), kind: ent }, at: Math.max(cur.at, eff), by, edit_seq: es };
+      t.removed = true;
+      return this.todoAnswer(opId, "removed", t);
+    }
+    if (kind !== "set") return { op_id: opId, status: "rejected", reason: "invalid_value", field: "kind" };
+    const part = op.part as string;
+    if (!(part in t.parts) || part === "removed") return { op_id: opId, status: "rejected", reason: "invalid_value", field: "part" };
+    const r = this.mergePart(t, part, (op.value ?? null) as JsonValue, op, by, eff, onRemoved);
+    return this.todoAnswer(opId, r.status, t, r.conflict);
   }
 }

@@ -14,11 +14,14 @@
  *   never turned on;
  * - they are dropped before schema.sql and the versioned migrations run and
  *   created after them (cloudSyncTriggers.ts), never declared in schema.sql.
+ *
+ * BACKLOG-4263 PR-4a: checklists and items no longer mark their deal (the six
+ * trg_cloud_sync_checklist_* / trg_cloud_sync_item_* triggers are gone); their
+ * changes are captured as todo ops by the six trg_cloud_sync_todo_* triggers
+ * (cloudSyncTodoSql.ts). 22 triggers in all.
  */
 import {
-  CHECKLIST_SOURCE_COLUMNS,
   DEAL_SOURCE_COLUMNS,
-  ITEM_SOURCE_COLUMNS,
   PARTY_CONTACT_COLUMNS,
   PARTY_EMAIL_COLUMNS,
   PARTY_PHONE_COLUMNS,
@@ -159,11 +162,6 @@ function markByContact(contactExpr: string): string {
 
 /** Child columns whose change marks the deal: each projection's own source list. */
 export const PARTY_TRIGGER_COLUMNS: readonly string[] = [...PARTY_ROW_COLUMNS.filter((c) => c !== "id"), "removed_reason"];
-export const CHECKLIST_TRIGGER_COLUMNS: readonly string[] = CHECKLIST_SOURCE_COLUMNS.filter((c) => c !== "id");
-export const ITEM_TRIGGER_COLUMNS: readonly string[] = ITEM_SOURCE_COLUMNS.filter((c) => c !== "id");
-
-const ITEM_PARENT = (ref: "NEW" | "OLD") =>
-  `(SELECT c.transaction_id FROM transaction_checklists c WHERE c.id = ${ref}.checklist_id)`;
 
 export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
   spec("trg_cloud_sync_tx_insert", "transactions", "INSERT", markBody("NEW.id"), { transactions: ["id", "user_id"] }, OWNER_GATE("NEW.user_id")),
@@ -188,34 +186,6 @@ export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
   ),
   spec("trg_cloud_sync_party_delete", "transaction_contacts", "DELETE", markBody("OLD.transaction_id"), {
     transaction_contacts: ["transaction_id"],
-  }),
-  spec("trg_cloud_sync_checklist_insert", "transaction_checklists", "INSERT", markBody("NEW.transaction_id"), {
-    transaction_checklists: ["transaction_id"],
-  }),
-  spec(
-    "trg_cloud_sync_checklist_update",
-    "transaction_checklists",
-    `UPDATE OF ${CHECKLIST_TRIGGER_COLUMNS.join(", ")}`,
-    markTwo("NEW.transaction_id", "OLD.transaction_id"),
-    { transaction_checklists: ["transaction_id", ...CHECKLIST_TRIGGER_COLUMNS] },
-  ),
-  spec("trg_cloud_sync_checklist_delete", "transaction_checklists", "DELETE", markBody("OLD.transaction_id"), {
-    transaction_checklists: ["transaction_id"],
-  }),
-  spec("trg_cloud_sync_item_insert", "transaction_checklist_items", "INSERT", markBody(ITEM_PARENT("NEW")), {
-    transaction_checklist_items: ["checklist_id"],
-    transaction_checklists: ["id", "transaction_id"],
-  }),
-  spec(
-    "trg_cloud_sync_item_update",
-    "transaction_checklist_items",
-    `UPDATE OF ${ITEM_TRIGGER_COLUMNS.join(", ")}`,
-    markTwo(ITEM_PARENT("NEW"), ITEM_PARENT("OLD")),
-    { transaction_checklist_items: ["checklist_id", ...ITEM_TRIGGER_COLUMNS], transaction_checklists: ["id", "transaction_id"] },
-  ),
-  spec("trg_cloud_sync_item_delete", "transaction_checklist_items", "DELETE", markBody(ITEM_PARENT("OLD")), {
-    transaction_checklist_items: ["checklist_id"],
-    transaction_checklists: ["id", "transaction_id"],
   }),
   // People on deals: a change to the person marks every deal the person is on.
   spec(
@@ -353,16 +323,11 @@ export const SELECT_PARTY_PHONES_SQL = `SELECT p.id, ${PARTY_PHONE_COLUMNS.map((
   FROM contact_phones p WHERE p.contact_id IN (${PARTY_CONTACT_IDS})`;
 export const SELECT_PARTY_SOURCE_LINKS_SQL = `SELECT ${PARTY_SOURCE_LINK_COLUMNS.map((c) => `l.${c}`).join(", ")}
   FROM contact_source_links l WHERE l.contact_id IN (${PARTY_CONTACT_IDS})`;
-export const SELECT_CHECKLIST_ROWS_SQL = `SELECT ${CHECKLIST_SOURCE_COLUMNS.map((c) => `c.${c}`).join(", ")}
-  FROM transaction_checklists c WHERE c.transaction_id = ? ORDER BY c.sort_order, c.id`;
-export const SELECT_ITEM_ROWS_SQL = `SELECT ${ITEM_SOURCE_COLUMNS.map((c) => `i.${c}`).join(", ")}
-  FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id
- WHERE c.transaction_id = ? ORDER BY i.checklist_id, i.sort_order, i.id`;
 
 /** Child state rows of one deal, plus any row of these local ids recorded under another deal (a move). */
 export const SELECT_CHILD_STATE_SQL = `SELECT entity, local_id, transaction_id, cloud_id, content_hash, hash_version, removed, last_status
   FROM cloud_sync_state
- WHERE project_ref = ? AND owner_user_id = ? AND entity IN ('party', 'checklist', 'checklist_item')
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = 'party'
    AND transaction_id = ?`;
 export const SELECT_CHILD_STATE_BY_LOCAL_SQL = `SELECT entity, local_id, transaction_id, cloud_id, content_hash, hash_version, removed, last_status
   FROM cloud_sync_state
@@ -417,8 +382,6 @@ const UNSENT = (table: string, entity: string, live: string, dealCol: string, jo
 /** Eligible deals with a live child that has no live sync record. */
 export const SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL = `SELECT id FROM (
   ${UNSENT("transaction_contacts", "party", "x.removed_at IS NULL", "x.transaction_id", "")}
-  UNION ${UNSENT("transaction_checklists", "checklist", "1 = 1", "x.transaction_id", "")}
-  UNION ${UNSENT("transaction_checklist_items", "checklist_item", "1 = 1", "c.transaction_id", "JOIN transaction_checklists c ON c.id = x.checklist_id")}
 ) u WHERE u.id IN (SELECT t.id FROM transactions t WHERE ${ELIGIBLE_DEAL_WHERE})`;
 
 /** Reconcile adoption: record an online deal's cloud id for a local deal with no record (hash unknown). */

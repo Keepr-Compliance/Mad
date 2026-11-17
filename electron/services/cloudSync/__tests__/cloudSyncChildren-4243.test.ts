@@ -3,6 +3,9 @@
  *
  * BACKLOG-4243 PR-3 — people, checklists and items: DTO, triggers, upload,
  * tombstones, repairs, the daily reconcile, and the Settings online-copy lines.
+ * BACKLOG-4263 PR-4a: checklists and items are no longer one-way children. They
+ * go as todo changes (cloud_todo_push); these tests assert the old item and
+ * checklist calls are never made (plan W3, W8) and that people still are.
  * Fake server envelopes: helpers/fakeServer.ts (transcribed from the contract SQL).
  */
 import { DRIVER, type TestDb } from "./helpers/sqlite";
@@ -25,7 +28,7 @@ import {
   USER_B,
 } from "./helpers/fixtures";
 import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
-import { buildChecklistDto, buildItemDto, buildPartyDto, CHECKLIST_SOURCE_COLUMNS, ITEM_SOURCE_COLUMNS, PARTY_CONTACT_COLUMNS, PARTY_ROW_COLUMNS, projectChild, type PartySource } from "../projection";
+import { buildPartyDto, PARTY_CONTACT_COLUMNS, PARTY_ROW_COLUMNS, projectChild, type PartySource } from "../projection";
 import { jcs } from "../jcs";
 import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import type { RpcTransport } from "../cloudClient";
@@ -145,8 +148,6 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
         fn(new Proxy(row, { get: (t, k) => (typeof k === "string" && seen.add(k), t[k as string]) }));
         return seen;
       };
-      for (const k of reads((r) => buildChecklistDto(r), { template_id: "t" })) expect(CHECKLIST_SOURCE_COLUMNS as readonly string[]).toContain(k);
-      for (const k of reads((r) => buildItemDto(r), {})) expect(ITEM_SOURCE_COLUMNS as readonly string[]).toContain(k);
       for (const k of reads((r) => buildPartyDto({ ...base, row: r }), {})) expect(PARTY_ROW_COLUMNS as readonly string[]).toContain(k);
       for (const k of reads((c) => buildPartyDto({ ...base, contact: c }), {})) expect([...PARTY_CONTACT_COLUMNS, "id"]).toContain(k);
     });
@@ -174,8 +175,9 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect(markedAfter(db, id, () => insertSourceLink(db, "sl-9", "ct-1", "google_contacts"))).toBe(true);
       expect(markedAfter(db, id, () => db.prepare("DELETE FROM contact_source_links WHERE id = 'sl-9'").run())).toBe(true);
       expect(markedAfter(db, id, () => db.prepare("UPDATE transaction_contacts SET notes = 'x' WHERE id = 'pt-1'").run())).toBe(true);
-      expect(markedAfter(db, id, () => db.prepare("UPDATE transaction_checklist_items SET note = 'x' WHERE id = 'it-1'").run())).toBe(true);
-      expect(markedAfter(db, id, () => db.prepare("UPDATE transaction_checklists SET template_name = 'y' WHERE id = 'cl-1'").run())).toBe(true);
+      // BACKLOG-4263 PR-4a: a todo change no longer marks the deal (it is a todo op; the header is not resent).
+      expect(markedAfter(db, id, () => db.prepare("UPDATE transaction_checklist_items SET note = 'x' WHERE id = 'it-1'").run())).toBe(false);
+      expect(markedAfter(db, id, () => db.prepare("UPDATE transaction_checklists SET template_name = 'y' WHERE id = 'cl-1'").run())).toBe(false);
     });
 
     it("a person moved between deals marks both deals", () => {
@@ -204,10 +206,11 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
 
   // ================================================================ upload
   describe("upload", () => {
-    it("one pass: header, people, checklists, items, then the mark call last; every row recorded", async () => {
+    it("one pass: header, people, the mark call, then the todos as todo changes; every row recorded; no old item call", async () => {
       const { db, e, id } = dealWithChildren();
       await startAndPass(e);
-      expect(fns(e)).toEqual(["cloud_upsert_deal", "cloud_upsert_parties", "cloud_upsert_checklists", "cloud_upsert_checklist_items", "cloud_mark_deal_synced"]);
+      expect(fns(e)).toEqual(["cloud_upsert_deal", "cloud_upsert_parties", "cloud_mark_deal_synced", "cloud_todo_push"]);
+      expect(e.server.todos.map((t) => `${t.entity}:${t.localId}`).sort()).toEqual(["checklist:cl-1", "item:it-1", "item:it-2"]);
       const parties = e.server.children.filter((c) => c.kind === "party");
       expect(parties).toHaveLength(2);
       const google = parties.find((p) => p.localId === "pt-2")!;
@@ -215,9 +218,6 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect(google.row).toMatchObject({ display_name: null, company: null, emails: [], phones: [], notes: "Typed on the deal", details_withheld: true });
       expect(parties.find((p) => p.localId === "pt-1")!.row).toMatchObject({ display_name: "Pat Example", details_withheld: false });
       expect(states(db).map((s) => `${s.entity}:${s.local_id}:${s.last_status}`)).toEqual([
-        "checklist:cl-1:saved",
-        "checklist_item:it-1:saved",
-        "checklist_item:it-2:saved",
         `deal:${id}:synced`,
         "party:pt-1:saved",
         "party:pt-2:saved",
@@ -225,15 +225,27 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect(dirtyCount(db)).toBe(0);
     });
 
-    it("a child change after a full save sends only that child and the mark call; the header is not resent", async () => {
+    it("a todo change after a full save sends only that change, as one todo op; the header and people are not resent", async () => {
       const { db, e } = dealWithChildren();
       await startAndPass(e);
       const before = e.server.writeCalls().length;
       db.prepare("UPDATE transaction_checklist_items SET note = 'Booked' WHERE id = 'it-2'").run();
       await pass(e);
       const sent = e.server.writeCalls().slice(before);
-      expect(sent.map((c) => c.fn)).toEqual(["cloud_upsert_checklist_items", "cloud_mark_deal_synced"]);
-      expect((sent[0].args.p_rows as Array<{ local_id: string }>).map((r) => r.local_id)).toEqual(["it-2"]);
+      expect(sent.map((c) => c.fn)).toEqual(["cloud_todo_push"]);
+      expect((sent[0].args.p_ops as Array<Record<string, unknown>>).map((o) => `${o.kind}:${o.local_id}:${o.part}:${o.value}`)).toEqual(["set:it-2:note:Booked"]);
+      expect(e.server.todos.find((t) => t.localId === "it-2")!.parts.note.value).toBe("Booked");
+    });
+
+    it("a person change after a full save sends only that person and the mark call", async () => {
+      const { db, e } = dealWithChildren();
+      await startAndPass(e);
+      const before = e.server.writeCalls().length;
+      db.prepare("UPDATE transaction_contacts SET notes = 'Called' WHERE id = 'pt-1'").run();
+      await pass(e);
+      const sent = e.server.writeCalls().slice(before);
+      expect(sent.map((c) => c.fn)).toEqual(["cloud_upsert_parties", "cloud_mark_deal_synced"]);
+      expect((sent[0].args.p_rows as Array<{ local_id: string }>).map((r) => r.local_id)).toEqual(["pt-1"]);
     });
 
     it("R3: a rejected person keeps the deal not saved: no mark call, accepted rows recorded, the deal counted as not saved", async () => {
@@ -259,30 +271,27 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       const real = e.server.transport;
       setTransport(e, async (f, a, s) => {
         const r = await real(f, a, s);
-        if (f !== "cloud_upsert_checklists") return r;
+        if (f !== "cloud_upsert_parties") return r;
         const body = r.data as { results: Array<Record<string, unknown>> };
         body.results = body.results.map((x) => ({ ...x, content_hash: "0".repeat(64) }));
         return r;
       });
       await startAndPass(e);
-      expect(states(db, "checklist")).toHaveLength(0);
+      expect(states(db, "party")).toHaveLength(0);
       expect(e.server.callsTo("cloud_mark_deal_synced")).toHaveLength(0);
     });
 
-    it("§8.4b: an item whose checklist is missing online is repaired by sending the checklist again", async () => {
+    it("W8: no pass ever calls the old checklist or item upload, also when a checklist is missing online", async () => {
       const { db, e } = dealWithChildren();
       await startAndPass(e);
-      // The checklist disappears online (another computer), items stay referenced locally.
-      e.server.children = e.server.children.filter((c) => c.kind !== "checklist");
+      e.server.todos = e.server.todos.filter((t) => t.entity !== "checklist");
       db.prepare("UPDATE transaction_checklist_items SET note = 'Again' WHERE id = 'it-1'").run();
-      const before = e.server.writeCalls().length;
+      db.prepare("UPDATE transaction_contacts SET notes = 'x' WHERE id = 'pt-1'").run();
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
       await pass(e);
-      expect(e.server.writeCalls().slice(before).map((c) => c.fn)).toEqual([
-        "cloud_upsert_checklist_items",
-        "cloud_upsert_checklists",
-        "cloud_upsert_checklist_items",
-        "cloud_mark_deal_synced",
-      ]);
+      expect(e.server.callsTo("cloud_upsert_checklists")).toHaveLength(0);
+      expect(e.server.callsTo("cloud_upsert_checklist_items")).toHaveLength(0);
+      expect(e.server.calls.filter((c) => c.fn === "cloud_tombstone" && c.args.p_kind !== "party")).toHaveLength(0);
       expect(dirtyCount(db)).toBe(0);
     });
 
@@ -293,14 +302,18 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       db.prepare("DELETE FROM transaction_checklists WHERE id = 'cl-1'").run();
       await pass(e);
       const tomb = e.server.callsTo("cloud_tombstone").map((c) => `${c.args.p_kind}:${(c.args.p_cloud_ids as string[]).length}`);
-      expect(tomb).toEqual(["checklist_item:2", "checklist:1", "party:1"]);
-      expect(e.server.children.filter((c) => c.removed).map((c) => c.localId).sort()).toEqual(["cl-1", "it-1", "it-2", "pt-1"]);
-      expect(states(db).filter((s) => s.removed === 1).map((s) => s.local_id).sort()).toEqual(["cl-1", "it-1", "it-2", "pt-1"]);
+      expect(tomb).toEqual(["party:1"]);
+      expect(e.server.children.filter((c) => c.removed).map((c) => c.localId).sort()).toEqual(["pt-1"]);
+      expect(states(db).filter((s) => s.removed === 1).map((s) => s.local_id).sort()).toEqual(["pt-1"]);
+      // The checklist delete is one todo removal (its items go with it, no item op: R7, W11).
+      const removals = e.server.callsTo("cloud_todo_push").flatMap((c) => c.args.p_ops as Array<Record<string, unknown>>).filter((o) => o.kind === "remove");
+      expect(removals.map((o) => `${o.entity}:${o.local_id}`)).toEqual(["checklist:cl-1"]);
+      expect(e.server.todos.find((t) => t.localId === "cl-1")!.removed).toBe(true);
       const v = e.server.children.find((c) => c.localId === "pt-1")!.version;
       await pass(e);
       db.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at) SELECT id, 1, 'x' FROM transactions").run();
       await pass(e);
-      expect(e.server.callsTo("cloud_tombstone")).toHaveLength(3);
+      expect(e.server.callsTo("cloud_tombstone")).toHaveLength(1);
       expect(e.server.children.find((c) => c.localId === "pt-1")!.version).toBe(v);
     });
 
@@ -377,9 +390,9 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       await pass(e);
       const reads = e.server.calls.filter((c) => c.fn.startsWith("cloud_list"));
       expect([...new Set(reads.map((c) => c.fn))]).toEqual(["cloud_list_install_rows"]);
-      expect(reads.map((c) => c.args.p_kind)).toEqual(["deal", "party", "checklist", "checklist_item"]);
+      expect(reads.map((c) => c.args.p_kind)).toEqual(["deal", "party"]);
       expect(e.server.deals).toHaveLength(1);
-      expect(e.server.children).toHaveLength(5);
+      expect(e.server.children).toHaveLength(2);
       expect(states(db, "deal")[0].last_status).toBe("synced");
     });
 
@@ -392,7 +405,7 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect(e.server.children.find((c) => c.localId === "pt-1")!.removed).toBe(false);
     });
 
-    it("a deal synced before people and checklists were uploaded (header only) gets its children", async () => {
+    it("a deal synced before its people were uploaded (header only) gets its people; its todos are not re-sent by the reconcile (W3)", async () => {
       const { db, e, id } = dealWithChildren();
       // A PR-2 era record: the header synced, no child records, no mark.
       e.server.override = (fn) => (fn.startsWith("cloud_upsert_") && fn !== "cloud_upsert_deal" ? { data: { ok: true, results: [] }, error: null } : undefined);
@@ -402,8 +415,10 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       db.prepare("UPDATE cloud_sync_state SET last_status = 'synced'").run();
       db.exec("DELETE FROM cloud_sync_dirty");
       db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      const todoCallsBefore = e.server.callsTo("cloud_todo_push").length;
       await pass(e);
-      expect(e.server.children.filter((c) => c.dealId === e.server.deals[0].id && !c.removed)).toHaveLength(5);
+      expect(e.server.children.filter((c) => c.dealId === e.server.deals[0].id && !c.removed)).toHaveLength(2);
+      expect(e.server.callsTo("cloud_todo_push")).toHaveLength(todoCallsBefore);
       expect(dirty(db).map((d) => d.transaction_id)).not.toContain(id);
     });
 
@@ -602,7 +617,7 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
 // ================================================================ review round (PR-3)
 import fs from "fs";
 import path from "path";
-import { CHECKLIST_HASHED_FIELDS, ITEM_HASHED_FIELDS, PARTY_HASHED_FIELDS } from "../projection";
+import { PARTY_HASHED_FIELDS } from "../projection";
 
 describe(`Keepr Cloud PR-3 review fixes [${DRIVER}]`, () => {
   /** First upload of a deal: the server commits the header, the process dies before the local record. */
@@ -710,8 +725,9 @@ describe(`Keepr Cloud PR-3 review fixes [${DRIVER}]`, () => {
     for (const k of [...shape.party.reader_keys, ...shape.party.stored_only_keys]) expect(Object.keys(party)).toContain(k);
     expect(typeof party.details_withheld).toBe("boolean");
     expect(shape.party.details_withheld).toMatchObject({ always_present: true, in_content_hash: true, default: false });
-    expect(Object.keys(buildChecklistDto({})).sort()).toEqual([...CHECKLIST_HASHED_FIELDS].sort());
-    expect(Object.keys(buildItemDto({})).sort()).toEqual([...ITEM_HASHED_FIELDS].sort());
+    // BACKLOG-4263 PR-4a: the checklist and item shapes left this contract (cloud-todo-change-v1 replaces them).
+    expect(shape.checklist).toBeUndefined();
+    expect(shape.checklist_item).toBeUndefined();
   });
 
   it("N5: a stop meant for an earlier pass does not fail the user's Delete; a pass triggered meanwhile runs after it", async () => {

@@ -227,6 +227,34 @@ function names(db: DatabaseType, type: "table" | "trigger", like: string): strin
   );
 }
 const ALL_TRIGGERS = CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort();
+/**
+ * BACKLOG-4263 PR-4a: the exact 22, by name (16 dirty-mark + 6 todo capture). The six checklist/item
+ * dirty-mark triggers are gone; a list derived only from CLOUD_SYNC_TRIGGERS would follow any change.
+ */
+const PINNED_TRIGGERS = [
+  "trg_cloud_sync_contact_emails_delete",
+  "trg_cloud_sync_contact_emails_insert",
+  "trg_cloud_sync_contact_emails_update",
+  "trg_cloud_sync_contact_phones_delete",
+  "trg_cloud_sync_contact_phones_insert",
+  "trg_cloud_sync_contact_phones_update",
+  "trg_cloud_sync_contact_source_links_delete",
+  "trg_cloud_sync_contact_source_links_insert",
+  "trg_cloud_sync_contact_source_links_update",
+  "trg_cloud_sync_contact_update",
+  "trg_cloud_sync_party_delete",
+  "trg_cloud_sync_party_insert",
+  "trg_cloud_sync_party_update",
+  "trg_cloud_sync_todo_checklist_delete",
+  "trg_cloud_sync_todo_checklist_insert",
+  "trg_cloud_sync_todo_checklist_update",
+  "trg_cloud_sync_todo_item_delete",
+  "trg_cloud_sync_todo_item_insert",
+  "trg_cloud_sync_todo_item_update",
+  "trg_cloud_sync_tx_delete",
+  "trg_cloud_sync_tx_insert",
+  "trg_cloud_sync_tx_update",
+];
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -405,7 +433,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:106-109 (INSERT_CHECKLIST_SQL)",
     kind: "insert",
     table: "transaction_checklists",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`checklist:${NEW_CHECKLIST}:create`],
     run: (db) =>
       db
@@ -419,7 +447,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:118-122 (INSERT_CHECKLIST_ITEM_SQL)",
     kind: "insert",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${NEW_ITEM}:create`],
     run: (db) =>
       db
@@ -434,7 +462,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:321-326 (SET_CHECKLIST_ITEM_CHECKED_SQL: check an item)",
     kind: "update",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${I1}:done`],
     run: (db) =>
       db
@@ -450,7 +478,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:329-331 (SET_CHECKLIST_ITEM_NOTE_SQL)",
     kind: "update",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${I2}:note`],
     run: (db) => db.prepare("\n  UPDATE transaction_checklist_items SET note = ? WHERE id = ?\n").run("Booked", I2),
   },
@@ -458,7 +486,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:213-215 (SET_ITEM_SORT_ORDER_SQL)",
     kind: "update",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${I2}:order`],
     run: (db) => db.prepare("\n  UPDATE transaction_checklist_items SET sort_order = ? WHERE id = ? AND checklist_id = ?\n").run(5, I2, CL1),
   },
@@ -466,7 +494,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:175-181 (RENAME_PRIVATE_ITEM_SQL; reserved id checklistPrivacy.ts:27)",
     kind: "update",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${I_PRIVATE}:title`],
     run: (db) =>
       db
@@ -483,7 +511,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:189-195 (DELETE_PRIVATE_ITEM_SQL)",
     kind: "delete",
     table: "transaction_checklist_items",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     ops: [`item:${I_PRIVATE}:removed`],
     trash: [`item:${I_PRIVATE}`],
     run: (db) =>
@@ -501,7 +529,7 @@ const WRITES_248: Write248[] = [
     at: "electron/services/db/checklistSql.ts:138-141 + checklistPrivacy.ts:43 (DELETE_CHECKLIST_IN_TRANSACTION_SQL; its items follow by cascade)",
     kind: "cascade",
     table: "transaction_checklists",
-    marks: [D1],
+    marks: [], // BACKLOG-4263 PR-4a: a todo change marks no deal; it is a todo op
     // R7: one checklist op; its item is archived by the checklist's own trigger, with no item op.
     ops: [`checklist:${NEW_CHECKLIST}:removed`],
     trash: [`checklist:${NEW_CHECKLIST}`, `item:${NEW_ITEM}`],
@@ -777,7 +805,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await again.svc.close();
   });
 
-  it("1b TURNED ON after the upgrade: the engine's enable path adds all 28 triggers and marks exactly the user's eligible deals in one transaction; a failed enable leaves nothing; no other row changes; the next pass uploads those deals", async () => {
+  it("1b TURNED ON after the upgrade: the engine's enable path adds all 22 triggers and marks exactly the user's eligible deals in one transaction; a failed enable leaves nothing; no other row changes; the next pass uploads those deals", async () => {
     buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
     const afterOpen = snapshot(db);
@@ -786,10 +814,14 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { DELETE_STATE_FOR_USER_SQL, MARK_ALL_ELIGIBLE_FOR_USER_SQL } = require("../db/cloudSyncSql") as typeof import("../db/cloudSyncSql");
     const realPrepare = db.prepare.bind(db);
+    // BACKLOG-4263 PR-4a: the todo steps of the same transaction too (the clear, the cursor, the initial scan).
     const steps: Array<[string, (sql: string) => boolean]> = [
-      ["trigger creation", (sql) => sql.startsWith("CREATE TRIGGER trg_cloud_sync_item_insert")],
+      ["trigger creation", (sql) => sql.startsWith("CREATE TRIGGER trg_cloud_sync_todo_item_insert")],
       ["state reset", (sql) => sql === DELETE_STATE_FOR_USER_SQL],
       ["marks", (sql) => sql === MARK_ALL_ELIGIBLE_FOR_USER_SQL],
+      ["todo clear", (sql) => sql.startsWith("DELETE FROM cloud_sync_todo_trash WHERE project_ref = ? AND owner_user_id = ?")],
+      ["todo cursor", (sql) => sql.startsWith("INSERT INTO cloud_sync_todo_cursor")],
+      ["initial scan", (sql) => sql.includes("INSERT INTO cloud_sync_todo_outbox") && sql.includes("DO NOTHING")],
     ];
     // Every step is checked, then compared in one assertion, so a red names every step that leaked.
     const outcomes: Array<{ step: string; threw: boolean; hit: boolean; triggers: string[]; changed: string[] }> = [];
@@ -814,6 +846,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       // Leave the next step a clean start even when this one leaked.
       for (const t of CLOUD_SYNC_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${t.name}`);
       db.exec("DELETE FROM cloud_sync_settings; DELETE FROM cloud_sync_dirty; DELETE FROM cloud_sync_state");
+      db.exec("DELETE FROM cloud_sync_todo_outbox; DELETE FROM cloud_sync_todo_cursor; DELETE FROM cloud_sync_todo_counter");
     }
     expect(outcomes).toEqual(steps.map(([step]) => ({ step, threw: true, hit: true, triggers: [], changed: [] })));
 
@@ -822,8 +855,19 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     expect(eligibleDeals(db, U_ON)).toEqual([D1, D4]);
     expect(dirtyIds(db)).toEqual([D1, D4]);
     expect(db.prepare("SELECT user_id, enabled FROM cloud_sync_settings").all()).toEqual([{ user_id: U_ON, enabled: 1 }]);
-    // What enabling writes is cloud_sync_settings and cloud_sync_dirty; every other row is as the open left it.
-    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty"])).toEqual([]);
+    // What enabling writes is cloud_sync_settings and cloud_sync_dirty, and (BACKLOG-4263) the todo cursor and
+    // the initial scan's outbox rows; every other row is as the open left it.
+    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty", "cloud_sync_todo_cursor", "cloud_sync_todo_outbox"])).toEqual([]);
+    expect(db.prepare("SELECT owner_user_id, last_seq, full_pull_owed FROM cloud_sync_todo_cursor").all()).toEqual([{ owner_user_id: U_ON, last_seq: 0, full_pull_owed: 1 }]);
+    // The initial scan: one create per checklist and item of the user's deals, every one with the scan epoch.
+    const userTodos =
+      (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists c JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n +
+      (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n;
+    expect(userTodos).toBeGreaterThan(0);
+    expect(db.prepare("SELECT part, clock_epoch, owner_user_id FROM cloud_sync_todo_outbox GROUP BY part, clock_epoch, owner_user_id").all()).toEqual([
+      { part: "create", clock_epoch: -1, owner_user_id: U_ON },
+    ]);
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(userTodos);
 
     const e = makeEngineOn(db);
     e.service.refreshSchedule();
@@ -840,7 +884,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("1d v80 PROFILE WITH KEEPR CLOUD ON (2.49 before v81): this build runs v81 (install_removed_at added, NULL; due_date added, NULL), every pre-existing row unchanged, all 28 triggers, the user's deals marked; the next open changes nothing", async () => {
+  it("1d v80 PROFILE WITH KEEPR CLOUD ON (2.49 before v81): this build runs v81 (install_removed_at added, NULL; due_date added, NULL), every pre-existing row unchanged, all 22 triggers, the user's deals marked; the next open changes nothing", async () => {
     // A v80 file as a 2.49 build at b869f3911 leaves it: the v79 profile, that build's five cloud tables
     // (vendored DDL, no install_removed_at), v80 applied, one user with Keepr Cloud on.
     const { file } = buildV79Profile(dir);
@@ -901,7 +945,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
   // machine rebind): every write still succeeds and records its ops with NULL edit_seq / clock_epoch.
   // WITH it (install row present at turn-on): edit_seq rises by one per recorded change.
   for (const withCounter of [false, true]) {
-    it(`2b GOING BACK, Keepr Cloud on (${withCounter ? "with" : "without"} the todo counter row): with all 28 triggers present, every common 2.48.0 write succeeds, none raises, each marks the deal it touched and records exactly its todo ops and trash rows`, async () => {
+    it(`2b GOING BACK, Keepr Cloud on (${withCounter ? "with" : "without"} the todo counter row): with all 22 triggers present, every common 2.48.0 write succeeds, none raises, each marks the deal it touched and records exactly its todo ops and trash rows`, async () => {
       buildV79Profile(dir);
       const first = await openWithThisBuild();
       if (withCounter) {
@@ -909,6 +953,10 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       }
       enable(first.db);
       first.db.exec("DELETE FROM cloud_sync_dirty");
+      // BACKLOG-4263 PR-4a: the turn-on's initial scan queued the existing todos; 2.48.0's writes come after.
+      const scanned = count(first.db, "cloud_sync_todo_outbox");
+      expect(scanned).toBeGreaterThan(0);
+      first.db.exec("DELETE FROM cloud_sync_todo_outbox");
       expect(count(first.db, "cloud_sync_todo_counter")).toBe(withCounter ? 1 : 0);
       await first.svc.close();
       const db = openAs248(path.join(dir, "mad.db"));
@@ -924,9 +972,9 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       if (withCounter) {
         // One step per recorded change, in write order; the clock did not step back.
         expect(rows.map((r) => `${r.entity}:${r.local_id}:${r.part}`)).toEqual(expectedOps);
-        expect(rows.map((r) => r.edit_seq)).toEqual(expectedOps.map((_, i) => i + 1));
+        expect(rows.map((r) => r.edit_seq)).toEqual(expectedOps.map((_, i) => scanned + i + 1));
         expect(rows.every((r) => r.clock_epoch === 0)).toBe(true);
-        expect(db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter").all()).toEqual([{ edit_seq: expectedOps.length }]);
+        expect(db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter").all()).toEqual([{ edit_seq: scanned + expectedOps.length }]);
       } else {
         expect(rows.every((r) => r.edit_seq === null && r.clock_epoch === null)).toBe(true);
         expect(count(db, "cloud_sync_todo_counter")).toBe(0);
@@ -938,12 +986,13 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     });
   }
 
-  it("2b TRIGGER SWEEP, Keepr Cloud on: every one of the 28 triggers fires on its own event (a mark's generation moves; for the 6 todo triggers, an outbox or trash row changes), and no insert, update of any watched column, delete, bulk insert or cascade raises", async () => {
+  it("2b TRIGGER SWEEP, Keepr Cloud on: every one of the 22 triggers fires on its own event (a mark's generation moves; for the 6 todo triggers, an outbox or trash row changes), and no insert, update of any watched column, delete, bulk insert or cascade raises", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
     enable(first.db);
     await first.svc.close();
     const db = openAs248(path.join(dir, "mad.db"));
+    expect(ALL_TRIGGERS).toEqual(PINNED_TRIGGERS);
     const fired = new Set<string>();
     const TODO = new Set(CLOUD_SYNC_TODO_TRIGGERS.map((t) => t.name));
     // Each trigger's own evidence: the dirty-mark triggers move a generation; a todo trigger changes the
@@ -1108,7 +1157,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("2d 2.48.0's schema.sql re-run on a Keepr Cloud profile: it succeeds, drops or rebuilds nothing, keeps all 28 triggers, creates no mark, and changes no row", async () => {
+  it("2d 2.48.0's schema.sql re-run on a Keepr Cloud profile: it succeeds, drops or rebuilds nothing, keeps all 22 triggers, creates no mark, and changes no row", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
     enable(first.db);

@@ -1,7 +1,7 @@
 /**
  * Keepr Cloud children of one deal — BACKLOG-4243 PR-3.
  *
- * Builds the people, checklists and checklist items of a deal and decides what
+ * Builds the people of a deal and decides what
  * a pass sends and what it tombstones, from local rows and this database's
  * sync records. No I/O beyond the reads passed in.
  *
@@ -9,11 +9,12 @@
  * differs, or the record belongs to another deal (the row moved). A moved row's
  * old online copy is tombstoned first, so the person does not stay on the old
  * deal online. Tombstone when: a live record of this deal has no live local row.
+ *
+ * Checklists and items are not children here since BACKLOG-4263 PR-4a: they are sent as todo changes
+ * (todos/sender.ts), and the two old one-way item functions are dropped online (migration 20261118120000).
  */
 import type { ChildStateRow, DealChildRows } from "../db/cloudSyncDbService";
 import {
-  buildChecklistDto,
-  buildItemDto,
   buildPartyDto,
   HASH_VERSION,
   projectChild,
@@ -22,7 +23,7 @@ import {
   type ProjectedChild,
 } from "./projection";
 
-export const CHILD_KINDS: readonly ChildKind[] = ["party", "checklist", "checklist_item"];
+export const CHILD_KINDS: readonly ChildKind[] = ["party"];
 /** Server caps per call (migration 20261112190000 CAP:rows, CAP:tombstone); bytes kept well under 16 MB. */
 export const MAX_ROWS_PER_CALL = 500;
 export const MAX_BYTES_PER_CALL = 8 * 1024 * 1024;
@@ -72,11 +73,7 @@ export function projectChildren(rows: DealChildRows): Record<ChildKind, Projecte
       };
       return projectChild("party", localIdOf(p), buildPartyDto(source));
     });
-  return {
-    party: parties,
-    checklist: rows.checklists.map((c) => projectChild("checklist", localIdOf(c), buildChecklistDto(c))),
-    checklist_item: rows.items.map((i) => projectChild("checklist_item", localIdOf(i), buildItemDto(i))),
-  };
+  return { party: parties };
 }
 
 export function planChildren(
@@ -85,7 +82,7 @@ export function planChildren(
   ofDeal: ChildStateRow[],
   byLocal: (kind: ChildKind, localId: string) => ChildStateRow | null,
 ): ChildPlan {
-  const plan: ChildPlan = { moved: [], send: { party: [], checklist: [], checklist_item: [] }, tombstone: [] };
+  const plan: ChildPlan = { moved: [], send: { party: [] }, tombstone: [] };
   for (const kind of CHILD_KINDS) {
     const live = new Set<string>();
     for (const p of projected[kind]) {
