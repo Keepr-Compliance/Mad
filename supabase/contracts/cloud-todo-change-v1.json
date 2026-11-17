@@ -278,7 +278,7 @@
     "horizon_required"
   ],
   "wire_types": {
-    "rule": "Every value is sent as the JSON type listed in field_types; the server does not convert. Booleans are JSON true/false (never 0/1 or strings). A set op's value is the bare part value, never wrapped in an object keyed by the part name. Times are ISO 8601 strings with a zone (for example 2026-11-17T04:05:08.266Z); due_date is a YYYY-MM-DD string; ids are uuid strings; integers are JSON numbers without a fraction.",
+    "rule": "Every value is sent as the JSON type listed in field_types; the server does not convert. Booleans are JSON true/false (never 0/1 or strings). A set op's value is the bare part value, never wrapped in an object keyed by the part name. Times are ISO 8601 strings with a zone (for example 2026-11-17T04:05:08.266Z); due_date is a YYYY-MM-DD string; ids (id, deal_id, checklist_id) are uuid strings, compared as uuids in any letter case; a malformed uuid rejects the op with reason invalid_value, a final answer kept for replay (never not_found or parent_missing); local ids (local_id, checklist_local_id) are free text; integers are JSON numbers without a fraction.",
     "examples_accepted": [
       {
         "kind": "set",

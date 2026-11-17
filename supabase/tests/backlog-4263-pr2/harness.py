@@ -212,7 +212,7 @@ def mutants():
     m.append(ddl_mutant('R10_table_select', 'GRANT SELECT ON public.cloud_todo_history TO authenticated',
                         "has_table_privilege('authenticated', 'public.cloud_todo_history', 'SELECT')", P('p_grants')))
     m.append(fn_mutant('V_ids_cast_inline', AO, [("WHERE x.id = v_did", "WHERE x.id = (op ->> 'deal_id')::uuid", 2),
-                                                  ("AND (x.id = v_tid", "AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)", 2)], P('p_bad_ids')))
+                                                  ("AND (x.id = v_tid", "AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)", 2)], P('p_bad_ids'), want='green'))   # equivalent since TYPES:uuid refuses malformed ids first
     # SR review mutants SR2, SR3, SR6, SR7, SR9 (fragments as in scratchpad/4263/sr-pr2/sr_run.py)
     m.append(fn_mutant('SR2_direct_seq_inside_allocator_user', AO, [("    v_status := 'restored';", "    UPDATE public.cloud_deal_checklist_items SET change_seq = -change_seq WHERE id = v_id;\n    v_status := 'restored';", 1)], P('p_seq_catalog')))
     m.append(fn_mutant('SR3_restore_deal_without_head', 'cloud_todo_restore', [("  PERFORM public._cloud_todo_take_seq(v_uid, 0);\n  IF p_op_id IS NOT NULL THEN", "  IF p_op_id IS NOT NULL THEN", 1)], P('p_lock_order')))
@@ -240,6 +240,8 @@ def mutants():
     m.append(fn_mutant('DR3_parent_any_deal', AO, [("WHERE x.cloud_deal_id = d.id                                                            /*PARENT:deal*/", "WHERE x.owner_user_id IS NOT NULL", 1)], P('dr3_cross')))
     m.append(fn_mutant('DR3_my_items_list_removable', AO, [("OR (ent = 'checklist' AND v_my) THEN", "OR false THEN", 1)], P('dr3_mapped_my_items')))
     m.append(fn_mutant('DR3_checklist_ops_no_alias', AO, [("OR (op ->> 'local_id') = ANY (x.mapped_local_ids))));   /*CHECKLIST:alias*/", ")));", 1)], P('dr3_mapped_my_items')))
+    m.append(fn_mutant('V_malformed_uuid_transient', AO, [("WHERE op ? u.fk AND jsonb_typeof(op -> u.fk) = 'string' AND NOT pg_input_is_valid(op ->> u.fk, 'uuid');", "WHERE false;", 1)], P('p_bad_ids')))
+    m.append(fn_mutant('V_checklist_id_as_text', AO, [("AND ((v_cid IS NOT NULL AND x.id = v_cid)", "AND ((v_cid IS NOT NULL AND x.id::text = op ->> 'checklist_id')", 1)], P('dr3_mapped_my_items')))
     m.append(fn_mutant('S3_restore_under_removed_install', 'cloud_todo_restore', [("ELSIF d.removed_kind = 'deal' AND public._cloud_install_removed(v_uid, d.source_install_id) THEN", "ELSIF false THEN", 1)], P('p_restore_under_removed_install')))
     for fn, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items'),
                     ('cloud_upsert_messages', 'messages'), ('cloud_upsert_files', 'files'), ('cloud_mark_deal_synced', 'mark_synced'), ('cloud_tombstone', 'tombstone')]:

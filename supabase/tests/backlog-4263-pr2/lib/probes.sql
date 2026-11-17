@@ -717,8 +717,14 @@ BEGIN
          jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'deal_id', 'abc', 'local_id', 'i2', 'part', 'note', 'value', 'x', 'edited_at', s),
          jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', 'abc', 'local_id', 'c9', 'template_id', 't', 'edited_at', s),
          pg_temp.op_set(pg_temp.id('i2'), 'note', '"good"', 1, 1, s)));
-  RETURN pg_temp.pass(r ->> 'ok' = 'true' AND pg_temp.st(r, 0) = 'not_found' AND pg_temp.st(r, 1) = 'not_found' AND pg_temp.st(r, 2) = 'not_found'
-                      AND pg_temp.st(r, 3) = 'not_found' AND pg_temp.st(r, 4) = 'applied', r::text);
+  -- malformed uuids are a final refusal, kept in the ledger: the same op_id is answered the same way again
+  RETURN pg_temp.all_of(
+    pg_temp.pass(r ->> 'ok' = 'true' AND pg_temp.st(r, 0) = 'rejected' AND pg_temp.r0(r, 0) ->> 'field' = 'id'
+                 AND pg_temp.st(r, 1) = 'rejected' AND pg_temp.r0(r, 1) ->> 'field' = 'deal_id'
+                 AND pg_temp.st(r, 2) = 'rejected' AND pg_temp.st(r, 3) = 'rejected' AND pg_temp.st(r, 4) = 'applied', r::text),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_todo_ops o WHERE o.op_id = (r -> 'results' -> 0 ->> 'op_id')::uuid) = 1, 'malformed id answer kept'),
+    pg_temp.pass(pg_temp.st(pg_temp.push(A, pg_temp.id('I1'), s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item',
+                 'deal_id', pg_temp.id('D1'), 'checklist_id', 'not-a-uuid', 'local_id', 'b9', 'title', 'x', 'edited_at', s)))) = 'rejected', 'malformed checklist_id'));
 END $p$;
 
 
@@ -1075,8 +1081,8 @@ BEGIN
   ri := pg_temp.push(A, I1, s, jsonb_build_array(
           jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1, 'checklist_local_id', 'my-new', 'local_id', 'mi1', 'title', 'Mine 1', 'edited_at', s),
           jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1, 'checklist_local_id', 'my-new', 'local_id', 'mi2', 'title', 'Mine 2', 'edited_at', s)));
-  rc := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1,
-          'checklist_id', my1, 'local_id', 'mi3', 'title', 'Mine 3', 'edited_at', s)));
+  rc := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', upper(D1::text),
+          'checklist_id', upper(my1::text), 'local_id', 'mi3', 'title', 'Mine 3', 'edited_at', s)));   -- upper-case uuids resolve
   ro := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'checklist', 'deal_id', D1,
           'local_id', 'my-new', 'part', 'order', 'value', 9, 'base_rev', 1, 'edit_seq', 5, 'edited_at', s)));
   rr := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'remove', 'entity', 'checklist', 'deal_id', D1,

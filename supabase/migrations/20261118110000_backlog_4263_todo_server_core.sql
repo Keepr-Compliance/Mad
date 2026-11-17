@@ -527,7 +527,7 @@ DECLARE
   v_id uuid; v_lid text; v_json jsonb; cur jsonb; nv jsonb; v_part text; v_base bigint; v_status text; v_conf boolean := false;
   v_rem_self boolean; v_rem_parent boolean; v_my boolean; v_wins boolean; v_cur_eff timestamptz; v_outcome text;
   v_title jsonb; v_note jsonb; v_due jsonb; v_done jsonb; v_order jsonb; v_desc text; v_doc text; v_req boolean;
-  pt text; r jsonb; v_tid uuid; v_did uuid; v_on_removed boolean;
+  pt text; r jsonb; v_tid uuid; v_did uuid; v_cid uuid; v_on_removed boolean;
   -- Founder switch (PR-5 question): may an AI app restore a removed item of a brokerage checklist? Default no.
   v_ai_restore_template boolean := false;                                                      /*SWITCH:ai_restore_template_item*/
 BEGIN
@@ -544,9 +544,16 @@ BEGIN
   IF pt IS NOT NULL THEN
     RETURN jsonb_build_object('op_id', (op ->> 'op_id')::uuid, 'status', 'rejected', 'reason', 'invalid_value', 'field', pt);
   END IF;
-  -- ids are parsed here, before any statement uses them: a malformed id answers not_found for its op only
+  -- a malformed uuid field is a final refusal of this op (kept for replay), never an order-dependent one
+  SELECT string_agg(u.fk, ',' ORDER BY u.fk) INTO pt FROM unnest(ARRAY['id', 'deal_id', 'checklist_id']) u(fk)
+   WHERE op ? u.fk AND jsonb_typeof(op -> u.fk) = 'string' AND NOT pg_input_is_valid(op ->> u.fk, 'uuid');   /*TYPES:uuid*/
+  IF pt IS NOT NULL THEN
+    RETURN jsonb_build_object('op_id', (op ->> 'op_id')::uuid, 'status', 'rejected', 'reason', 'invalid_value', 'field', pt);
+  END IF;
+  -- ids are parsed here, before any statement uses them, and compared as uuids (any letter case)
   IF pg_input_is_valid(op ->> 'id', 'uuid') THEN v_tid := (op ->> 'id')::uuid; END IF;
   IF pg_input_is_valid(op ->> 'deal_id', 'uuid') THEN v_did := (op ->> 'deal_id')::uuid; END IF;
+  IF pg_input_is_valid(op ->> 'checklist_id', 'uuid') THEN v_cid := (op ->> 'checklist_id')::uuid; END IF;
   v_eff := CASE WHEN NOT v_desk THEN p_recv
                 WHEN pg_input_is_valid(op ->> '_eff', 'timestamptz') THEN (op ->> '_eff')::timestamptz
                 ELSE '-infinity'::timestamptz END;
@@ -649,7 +656,7 @@ BEGIN
       -- the parent by cloud id (checklist_id) or by local id, the desktop's own or one answered 'mapped'; always on this deal
       SELECT * INTO c FROM public.cloud_deal_checklists x
        WHERE x.cloud_deal_id = d.id                                                            /*PARENT:deal*/
-         AND ((pg_input_is_valid(op ->> 'checklist_id', 'uuid') AND x.id::text = op ->> 'checklist_id')
+         AND ((v_cid IS NOT NULL AND x.id = v_cid)                                                      /*PARENT:by_id*/
               OR (NOT op ? 'checklist_id' AND (x.local_checklist_id = op ->> 'checklist_local_id'
                                                OR (op ->> 'checklist_local_id') = ANY (x.mapped_local_ids))))   /*PARENT:alias*/
        ORDER BY (x.local_checklist_id = op ->> 'checklist_local_id') DESC NULLS LAST
