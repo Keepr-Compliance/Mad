@@ -392,6 +392,20 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(e.audits).toEqual([]);
     });
 
+    it("never for a deal whose removal by this computer the server has not confirmed (deleted before its first upload was recorded here; a full pull lists it live)", async () => {
+      const { db, e } = await synced();
+      db.prepare("DELETE FROM cloud_sync_state WHERE entity = 'deal'").run();
+      del(db);
+      await pass(e);
+      expect(e.server.deals).toHaveLength(1);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_dirty WHERE transaction_id = ?", DEAL)).toBe(0);
+      db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = 0, full_pull_owed = 1, horizon = NULL").run();
+      await pass(e);
+      expect(n(db, "SELECT COUNT(*) AS n FROM transactions WHERE id = ?", DEAL)).toBe(0);
+      expect(archiveRows(db)).toBe(1);
+      expect(e.audits).toEqual([]);
+    });
+
     it("refused while Delete for good is owed, and never for a deal with no archive row", async () => {
       const { db, e } = await synced();
       del(db);
@@ -474,6 +488,22 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       p2.db.prepare("INSERT INTO transactions (id, user_id, property_address, status, detection_status) VALUES (?, ?, 'From the backup', 'active', 'confirmed')").run(DEAL, USER_A);
       prepareRestoredFile(p2.db);
       expect(archive.listArchivedDeals(p2.db, USER_A).map((d) => d.transactionId)).toEqual([dealB]);
+    });
+
+    it("the local user's id unified since the delete (the FK moved the owner): the rows come back under the current id", () => {
+      const { db } = profile();
+      del(db);
+      const NEW = "user-a-unified-4263";
+      db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'u@example.test', 'google', ?)").run(NEW, NEW);
+      db.prepare(`UPDATE ${archive.DEAL_ARCHIVE_TABLE} SET owner_user_id = ?`).run(NEW);
+      db.prepare("UPDATE contacts SET user_id = ?").run(NEW);
+      db.prepare("UPDATE emails SET user_id = ?").run(NEW);
+      db.prepare("UPDATE messages SET user_id = ?").run(NEW);
+      db.prepare("UPDATE cloud_sync_settings SET user_id = ?").run(NEW);
+      const r = restore(db, NEW);
+      expect(r).toMatchObject({ ok: true, skippedTotal: 0 });
+      expect(db.prepare("SELECT user_id FROM transactions WHERE id = ?").get(DEAL)).toEqual({ user_id: NEW });
+      expect(n(db, "SELECT COUNT(*) AS n FROM communications WHERE transaction_id = ? AND user_id = ?", DEAL, NEW)).toBe(2);
     });
 
     it("a machine rebind keeps the rows; once this computer is confirmed again the deal restores", () => {

@@ -26,8 +26,12 @@
  * - The rows are erased: after 30 days (purgeExpiredDealArchive, at every open and on the pass timer), by Delete
  *   for good, when the owner turns Keepr Cloud off, by cascade when the local user is deleted, after a backup
  *   restore for every deal the restored file holds, and for another Keepr Cloud project when it is forgotten.
+ *
+ * Its copy of `pending_review_communications` rows is a byte copy for the restore; it reads no review state
+ * (reviewStateService remains the only reader of that table).
  */
 import type { SqlDb } from "./cloudSyncSqlDb";
+import { REPOINT_MESSAGE_TRANSACTION_SQL } from "./messageDbService";
 
 export const DEAL_ARCHIVE_TABLE = "cloud_sync_deal_archive";
 
@@ -97,7 +101,7 @@ export interface DealArchivePayload {
   deal: Row;
   tables: Record<string, Row[]>;
   set_null: Record<string, string[]>;
-  cloud: { project_ref: string; cloud_deal_id: string | null; todo_state: Row[]; todo_outbox: Row[] };
+  cloud: { project_ref: string; cloud_deal_id: string | null; todo_state: Row[]; todo_outbox: Row[]; removed_online?: number };
 }
 
 // ---------------------------------------------------------------- helpers
@@ -251,10 +255,22 @@ export function listArchivedDeals(db: SqlDb, userId: string): ArchivedDeal[] {
   }));
 }
 
-/** The archive row of one deal of this user (the pull's restore check). */
-export function hasArchivedDeal(db: SqlDb, userId: string, transactionId: string): boolean {
+/**
+ * The pass recorded that the server confirmed this computer's removal of the deal (cloud_delete_deal answered ok
+ * or not_found), in the same transaction that forgot the deal's sync records. Only then does a live online copy
+ * mean "restored elsewhere"; before it, a live copy is one this computer has not removed yet.
+ */
+export function noteDealRemovedOnline(db: SqlDb, transactionId: string): void {
+  if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return;
+  db.prepare(`UPDATE ${DEAL_ARCHIVE_TABLE} SET payload_json = json_set(payload_json, '$.cloud.removed_online', 1) WHERE transaction_id = ?`).run(transactionId);
+}
+
+/** This user's archive row of the deal exists and its removal online was confirmed (the pull's restore check). */
+export function archivedDealRemovedOnline(db: SqlDb, userId: string, transactionId: string): boolean {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return false;
-  return !!db.prepare(`SELECT 1 FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ?`).get(transactionId, userId);
+  return !!db
+    .prepare(`SELECT 1 FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ? AND json_extract(payload_json, '$.cloud.removed_online') = 1`)
+    .get(transactionId, userId);
 }
 
 // ---------------------------------------------------------------- restore
@@ -329,6 +345,9 @@ export function restoreArchivedDeal(db: SqlDb, args: RestoreArgs): RestoreResult
       if (db.prepare("SELECT 1 FROM transactions WHERE id = ?").get(args.transactionId)) throw new RestoreAbort("deal_exists");
       const payload = parsePayload(row.payload_json);
       if (!payload) throw new RestoreAbort("restore_failed");
+      // The local user's id was unified since the delete (users_local id rewritten; the FK moved owner_user_id,
+      // not the ids inside the payload): the rows come back under the owner's current id.
+      remapUser(payload, String(payload.deal.user_id), row.owner_user_id);
       const project = payload.cloud?.project_ref;
       if (!project || enabledProject(db, args.userId) !== project) throw new RestoreAbort("cloud_off");
       if (args.refuseWhileRemovalPending && db.prepare("SELECT 1 FROM cloud_sync_dirty WHERE transaction_id = ?").get(args.transactionId)) {
@@ -403,8 +422,11 @@ export function restoreArchivedDeal(db: SqlDb, args: RestoreArgs): RestoreResult
       for (const id of payload.set_null?.classification_feedback ?? []) {
         db.prepare("UPDATE classification_feedback SET transaction_id = ? WHERE id = ? AND transaction_id IS NULL").run(args.transactionId, id);
       }
+      // A text: the delete's own re-point rule (its most recent remaining link), applied only to a text that still
+      // names no deal, so a text that has since gone to another deal stays there and none points at a deal it is
+      // not linked to.
       for (const id of payload.set_null?.messages ?? []) {
-        db.prepare("UPDATE messages SET transaction_id = ? WHERE id = ? AND transaction_id IS NULL").run(args.transactionId, id);
+        db.prepare(`${REPOINT_MESSAGE_TRANSACTION_SQL} AND transaction_id IS NULL`).run(id);
       }
 
       // The deal's todo records (W33): kept where newer ones exist (a restore before the removal was sent).
@@ -439,6 +461,20 @@ export function restoreArchivedDeal(db: SqlDb, args: RestoreArgs): RestoreResult
   }
 }
 
+/** Columns holding the local user's id in the archived rows. */
+const USER_ID_COLUMNS = ["user_id", "owner_user_id", "hidden_by"];
+
+function remapUser(p: DealArchivePayload, from: string, to: string): void {
+  if (!from || from === to) return;
+  const fix = (r: Row) => {
+    for (const c of USER_ID_COLUMNS) if (r[c] === from) r[c] = to;
+  };
+  fix(p.deal);
+  for (const rows of Object.values(p.tables ?? {})) rows.forEach(fix);
+  (p.cloud?.todo_state ?? []).forEach(fix);
+  (p.cloud?.todo_outbox ?? []).forEach(fix);
+}
+
 function restoreCloudRows(db: SqlDb, table: string, rows: Row[]): void {
   if (rows.length === 0 || !hasTable(db, table)) return;
   const current = new Set(columnsOf(db, table));
@@ -456,6 +492,8 @@ export interface OwedPurge {
   transactionId: string;
   projectRef: string | null;
   cloudDealId: string | null;
+  /** noteDealRemovedOnline ran: a live online copy now means "restored elsewhere". */
+  removedOnline: boolean;
 }
 
 /** Step 1 of Delete for good, one transaction: mark the row owed (Restore is refused from now on). */
@@ -478,23 +516,36 @@ export function listOwedDealPurges(db: SqlDb, userId: string): OwedPurge[] {
   const rows = db
     .prepare(
       `SELECT transaction_id, json_extract(payload_json, '$.cloud.project_ref') AS project_ref,
-              json_extract(payload_json, '$.cloud.cloud_deal_id') AS cloud_deal_id
+              json_extract(payload_json, '$.cloud.cloud_deal_id') AS cloud_deal_id,
+              json_extract(payload_json, '$.cloud.removed_online') AS removed_online
          FROM ${DEAL_ARCHIVE_TABLE} WHERE owner_user_id = ? AND purge_owed_at IS NOT NULL ORDER BY purge_owed_at, transaction_id`,
     )
-    .all(userId) as Array<{ transaction_id: string; project_ref: string | null; cloud_deal_id: string | null }>;
-  return rows.map((r) => ({ transactionId: r.transaction_id, projectRef: r.project_ref ?? null, cloudDealId: r.cloud_deal_id ?? null }));
+    .all(userId) as Array<{ transaction_id: string; project_ref: string | null; cloud_deal_id: string | null; removed_online: number | null }>;
+  return rows.map((r) => ({
+    transactionId: r.transaction_id,
+    projectRef: r.project_ref ?? null,
+    cloudDealId: r.cloud_deal_id ?? null,
+    removedOnline: r.removed_online === 1,
+  }));
 }
 
-/** Step 3 of Delete for good (the server answered purged or not_found): the row goes. Idempotent. */
-export function completeDealPurge(db: SqlDb, userId: string, transactionId: string): void {
+/**
+ * Step 3 of Delete for good, after the server step, one statement:
+ * - "done" (purged, not_found, or nothing online): the row goes. Idempotent.
+ * - "restored_elsewhere" (not_removed after this computer's confirmed removal): the owed mark is cleared.
+ */
+export function settleDealPurge(db: SqlDb, userId: string, transactionId: string, outcome: "done" | "restored_elsewhere"): void {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return;
-  db.prepare(`DELETE FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ? AND purge_owed_at IS NOT NULL`).run(transactionId, userId);
-}
-
-/** The server answered not_removed (restored elsewhere): the owed mark is cleared. */
-export function clearDealPurgeOwed(db: SqlDb, userId: string, transactionId: string): void {
-  if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return;
+  if (outcome === "done") {
+    db.prepare(`DELETE FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ? AND purge_owed_at IS NOT NULL`).run(transactionId, userId);
+    return;
+  }
   db.prepare(`UPDATE ${DEAL_ARCHIVE_TABLE} SET purge_owed_at = NULL WHERE transaction_id = ? AND owner_user_id = ?`).run(transactionId, userId);
+}
+
+/** Clears an owed mark (tests; the runner settles through settleDealPurge). */
+export function clearDealPurgeOwed(db: SqlDb, userId: string, transactionId: string): void {
+  settleDealPurge(db, userId, transactionId, "restored_elsewhere");
 }
 
 // ---------------------------------------------------------------- erasure points (F6)

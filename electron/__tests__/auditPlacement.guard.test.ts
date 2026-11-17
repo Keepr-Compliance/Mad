@@ -78,7 +78,8 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 33;
+// BACKLOG-4263 PR-4c: +1, recordDealRestoreAuditSync (a deal restored from its archive, TRANSACTION_CREATE).
+const AUDITED_SITES_TOTAL = 34;
 
 type Reason = string;
 const R_REMOTE =

@@ -28,7 +28,7 @@ import sessionSecurityService from "../services/sessionSecurityService";
 import { onSessionChanged } from "../services/authEvents";
 import { getDeviceId } from "../services/deviceService";
 import logService from "../services/logService";
-import { recordDealRestoreAudit } from "../services/cloudSync/restoreAudit";
+import { recordDealRestoreAuditSync } from "../services/cloudSync/restoreAudit";
 import { portalUrl } from "../utils/portalUrl";
 import { isStrictFeatureAllowed } from "./featureGateHandlers";
 
@@ -166,7 +166,7 @@ function installCloudSyncUnguarded(): CloudSyncService {
       Sentry.captureMessage("cloud-sync pass failed", { tags: { code } });
     },
     // BACKLOG-4263 PR-4c (plan §14 F3): a restored deal is recorded as TRANSACTION_CREATE, inside the restore.
-    auditRestore: recordDealRestoreAudit,
+    auditRestore: recordDealRestoreAuditSync,
   });
   registerCloudSyncHandlers(service);
   installed = service;

@@ -41,7 +41,7 @@ import type { JsonValue } from "../cloudSync/jcs";
 import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
 import { MY_ITEMS_TEMPLATE_ID } from "./checklistPrivacy";
 import { dealLockReason } from "../transactionEligibility";
-import { hasArchivedDeal, restoreArchivedDeal, type RestoreArgs } from "./cloudSyncDealArchive";
+import { archivedDealRemovedOnline, restoreArchivedDeal, type RestoreArgs } from "./cloudSyncDealArchive";
 import {
   currentInstallId,
   getTodoCursor,
@@ -440,7 +440,7 @@ class Page {
 
   /**
    * BACKLOG-4263 PR-4c: a deal live online (removed_at null) that is not on this computer but is in this user's
-   * archive was restored elsewhere: restore it here, inside this page (the page holds the apply guard, so the
+   * archive, and whose removal by this computer the server confirmed, was restored elsewhere: restore it here, inside this page (the page holds the apply guard, so the
    * restore neither inserts nor deletes it). Refused, changing nothing, while Delete for good is owed or while this
    * computer's own removal of it is still to be sent. The deal's todo rows later in the pull then apply to it.
    */
@@ -448,7 +448,8 @@ class Page {
     const audit = this.ctx.auditRestore;
     const localId = str(row.local_id);
     if (!audit || !localId || row.removed_at !== null || !("removed_at" in row)) return false;
-    if (!hasArchivedDeal(this.db, this.ctx.userId, localId)) return false;
+    // Only a deal whose removal by this computer the server confirmed: a live copy then means restored elsewhere.
+    if (!archivedDealRemovedOnline(this.db, this.ctx.userId, localId)) return false;
     const r = restoreArchivedDeal(this.db, {
       userId: this.ctx.userId,
       transactionId: localId,

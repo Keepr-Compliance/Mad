@@ -40,7 +40,7 @@ import {
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
-import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects } from "./cloudSyncDealArchive";
+import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects, noteDealRemovedOnline } from "./cloudSyncDealArchive";
 import {
   clearTodoStateEverywhere,
   clearTodoStateForUser,
@@ -488,6 +488,8 @@ export function forgetDealDeletedOnline(
     // BACKLOG-4263: the deal's todo shadow names the old online copy; forget it and queue the deal's todos
     // again (unknowable times), so a deal that returns under a new online id gets its todos created.
     resetTodoDeal(db, projectRef, userId, transactionId, now);
+    // BACKLOG-4263 PR-4c: the deal's archive (if any) records that its removal online was confirmed.
+    noteDealRemovedOnline(db, transactionId);
   })();
 }
 

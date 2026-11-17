@@ -5,7 +5,7 @@
  */
 import { auditService } from "../auditService";
 
-export function recordDealRestoreAudit(e: { userId: string; transactionId: string; archivedAt: string; via: "computer" | "online" }): void {
+export function recordDealRestoreAuditSync(e: { userId: string; transactionId: string; archivedAt: string; via: "computer" | "online" }): void {
   auditService.recordInTransaction({
     userId: e.userId,
     action: "TRANSACTION_CREATE",

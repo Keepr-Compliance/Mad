@@ -313,48 +313,58 @@ export class CloudSyncRunner {
    * - this computer's own removal of the deal still waiting (a dirty mark): left for the deal step;
    * - the online deal id: the archive's, else this user's sync record, else this install's online rows by local
    *   id (a deal deleted before its first upload was recorded); none online at all: only the local row goes;
-   * - a live online copy found by that lookup is removed first, then purged;
-   * - purged / not_found: the row goes; not_removed: restored elsewhere, the mark is cleared; anything else: kept.
+   * - a live online copy this computer has not removed (no confirmed removal recorded: found by that lookup, or a
+   *   sync record forgotten before the removal was sent) is removed first, then purged;
+   * - purged / not_found: the row goes; not_removed after a confirmed removal: restored elsewhere, the mark is
+   *   cleared; anything else: kept.
    */
   private async finishOwedPurges(db: SqlDb, pinned: SessionUser, installId: string, only?: string): Promise<Map<string, DealPurgeStatus>> {
     const out = new Map<string, DealPurgeStatus>();
-    let online: Map<string, OnlineRow> | null | undefined;
+    const online: { rows?: Map<string, OnlineRow> | null } = {};
     for (const owed of archive.listOwedDealPurges(db, pinned.userId)) {
       if (only && owed.transactionId !== only) continue;
-      out.set(owed.transactionId, "pending");
-      if (store.isMarked(db, owed.transactionId)) continue;
-      let cloudId = owed.cloudDealId ?? store.getDealState(db, this.deps.projectRef, pinned.userId, owed.transactionId)?.cloud_id ?? null;
-      if (!cloudId) {
-        if (online === undefined) online = await this.listOnline(pinned, installId, "deal");
-        if (!online) continue;
-        const on = online.get(owed.transactionId);
-        if (!on) {
-          archive.completeDealPurge(db, pinned.userId, owed.transactionId);
-          out.set(owed.transactionId, "done");
-          continue;
-        }
-        cloudId = on.cloudId;
-        if (!on.removed) {
-          this.guard(pinned);
-          const del = await this.deps.client.deleteDeal(pinned.userId, cloudId);
-          this.stopOn(del);
-          if (!(del.kind === "ok" || (del.kind === "refused" && del.code === "not_found"))) continue;
-        }
-      }
-      this.guard(pinned);
-      const res = await this.deps.client.purgeDealNow(pinned.userId, cloudId);
-      this.stopOn(res);
-      if (res.kind === "ok" && (res.body.status === "purged" || res.body.status === "not_found")) {
-        archive.completeDealPurge(db, pinned.userId, owed.transactionId);
-        out.set(owed.transactionId, "done");
-      } else if (res.kind === "refused" && res.code === "not_removed") {
-        archive.clearDealPurgeOwed(db, pinned.userId, owed.transactionId);
-        out.set(owed.transactionId, "restored_elsewhere");
-      } else {
-        this.log.warn("[CloudSync] Delete for good not finished (will retry)", { code: res.kind === "ok" ? "bad_answer" : res.code });
-      }
+      const status = await this.tryOwedPurge(db, pinned, installId, owed, online);
+      out.set(owed.transactionId, status);
+      // One local write per deal, after its server step: the row goes (done) or its owed mark is cleared.
+      if (status !== "pending") archive.settleDealPurge(db, pinned.userId, owed.transactionId, status);
     }
     return out;
+  }
+
+  /** The server step of one owed Delete for good (no local write; see finishOwedPurges). */
+  private async tryOwedPurge(
+    db: SqlDb,
+    pinned: SessionUser,
+    installId: string,
+    owed: archive.OwedPurge,
+    online: { rows?: Map<string, OnlineRow> | null },
+  ): Promise<DealPurgeStatus> {
+    if (store.isMarked(db, owed.transactionId)) return "pending";
+    let cloudId = owed.cloudDealId ?? store.getDealState(db, this.deps.projectRef, pinned.userId, owed.transactionId)?.cloud_id ?? null;
+    let removedOnline = owed.removedOnline;
+    if (!cloudId) {
+      if (online.rows === undefined) online.rows = await this.listOnline(pinned, installId, "deal");
+      if (!online.rows) return "pending";
+      const on = online.rows.get(owed.transactionId);
+      // Nothing online for this deal: only the local row goes.
+      if (!on) return "done";
+      cloudId = on.cloudId;
+      if (on.removed) removedOnline = true;
+    }
+    if (!removedOnline) {
+      // Not removed online by this computer yet: remove it first (a removed deal answers ok again).
+      this.guard(pinned);
+      const del = await this.deps.client.deleteDeal(pinned.userId, cloudId);
+      this.stopOn(del);
+      if (!(del.kind === "ok" || (del.kind === "refused" && del.code === "not_found"))) return "pending";
+    }
+    this.guard(pinned);
+    const res = await this.deps.client.purgeDealNow(pinned.userId, cloudId);
+    this.stopOn(res);
+    if (res.kind === "ok" && (res.body.status === "purged" || res.body.status === "not_found")) return "done";
+    if (res.kind === "refused" && res.code === "not_removed") return "restored_elsewhere";
+    this.log.warn("[CloudSync] Delete for good not finished (will retry)", { code: res.kind === "ok" ? "bad_answer" : res.code });
+    return "pending";
   }
 
   /** Resolves when no pass is running. */

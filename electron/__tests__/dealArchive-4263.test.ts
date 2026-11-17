@@ -77,9 +77,10 @@ import { registerTransactionCrudHandlers } from "../handlers/transactionCrudHand
 import { openAuditProbeDb, realAuditDb, settle, forceAuditInsertFailure } from "../services/db/__tests__/fixtures/auditTxProbe";
 import { seedFullDeal, fz } from "../services/cloudSync/__tests__/helpers/dealArchiveFixtures";
 import * as archive from "../services/db/cloudSyncDealArchive";
-import { recordDealRestoreAudit } from "../services/cloudSync/restoreAudit";
+import { recordDealRestoreAuditSync } from "../services/cloudSync/restoreAudit";
 import { getRawDatabase } from "../services/db/core/dbConnection";
 import type { SqlDb } from "../services/db/cloudSyncSqlDb";
+import { REPOINT_MESSAGE_TRANSACTION_SQL } from "../services/db/messageDbService";
 
 const USER = "user-a-4263c";
 const USER_B = "user-b-4263c";
@@ -167,7 +168,13 @@ describe("A3 never-on users: the delete is exactly today's (Q7, W34)", () => {
     db.close();
     fresh();
     seedFullDeal(db as unknown as SqlDb, USER, D1);
-    databaseService.deleteTransactionSync(D1);
+    // Today's delete (4ab45f396 transactionDbService.ts deleteTransactionSync), statement for statement, with no
+    // archive step: the texts naming the deal, the DELETE, each text re-pointed.
+    db.transaction(() => {
+      const named = db.prepare("SELECT id FROM messages WHERE transaction_id = ?").all(D1) as Array<{ id: string }>;
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(D1);
+      for (const { id } of named) db.prepare(REPOINT_MESSAGE_TRANSACTION_SQL as unknown as string).run(id);
+    })();
     expect(dump(db)).toBe(viaHandler);
   });
 });
@@ -211,11 +218,11 @@ describe("A6 the restore's audit entry", () => {
     await invoke("transactions:delete", D1);
     const raw = getRawDatabase() as unknown as SqlDb;
     forceAuditInsertFailure(db);
-    expect(archive.restoreArchivedDeal(raw, { userId: USER, transactionId: D1, now: new Date(), audit: recordDealRestoreAudit })).toEqual({ ok: false, code: "restore_failed" });
+    expect(archive.restoreArchivedDeal(raw, { userId: USER, transactionId: D1, now: new Date(), audit: recordDealRestoreAuditSync })).toEqual({ ok: false, code: "restore_failed" });
     expect(n("SELECT COUNT(*) AS n FROM transactions WHERE id = ?", D1)).toBe(0);
     expect(archived()).toEqual([D1]);
     db.exec("DROP TRIGGER probe_fail_audit");
-    expect(archive.restoreArchivedDeal(raw, { userId: USER, transactionId: D1, now: new Date(), audit: recordDealRestoreAudit })).toMatchObject({ ok: true });
+    expect(archive.restoreArchivedDeal(raw, { userId: USER, transactionId: D1, now: new Date(), audit: recordDealRestoreAuditSync })).toMatchObject({ ok: true });
     const row = db.prepare("SELECT action, resource_id, metadata FROM audit_logs WHERE action = 'TRANSACTION_CREATE' AND resource_id = ?").get(D1) as any;
     expect(row.action).toBe("TRANSACTION_CREATE");
     expect(JSON.parse(row.metadata)).toMatchObject({ restored_from_archive: true, restored_from: "computer" });
