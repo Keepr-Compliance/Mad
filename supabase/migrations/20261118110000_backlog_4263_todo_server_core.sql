@@ -29,9 +29,9 @@
 --   No function in this file is callable by anon.
 -- Callers: the authenticated functions check auth.uid() and p_expected_user_id = auth.uid() first.
 --   _cloud_todo_apply requires p_owner = auth.uid(). _cloud_todo_purge_deal requires auth.uid() = p_owner
---   or the role claim service_role. _cloud_todo_purge has no caller check and no API grant: it runs from
---   pg_cron as the database owner, does retention work only, and sets the service_role role claim
---   transaction-locally for the blob fence, restoring the previous value before it returns.
+--   or the role claim service_role. _cloud_todo_purge is executable by the database owner only (pg_cron);
+--   it does retention work only, and sets the service_role role claim transaction-locally for the blob
+--   fence, restoring the previous value before it returns.
 -- Lock order for every writer here: the caller's settings row, then the owner's feed head row, then
 --   deals (id order), then blobs, then checklists (id order), then items (id order).
 --   cloud_upsert_deal, cloud_delete_deal and cloud_delete_install take the head right after settings.
@@ -512,8 +512,11 @@ DECLARE
   v_id uuid; v_lid text; v_json jsonb; cur jsonb; nv jsonb; v_part text; v_base bigint; v_status text; v_conf boolean := false;
   v_rem_self boolean; v_rem_parent boolean; v_my boolean; v_wins boolean; v_cur_eff timestamptz; v_outcome text;
   v_title jsonb; v_note jsonb; v_due jsonb; v_done jsonb; v_order jsonb; v_desc text; v_doc text; v_req boolean;
-  pt text; r jsonb;
+  pt text; r jsonb; v_tid uuid; v_did uuid;
 BEGIN
+  -- ids are parsed here, before any statement uses them: a malformed id answers not_found for its op only
+  IF pg_input_is_valid(op ->> 'id', 'uuid') THEN v_tid := (op ->> 'id')::uuid; END IF;
+  IF pg_input_is_valid(op ->> 'deal_id', 'uuid') THEN v_did := (op ->> 'deal_id')::uuid; END IF;
   v_eff := CASE WHEN v_desk THEN coalesce((op ->> '_eff')::timestamptz, '-infinity'::timestamptz) ELSE p_recv END;
   v_es := CASE WHEN v_desk AND jsonb_typeof(op -> 'edit_seq') = 'number' AND pg_input_is_valid(op ->> 'edit_seq', 'bigint')
                THEN (op ->> 'edit_seq')::bigint END;
@@ -522,7 +525,7 @@ BEGIN
   IF k = 'create_checklist' THEN
     IF NOT v_desk THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_allowed'); END IF;
     SELECT * INTO d FROM public.cloud_deals x
-     WHERE x.id = CASE WHEN pg_input_is_valid(op ->> 'deal_id', 'uuid') THEN (op ->> 'deal_id')::uuid END
+     WHERE x.id = v_did
        AND x.owner_user_id = p_owner AND x.source_install_id = p_inst;                         /*OWNER:create_checklist*/
     IF d.id IS NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found'); END IF;
     v_lid := op ->> 'local_id';
@@ -567,7 +570,7 @@ BEGIN
   -- ---------------------------------------------------------------- create_item
   IF k = 'create_item' THEN
     SELECT * INTO d FROM public.cloud_deals x
-     WHERE x.id = CASE WHEN pg_input_is_valid(op ->> 'deal_id', 'uuid') THEN (op ->> 'deal_id')::uuid END
+     WHERE x.id = v_did
        AND x.owner_user_id = p_owner                                                          /*OWNER:create_item*/
        AND (NOT v_desk OR x.source_install_id = p_inst);
     IF d.id IS NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found'); END IF;
@@ -678,8 +681,8 @@ BEGIN
   IF ent = 'item' THEN
     SELECT * INTO t FROM public.cloud_deal_checklist_items x
      WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-       AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-            OR (NOT op ? 'id' AND pg_input_is_valid(op ->> 'deal_id', 'uuid') AND x.cloud_deal_id = (op ->> 'deal_id')::uuid
+       AND (x.id = v_tid
+            OR (NOT op ? 'id' AND x.cloud_deal_id = v_did
                 AND x.local_item_id = op ->> 'local_id'));
     IF t.id IS NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found'); END IF;
     SELECT * INTO c FROM public.cloud_deal_checklists x WHERE x.id = t.cloud_checklist_id;
@@ -687,8 +690,8 @@ BEGIN
   ELSE
     SELECT * INTO c FROM public.cloud_deal_checklists x
      WHERE x.owner_user_id = p_owner                                                          /*OWNER:checklist*/
-       AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-            OR (NOT op ? 'id' AND pg_input_is_valid(op ->> 'deal_id', 'uuid') AND x.cloud_deal_id = (op ->> 'deal_id')::uuid
+       AND (x.id = v_tid
+            OR (NOT op ? 'id' AND x.cloud_deal_id = v_did
                 AND x.local_checklist_id = op ->> 'local_id'));
     IF c.id IS NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found'); END IF;
     v_id := c.id; v_lid := c.local_checklist_id;
@@ -1259,6 +1262,7 @@ BEGIN
        WHERE h.owner_user_id = v_owner;
     EXCEPTION WHEN OTHERS THEN
       n_fail := n_fail + 1;
+      RAISE WARNING 'cloud-todo-purge: one owner not purged (SQLSTATE %)', SQLSTATE;
     END;
   END LOOP;
   PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);

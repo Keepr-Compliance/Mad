@@ -727,3 +727,17 @@ BEGIN
     pg_temp.pass(NOT has_function_privilege('authenticated', 'public._cloud_install_removed(uuid,uuid)', 'EXECUTE')
                  AND NOT has_function_privilege('anon', 'public._cloud_install_removed(uuid,uuid)', 'EXECUTE'), 'helper reachable'));
 END $p$;
+
+-- malformed ids are answered per op; the rest of the batch still applies
+CREATE FUNCTION pg_temp.p_bad_ids() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); r jsonb; s text := pg_temp.nowt();
+BEGIN
+  r := pg_temp.push(A, pg_temp.id('I1'), s, jsonb_build_array(
+         jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'id', 'abc', 'part', 'note', 'value', 'x', 'edited_at', s),
+         jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', 'abc', 'checklist_local_id', 'cl1', 'local_id', 'b1', 'title', 'x', 'edited_at', s),
+         jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'deal_id', 'abc', 'local_id', 'i2', 'part', 'note', 'value', 'x', 'edited_at', s),
+         jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', 'abc', 'local_id', 'c9', 'template_id', 't', 'edited_at', s),
+         pg_temp.op_set(pg_temp.id('i2'), 'note', '"good"', 1, 1, s)));
+  RETURN pg_temp.pass(r ->> 'ok' = 'true' AND pg_temp.st(r, 0) = 'not_found' AND pg_temp.st(r, 1) = 'not_found' AND pg_temp.st(r, 2) = 'not_found'
+                      AND pg_temp.st(r, 3) = 'not_found' AND pg_temp.st(r, 4) = 'applied', r::text);
+END $p$;

@@ -123,7 +123,7 @@ def unit_decls():
 CONTROLS = ['p_parts', 'p_later_wins', 'p_equal', 'p_replay', 'p_edit_seq', 'p_parents', 'p_removal_wins', 'p_ai_rules', 'p_strip',
             "p_lock('reason')", "p_lock('sub')", 'p_cross_owner', 'p_e2', 'p_a1', 'p_f4', 'p_feed', 'p_install', 'p_install_restore',
             'p_soft_delete', 'p_reader_counts', 'p_purge', 'p_purge_now', 'p_claims', 'p_turnoff', 'p_idem', 'p_create',
-            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog']
+            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog', 'p_bad_ids']
 
 AO = '_cloud_todo_apply_op'
 
@@ -204,6 +204,8 @@ def mutants():
                         "has_function_privilege('anon', 'public.cloud_purge_deal_now(uuid,uuid)'::regprocedure, 'EXECUTE')", P('p_purge_now')))
     m.append(ddl_mutant('R10_table_select', 'GRANT SELECT ON public.cloud_todo_history TO authenticated',
                         "has_table_privilege('authenticated', 'public.cloud_todo_history', 'SELECT')", P('p_grants')))
+    m.append(fn_mutant('V_ids_cast_inline', AO, [("WHERE x.id = v_did", "WHERE x.id = (op ->> 'deal_id')::uuid", 2),
+                                                  ("AND (x.id = v_tid", "AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)", 2)], P('p_bad_ids')))
     for fn, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items'),
                     ('cloud_upsert_messages', 'messages'), ('cloud_upsert_files', 'files'), ('cloud_mark_deal_synced', 'mark_synced'), ('cloud_tombstone', 'tombstone')]:
         u = unit(MIG, fn)[0]
