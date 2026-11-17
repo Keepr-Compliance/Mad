@@ -615,6 +615,94 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     });
   });
 
+  // ================================================================ W27 / W15 / reconcile
+  describe("W27, W15 and the reconcile's re-upload", () => {
+    it("W27: a pulled checklist of the same template as a local one (other id, no alias online) maps onto the local one; later ops on it and on new items under it name it by cloud id and apply", async () => {
+      const { db, deal, e } = await synced();
+      // the online My items list is replaced, as an AI app's first add makes one when none is live: another id and
+      // local id, no alias for this computer's list
+      const old = onlineList(e, MY);
+      e.server.todos = e.server.todos.filter((t) => t !== old && t.checklistId !== old.id);
+      const fresh: FakeTodo = { ...old, id: fid(97, 7), localId: fid(97, 7), aliases: [], changeSeq: e.server.nextSeq(USER_A) };
+      e.server.todos.push(fresh);
+      db.prepare("DELETE FROM cloud_sync_todo_state WHERE local_id IN (?, ?)").run(MY, I2);
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(db.prepare("SELECT id FROM transaction_checklists WHERE transaction_id = ? AND template_id = ?").all(deal, MY_ITEMS_TEMPLATE_ID)).toEqual([{ id: MY }]);
+      expect(shadow(db, MY)).toMatchObject({ cloud_id: fresh.id });
+      // a local order change and a new item under the mapped list
+      db.prepare("UPDATE transaction_checklists SET sort_order = 9 WHERE id = ?").run(MY);
+      db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 20), MY, "Under the mapped list", null, 0, null, 3);
+      await pass(e);
+      expect(fresh.parts.order.value).toBe(9);
+      expect(e.server.todos.find((t) => t.localId === fid(4, 20))).toMatchObject({ checklistId: fresh.id });
+      expect(outbox(db)).toEqual([]);
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("W15: a pulled value the local CHECK refuses parks that row (with its code); the rest of the page applies and the cursor advances; a later valid change applies it and clears the park", async () => {
+      const { db, e } = await synced();
+      const t = onlineItem(e, I1);
+      // a due date outside the local CHECK range (2000-2100)
+      t.parts.due = { rev: t.parts.due.rev + 1, value: "1999-12-31", at: Date.now(), by: "ai_app:conn-1", edit_seq: null };
+      t.changeSeq = e.server.nextSeq(USER_A);
+      e.server.aiSet(onlineItem(e, I2), "note", "applies");
+      const c0 = cursor(db)!;
+      await pass(e);
+      expect(item(db, I2)!.note).toBe("applies");
+      expect(item(db, I1)!.due_date).toBeNull();
+      expect(db.prepare("SELECT entity, error_code FROM cloud_sync_todo_parked").all()).toEqual([{ entity: "item", error_code: expect.stringMatching(/CONSTRAINT/) }]);
+      expect(cursor(db)!.last_seq).toBeGreaterThan(c0.last_seq);
+      const attempts = () => (db.prepare("SELECT attempts FROM cloud_sync_todo_parked").get() as { attempts: number }).attempts;
+      const a1 = attempts();
+      await pass(e);
+      expect(attempts()).toBeGreaterThan(a1);
+      e.server.aiSet(t, "due", "2026-12-01");
+      await pass(e);
+      expect(item(db, I1)!.due_date).toBe("2026-12-01");
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(0);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("an eligible deal removed online (its record still here) is uploaded again by the daily reconcile, which un-removes it under the same id with its todos", async () => {
+      const { db, deal, e } = await synced();
+      const id = e.server.deals[0].id;
+      e.server.respond("cloud_delete_deal", { p_expected_user_id: USER_A, p_cloud_deal_id: id });
+      expect(e.server.softRemovedDeals.map((d) => d.id)).toEqual([id]);
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      await pass(e);
+      expect(e.server.deals.map((d) => [d.id, d.localId])).toEqual([[id, deal]]);
+      expect(e.server.softRemovedDeals).toEqual([]);
+      expect(e.server.todos.filter((t) => t.dealId === id)).toHaveLength(4);
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklist_items")).toBe(2);
+    });
+
+    it("the once-per-launch status check is spent only on an answer: a failed call is tried again on the next pass", async () => {
+      const { db, e } = await synced();
+      e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      expect((await pass(e)).outcome).toBe("install_removed");
+      e.server.removedInstalls.clear();
+      const t = e.server.transport;
+      let failOnce = true;
+      let asked = 0;
+      setTransport(e, async (fn, args, signal) => {
+        if (fn === "cloud_install_status") asked++;
+        if (fn === "cloud_install_status" && failOnce) {
+          failOnce = false;
+          throw new Error("network");
+        }
+        return t(fn, args, signal);
+      });
+      expect((await pass(e)).outcome).toBe("install_removed");
+      const r = await pass(e);
+      expect(asked).toBe(2);
+      expect(r.outcome).toBe("done");
+      expect(todos.installRemovedAt(db, PROJECT, USER_A)).toBeNull();
+    });
+  });
+
   // ================================================================ ORPH
   describe("ORPH: Settings' 'saved online but not on this computer'", () => {
     it("a deal deleted here is removed online (kept 30 days): the daily reconcile does not count it, and 'Delete them' sends no delete for it", async () => {

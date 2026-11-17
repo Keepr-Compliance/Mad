@@ -469,6 +469,10 @@ export function resetTodosAfterRestore(db: SqlDb, now: Date): boolean {
 export interface SendableRow extends OutboxRow {
   cloud_deal_id: string | null;
   deal_here: string | null;
+  /** PR-4b: the todo's cloud id from the shadow (a set / remove addresses it by id), or null. */
+  todo_cloud_id?: string | null;
+  /** PR-4b: for an item create, its checklist's cloud id from the shadow (the create names its parent by id). */
+  checklist_cloud_id?: string | null;
 }
 
 /**
@@ -499,11 +503,12 @@ export function readTodoOutbox(db: SqlDb, projectRef: string, userId: string): {
     // answered with a kept refusal and dropped), and an item create whose checklist is in the same position:
     // the server answers not_found / parent_missing to these on every pass forever. They are dropped with a
     // notice instead. While a full pull is owed such ops wait instead.
-    const online = new Set(
+    const cloudIds = new Map(
       (db
-        .prepare("SELECT entity, local_id FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND cloud_id IS NOT NULL")
-        .all(projectRef, userId) as Array<{ entity: string; local_id: string }>).map((x) => `${x.entity}|${x.local_id}`),
+        .prepare("SELECT entity, local_id, cloud_id FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND cloud_id IS NOT NULL")
+        .all(projectRef, userId) as Array<{ entity: string; local_id: string; cloud_id: string }>).map((x) => [`${x.entity}|${x.local_id}`, x.cloud_id] as const),
     );
+    const online = new Set(cloudIds.keys());
     const creates = new Set(rows.filter((r) => r.part === "create").map((r) => `${r.entity}|${r.local_id}`));
     const owed = getTodoCursor(db, projectRef, userId)?.full_pull_owed === 1;
     const known = (entity: string, localId: string) => online.has(`${entity}|${localId}`) || creates.has(`${entity}|${localId}`);
@@ -535,7 +540,15 @@ export function readTodoOutbox(db: SqlDb, projectRef: string, userId: string): {
         note.run(r.project_ref, r.owner_user_id, r.entity, r.local_id, r.part, r.transaction_id, JSON.stringify({ reason: r.part === "create" ? "checklist_not_online" : "todo_not_online" }), at);
         dropped++;
       } else if (!r.cloud_deal_id) waiting++;
-      else ready.push(r);
+      else {
+        // PR-4b (W27): a todo the pull mapped onto a local one of another id has no alias online, so ops name it by
+        // its cloud id when the shadow knows it. Not while the todo's (or the parent's) create waits in this
+        // outbox: that create names it by local id and (re)establishes the record online.
+        r.todo_cloud_id = r.part === "create" || creates.has(`${r.entity}|${r.local_id}`) ? null : cloudIds.get(`${r.entity}|${r.local_id}`) ?? null;
+        r.checklist_cloud_id =
+          checklistOf !== null && !creates.has(`checklist|${checklistOf}`) ? cloudIds.get(`checklist|${checklistOf}`) ?? null : null;
+        ready.push(r);
+      }
     }
     return { ready, waiting, dropped };
   })();

@@ -311,8 +311,9 @@ export class CloudSyncRunner {
     // read-only status check per launch (the copy may have been restored elsewhere).
     if (todoStore.installRemovedAt(db, deps.projectRef, session.userId)) {
       if (this.installStatusChecked.has(session.userId)) return this.finish({ outcome: "install_removed", done: 0, failed: 0 });
-      this.installStatusChecked.add(session.userId);
       const st = await deps.client.installStatus(session.userId, installId);
+      // Spent only on an answer: a failed call (offline, timeout) is tried again on the next pass.
+      if (st.kind === "ok") this.installStatusChecked.add(session.userId);
       if (!(st.kind === "ok" && st.body.removed === false)) return this.finish({ outcome: "install_removed", done: 0, failed: 0 });
       todoStore.clearInstallRemoved(db, deps.projectRef, session.userId);
     }

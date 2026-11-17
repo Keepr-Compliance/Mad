@@ -716,8 +716,11 @@ export class FakeServer {
     }
     const ent = (op.entity as string) ?? "item";
     const dl = this.todoDeal(uid, install, op.deal_id);
+    // migration :740-753: by cloud id when the op names one (then local_id is ignored), else by deal + local id / alias
     const t = dl
-      ? this.todos.find((x) => x.entity === ent && x.dealId === dl.deal.id && (x.localId === op.local_id || (x.aliases ?? []).includes(op.local_id as string)))
+      ? this.todos.find((x) =>
+          x.entity === ent && x.dealId === dl.deal.id &&
+          (typeof op.id === "string" ? x.id === op.id : x.localId === op.local_id || (x.aliases ?? []).includes(op.local_id as string)))
       : undefined;
     if (!dl || !t) return { op_id: opId, status: "not_found" };
     if (t.purged) return { op_id: opId, status: "not_restorable", entity: ent, cloud_id: t.id };

@@ -147,6 +147,10 @@ export const HELD_LOCKED_KEY = "_held_locked";
 
 export interface EncodeContext {
   cloudDealId: string;
+  /** PR-4b (W27): the todo's cloud id (a set / remove names it by id; the server then ignores local_id). */
+  todoCloudId?: string | null;
+  /** PR-4b (W27): an item create's checklist cloud id (the server finds the parent by it). */
+  checklistCloudId?: string | null;
   /** The counter's epoch now; an op from an earlier epoch is sent with clock_stepped = true (E2). */
   currentEpoch: number;
 }
@@ -199,6 +203,7 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
       deal_id: ctx.cloudDealId,
       checklist_local_id: toText(v.checklist_id) ?? "",
       local_id: row.local_id,
+      ...(ctx.checklistCloudId ? { checklist_id: ctx.checklistCloudId } : {}),
       title: toText(v.title) ?? "",
       description: toText(v.description),
       is_required: toBool(v.is_required),
@@ -212,7 +217,7 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
     };
   }
   if (row.part === "removed" && (row.entity === "item" || row.entity === "checklist")) {
-    return { ...base, kind: "remove", entity: row.entity, deal_id: ctx.cloudDealId, local_id: row.local_id };
+    return { ...base, kind: "remove", entity: row.entity, deal_id: ctx.cloudDealId, local_id: row.local_id, ...(ctx.todoCloudId ? { id: ctx.todoCloudId } : {}) };
   }
   if (isPart(row.entity, row.part)) {
     return {
@@ -221,6 +226,7 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
       entity: row.entity,
       deal_id: ctx.cloudDealId,
       local_id: row.local_id,
+      ...(ctx.todoCloudId ? { id: ctx.todoCloudId } : {}),
       part: row.part,
       value: partValue(row.part, v),
       base_rev: row.base_rev === null || row.base_rev === undefined ? null : toInt(row.base_rev),

@@ -89,7 +89,7 @@ export async function sendTodos(deps: TodoSendDeps): Promise<TodoSendSummary> {
   // Sized with the epoch read above; each call re-encodes with the epoch at its send (same size).
   const sized: Array<{ op: WireOp; row: todos.SendableRow }> = [];
   for (const row of ordered) {
-    const op = encodeOp(row, { cloudDealId: row.cloud_deal_id as string, currentEpoch: read.epoch });
+    const op = encodeOp(row, { cloudDealId: row.cloud_deal_id as string, currentEpoch: read.epoch, todoCloudId: row.todo_cloud_id, checklistCloudId: row.checklist_cloud_id });
     if (op) sized.push({ op, row });
   }
   for (const batch of chunks(sized)) {
@@ -97,7 +97,7 @@ export async function sendTodos(deps: TodoSendDeps): Promise<TodoSendSummary> {
     const epoch = todos.stepTodoEpoch(db, projectRef, deps.now()) ?? 0;
     const encoded: Array<{ op: WireOp; row: todos.SendableRow }> = [];
     for (const b of batch) {
-      const op = encodeOp(b.row, { cloudDealId: b.row.cloud_deal_id as string, currentEpoch: epoch });
+      const op = encodeOp(b.row, { cloudDealId: b.row.cloud_deal_id as string, currentEpoch: epoch, todoCloudId: b.row.todo_cloud_id, checklistCloudId: b.row.checklist_cloud_id });
       if (op) encoded.push({ op, row: b.row });
     }
     if (encoded.length === 0) continue;
