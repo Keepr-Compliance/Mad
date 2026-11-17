@@ -1,10 +1,10 @@
 {
   "migration": "supabase/migrations/20261118130000_backlog_4263_mcp_todo_write_tools.sql",
-  "migration_md5": "5e29e0273ddbde1c1196194f0dba70a5",
+  "migration_md5": "d3fcf4cd3ca9f40f2459f57edbd94428",
   "replaced": {
     "public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)": {
       "old": "bf7192517604c2db532312a7e071a751",
-      "new": "01af714f0b1b252b224077f1bf023e2f"
+      "new": "98521f85e9e1d42c38f3f2e4f5fa743b"
     },
     "public.mcp_authorize_view(text,bytea)": {
       "old": "879b6c01072494b931e782a6f07b463d",
@@ -56,6 +56,6 @@
     "mcp_update_todo(text,bytea,text,text,jsonb,text)",
     "mcp_write_access(text,bytea,text)"
   ],
-  "apply_md5": "47f2f8626c93b27f24b323de25b81a5c",
-  "rollback_md5": "906220817ed6944985bdecbc0cc7a0b6"
+  "apply_md5": "8b146087f0c0d5625d2637640c305c99",
+  "rollback_md5": "f66c8162f8961eab976fa8447b272b55"
 }

@@ -6,7 +6,7 @@
 DO $pre4263p5r$
 DECLARE r record; v_md5 text;
 BEGIN
-  FOR r IN SELECT * FROM (VALUES ('public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', '01af714f0b1b252b224077f1bf023e2f'), ('public.mcp_authorize_view(text,bytea)', '8e6dc7162dedefd9f8ced48fc26fc8c1'), ('public.mcp_authorize_approve(text,bytea,text,bytea)', 'bddeb78139828a444715cc77d4482d78'), ('public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'ab6a9345c55ab69c77347d9b37e92e9d'), ('public.mcp_refresh(text,bytea,text,text,bytea,bytea)', 'a7797a967b1952dec493c48c62328530'), ('public._mcp_r_deal_checklists(uuid,boolean,uuid)', 'c8b91cac998caf8b9774f8970188574d')) x(sig, md5) LOOP
+  FOR r IN SELECT * FROM (VALUES ('public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', '98521f85e9e1d42c38f3f2e4f5fa743b'), ('public.mcp_authorize_view(text,bytea)', '8e6dc7162dedefd9f8ced48fc26fc8c1'), ('public.mcp_authorize_approve(text,bytea,text,bytea)', 'bddeb78139828a444715cc77d4482d78'), ('public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'ab6a9345c55ab69c77347d9b37e92e9d'), ('public.mcp_refresh(text,bytea,text,text,bytea,bytea)', 'a7797a967b1952dec493c48c62328530'), ('public._mcp_r_deal_checklists(uuid,boolean,uuid)', 'c8b91cac998caf8b9774f8970188574d')) x(sig, md5) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS DISTINCT FROM r.md5 THEN RAISE EXCEPTION 'ROLLBACK 20261118130000: % is not at the body 20261118130000 wrote (md5 %)', r.sig, coalesce(v_md5, 'missing'); END IF;
   END LOOP;

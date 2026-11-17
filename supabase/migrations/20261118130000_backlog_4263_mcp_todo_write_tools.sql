@@ -10,7 +10,7 @@
 --   changed. A connection is never upgraded: its scope is set once, at consent, and refresh keeps it. Writes need
 --   scope 'mcp:todos' AND the switch on, checked inside every write function.
 -- Replaced (pre-check below; each body differs from the traced one only where its comment says):
---   anon       mcp_authorize_begin   accepts 'mcp:todos'; stores 'mcp:todos' only while the switch is on
+--   anon       mcp_authorize_begin   accepts 'mcp:todos'; records it only when asked for AND the switch is on
 --              mcp_exchange_code     answers the connection's scope
 --              mcp_refresh           answers the connection's scope
 --   signed in  mcp_authorize_view    scope = what approve would grant now
@@ -448,7 +448,8 @@ REVOKE ALL ON FUNCTION public.mcp_restore_todo(text, bytea, text, text, text) FR
 GRANT EXECUTE ON FUNCTION public.mcp_restore_todo(text, bytea, text, text, text) TO anon;
 
 -- ============================================================================ replaced: OAuth (owner postgres)
--- 4263 PR-5: also accepts 'mcp:todos'; the request records 'mcp:todos' only while the switch is on.
+-- 4263 PR-5: also accepts 'mcp:todos'; the request records 'mcp:todos' only when the client asked for it and the
+-- switch is on, else 'mcp:read' (a write request while the switch is off still connects, read-only).
 CREATE OR REPLACE FUNCTION public.mcp_authorize_begin(p_secret text, p_client_id text, p_redirect_uri text, p_code_challenge text, p_code_challenge_method text,
                                                       p_resource text, p_scope text, p_state text, p_browser_binding_sha256 bytea, p_ip_sha256 bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
@@ -492,7 +493,7 @@ BEGIN
   INSERT INTO public.mcp_authorization_requests (id, client_id, redirect_uri, code_challenge, resource, scope, state,
                                                  browser_binding_sha256, expires_at)
   VALUES (v_id, p_client_id, p_redirect_uri, p_code_challenge, p_resource,
-          CASE WHEN public._mcp_writes_on() THEN 'mcp:todos' ELSE 'mcp:read' END, p_state,          /*SCOPE:begin*/
+          public._mcp_granted_scope(p_scope), p_state,                                            /*SCOPE:begin*/
           p_browser_binding_sha256, now() + interval '180 seconds');
   RETURN jsonb_build_object('ok', true, 'request_id', v_id, 'expires_in', 180);
 END

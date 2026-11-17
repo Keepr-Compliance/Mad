@@ -172,23 +172,26 @@ BEGIN
                             'granted', sc, 'token_scope', ex -> 'scope', 'exchange_ok', ex -> 'ok');
 END $c$;
 CREATE FUNCTION pg_temp.c_consent() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE off_ jsonb; on_ jsonb; on_off jsonb; off_on jsonb; ask_todos jsonb; bad jsonb;
+DECLARE off_ jsonb; on_ jsonb; on_off jsonb; off_on jsonb; ask_todos jsonb; bad jsonb; on_read jsonb;
 BEGIN
   PERFORM pg_temp.unrate();
   PERFORM pg_temp.sw(false);
   off_ := pg_temp.consent('off', 'mcp:read', false, false);
   ask_todos := pg_temp.consent('ask_todos_off', 'mcp:todos', false, false);
-  off_on := pg_temp.consent('off_then_on', 'mcp:read', true, true);
+  off_on := pg_temp.consent('off_then_on', 'mcp:todos', true, true);
   bad := pg_temp.w(format('SELECT public.mcp_authorize_begin(%L, %L, %L, %L, %L, %L, %L, NULL, %L::bytea, %L::bytea)', pg_temp.secret(), pg_temp.client(),
          'https://claude.ai/api/mcp/auth_callback', public._mcp_b64url(sha256(convert_to('v' || md5('bad') || md5('bad2'), 'UTF8'))), 'S256', pg_temp.res(),
          'mcp:read mcp:write', '\x' || encode(sha256(convert_to('b-bad', 'UTF8')), 'hex'), '\x' || encode(sha256(convert_to('ip-bad', 'UTF8')), 'hex')));
   PERFORM pg_temp.sw(true);
-  on_ := pg_temp.consent('on', 'mcp:read', false, false);
-  on_off := pg_temp.consent('on_then_off', 'mcp:read', true, false);
+  on_ := pg_temp.consent('on', 'mcp:todos', false, false);
+  on_read := pg_temp.consent('on_read', 'mcp:read', false, false);
+  on_off := pg_temp.consent('on_then_off', 'mcp:todos', true, false);
   RETURN pg_temp.all_of(
     pg_temp.pass(off_ ->> 'request_scope' = 'mcp:read' AND off_ ->> 'view_scope' = 'mcp:read' AND off_ ->> 'granted' = 'mcp:read' AND off_ ->> 'token_scope' = 'mcp:read', 'off ' || off_::text),
     pg_temp.pass(ask_todos ->> 'granted' = 'mcp:read' AND ask_todos ->> 'view_scope' = 'mcp:read', 'asked todos while off ' || ask_todos::text),
-    pg_temp.pass(off_on ->> 'request_scope' = 'mcp:read' AND off_on ->> 'view_scope' = 'mcp:read' AND off_on ->> 'granted' = 'mcp:read', 'begun off, approved on ' || off_on::text),
+    pg_temp.pass(off_on ->> 'request_scope' = 'mcp:read' AND off_on ->> 'view_scope' = 'mcp:read' AND off_on ->> 'granted' = 'mcp:read', 'write asked while off, approved on ' || off_on::text),
+    pg_temp.pass(on_read ->> 'request_scope' = 'mcp:read' AND on_read ->> 'view_scope' = 'mcp:read' AND on_read ->> 'granted' = 'mcp:read'
+                 AND on_read ->> 'token_scope' = 'mcp:read', 'read asked while on ' || on_read::text),
     pg_temp.pass(bad ->> 'error' = 'invalid_scope', 'wider scope ' || bad::text),
     pg_temp.pass(on_ ->> 'request_scope' = 'mcp:todos' AND on_ ->> 'view_scope' = 'mcp:todos' AND on_ ->> 'granted' = 'mcp:todos'
                  AND on_ ->> 'token_scope' = 'mcp:todos' AND on_ ->> 'exchange_ok' = 'true', 'on ' || on_::text),
