@@ -902,7 +902,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ deals and waiting
   describe("ops wait for their deal; ops of a deal gone everywhere are dropped", () => {
-    it("a deal deleted online (no longer eligible), then eligible again under a new online id: its todos are created on the new deal", async () => {
+    it("a deal deleted online (no longer eligible), then eligible again (un-removed under the same online id): its todos are sent again and answer exists, none duplicated", async () => {
       const { db, deal, e } = await sentOnce();
       db.prepare("UPDATE transactions SET status = 'rejected' WHERE id = ?").run(deal);
       await pass(e);
@@ -911,6 +911,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       await pass(e);
       const newDeal = e.server.deals.find((d) => d.localId === deal)!;
       expect(newDeal).toBeDefined();
+      expect(e.server.todos).toHaveLength(4);
       expect(e.server.todos.filter((t) => t.dealId === newDeal.id).map((t) => `${t.entity}:${t.localId}`).sort()).toEqual(
         [`checklist:${CL}`, `checklist:${MY}`, `item:${I1}`, `item:${I2}`],
       );

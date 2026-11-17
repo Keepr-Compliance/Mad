@@ -309,6 +309,14 @@ export class FakeServer {
         const key = (d: FakeDeal) => d.owner === uid && d.install === p.source_install_id && d.localId === p.local_id;
         let d = this.deals.find(key);
         let status = "applied";
+        // PR-2 (observed on the test database, harness-4a C16): a soft-removed deal uploaded again by its install
+        // is un-removed under the SAME id, its todos with it
+        const soft = !d ? this.softRemovedDeals.find(key) : undefined;
+        if (soft) {
+          this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== soft);
+          this.deals.push(soft);
+          d = soft;
+        }
         if (!d) {
           d = { id: cloudId(), owner: uid, install: p.source_install_id as string, localId: p.local_id as string, hash: "", version: 0, fullSyncAt: null };
           this.deals.push(d);

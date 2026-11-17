@@ -352,7 +352,7 @@ END $setup$;
 controls += '\n-- ---------------------------------------------------------------- the migration under test\n' + migration + '\n'
 controls += r"""
 DO $controls$
-DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb; t text; v_ops jsonb; s text;
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb; r8 jsonb; t text; v_ops jsonb; s text;
 BEGIN
   -- C1 backfill: there were unnumbered fixture rows; none is left; each has its part metadata
   PERFORM pg_temp.rec('C1_backfill', pg_temp.all_of(
@@ -421,6 +421,7 @@ BEGIN
       'entity', 'item', 'deal_id', pg_temp.id('D1'), 'local_id', 'no-such-item', 'part', 'note', 'value', 'x', 'base_rev', NULL, 'edit_seq', 4));
   r := pg_temp.push(A, I1, pg_temp.nowt(), v_ops);
   PERFORM pg_temp.rec('C8_answers', r::text);
+  r8 := r;
   PERFORM pg_temp.rec('C8_desktop_ops', pg_temp.all_of(
     pg_temp.pass(pg_temp.st(r, 0) = 'added' AND pg_temp.st(r, 1) = 'added' AND pg_temp.st(r, 2) = 'applied', r::text),
     pg_temp.pass(pg_temp.st(r, 3) = 'exists', 'existing item: ' || pg_temp.st(r, 3)),
@@ -446,12 +447,49 @@ BEGIN
     pg_temp.pass(pg_temp.st(r, 2) = 'not_allowed', 'My items remove: ' || pg_temp.st(r, 2)),
     pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklists WHERE cloud_deal_id = pg_temp.id('D1') AND template_id = 'keepr:my-items') = 1, 'a second list')));
   -- C9 a replay of the same op_ids: kept answers replay exactly; not_found is evaluated again
-  PERFORM pg_temp.rec('C9_replay', pg_temp.pass((pg_temp.push(A, I1, pg_temp.nowt(), v_ops) -> 'results' -> 2) = (r -> 'results' -> 2), 'replay differs'));
+  r := pg_temp.push(A, I1, pg_temp.nowt(), v_ops);
+  PERFORM pg_temp.rec('C9_replay', pg_temp.all_of(
+    pg_temp.pass((r -> 'results' -> 2) = (r8 -> 'results' -> 2), 'replay differs: ' || (r -> 'results' -> 2)::text),
+    pg_temp.pass(pg_temp.st(r, 5) = 'not_found', 'not_found re-evaluated: ' || pg_temp.st(r, 5))));
   -- C10 the raw (unconverted) shapes PR-3's outbox holds are refused per op, as the desktop must never send them
   r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(
     jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'deal_id', pg_temp.id('D1'), 'local_id', 'i1', 'part', 'title', 'value', jsonb_build_object('title', 'x'), 'edited_at', pg_temp.nowt()),
     jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'cl1', 'local_id', 'raw', 'title', 'Raw', 'is_required', 1, 'edited_at', pg_temp.nowt())));
   PERFORM pg_temp.rec('C10_raw_refused', pg_temp.pass(pg_temp.st(r, 0) = 'rejected' AND pg_temp.st(r, 1) = 'rejected', r::text));
+  -- C13 (SR re-check d) a set on a row this file marked purged answers not_restorable (final)
+  r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item',
+         'deal_id', pg_temp.id('D1'), 'local_id', 'i2', 'part', 'note', 'value', 'x', 'base_rev', NULL, 'edit_seq', NULL, 'edited_at', pg_temp.nowt(), 'clock_stepped', false)));
+  PERFORM pg_temp.rec('C13_purged_not_restorable', pg_temp.pass(pg_temp.st(r, 0) = 'not_restorable', r::text));
+  -- C14 (SR re-check f) parent_missing is evaluated again with the same op_id once the parent exists
+  v_ops := jsonb_build_array(jsonb_build_object('op_id', pg_temp.opid(31), 'kind', 'create_item', 'edited_at', pg_temp.nowt(), 'clock_stepped', false,
+      'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'cl-later', 'local_id', 'i-later', 'title', 'Later', 'done', false, 'edit_seq', NULL));
+  t := pg_temp.st(pg_temp.push(A, I1, pg_temp.nowt(), v_ops), 0);
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'edited_at', pg_temp.nowt(),
+      'clock_stepped', false, 'deal_id', pg_temp.id('D1'), 'local_id', 'cl-later', 'template_id', 'tpl-later', 'template_name', 'Later', 'sort_order', 20, 'is_private', false)));
+  s := pg_temp.st(pg_temp.push(A, I1, pg_temp.nowt(), v_ops), 0);
+  PERFORM pg_temp.rec('C14_parent_missing_again', pg_temp.pass(t = 'rejected' AND s = 'added', t || ' then ' || s));
+  -- C15 (SR re-check a, b) the initial scan's create for old-path todos: exists, no duplicate; a part another actor
+  --     changed first is kept (the unknowable create loses) and its value comes back in the answer
+  PERFORM pg_temp.ai(A, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'id', pg_temp.id('m1'), 'part', 'note', 'value', 'from the AI app')));
+  r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'edited_at', pg_temp.nowt(), 'clock_stepped', true,
+      'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'my1', 'local_id', 'm1', 'title', 'Call lender', 'description', NULL, 'is_required', NULL,
+      'expected_document_type', NULL, 'local_created_at', NULL, 'done', jsonb_build_object('is_checked', false, 'checked_at', NULL),
+      'note', 'stale local note', 'due_date', NULL, 'sort_order', 1, 'edit_seq', 900)));
+  PERFORM pg_temp.rec('C15_answer', r::text);
+  PERFORM pg_temp.rec('C15_scan_create_existing', pg_temp.all_of(
+    pg_temp.pass(pg_temp.st(r, 0) = 'exists', pg_temp.st(r, 0)),
+    pg_temp.pass(r -> 'results' -> 0 -> 'parts' -> 'note' ->> 'value' = 'from the AI app', 'note returned: ' || coalesce(r -> 'results' -> 0 -> 'parts' -> 'note' ->> 'value', 'null')),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklist_items WHERE cloud_deal_id = pg_temp.id('D1') AND local_item_id = 'm1') = 1, 'duplicated')));
+  -- C16 (SR re-check c) a deal deleted online, then uploaded again by its install: the same id, its todos answer as live
+  PERFORM pg_temp.deldeal(A, pg_temp.id('D1'));
+  r := pg_temp.deal(A, pg_temp.dp(I1, 'd1', '{"property_city":"again"}'));
+  t := r -> 'results' -> 0 ->> 'cloud_id';
+  r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item',
+         'deal_id', pg_temp.id('D1'), 'local_id', 'i1', 'part', 'note', 'value', 'after the re-upload', 'base_rev', NULL, 'edit_seq', 901, 'edited_at', pg_temp.nowt(), 'clock_stepped', false)));
+  PERFORM pg_temp.rec('C16_answer', r::text);
+  PERFORM pg_temp.rec('C16_deal_reupload', pg_temp.all_of(
+    pg_temp.pass(t = pg_temp.id('D1')::text, 'new id ' || coalesce(t, 'null')),
+    pg_temp.pass(pg_temp.st(r, 0) IN ('applied', 'unchanged'), pg_temp.st(r, 0))));
   -- C11 install_removed: a registered install's push is refused as a whole
   PERFORM pg_temp.delinst(A, pg_temp.id('I2'));
   r := pg_temp.push(A, pg_temp.id('I2'), pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'remove', 'entity', 'item', 'deal_id', pg_temp.id('D3'), 'local_id', 'i4', 'edited_at', pg_temp.nowt())));
