@@ -923,7 +923,8 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       const cur = cursor(db)!;
       const t = onlineItem(e, I1);
       applyTodoPage(db, { projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: new Date() }, {
-        rows: [{ entity: "item", cloud_id: fid(77, 2), cloud_deal_id: t.dealId, cloud_checklist_id: t.checklistId, local_id: fid(4, 70), change_seq: cur.last_seq + 1, purged: false,
+        // a deal id this computer does not know, so only the owner check stands between the row and B's todo
+        rows: [{ entity: "item", cloud_id: fid(77, 2), cloud_deal_id: fid(77, 3), cloud_checklist_id: t.checklistId, local_id: fid(4, 70), change_seq: cur.last_seq + 1, purged: false,
           parts: Object.fromEntries(Object.entries(t.parts).map(([k, v]) => [k, { ...v, rev: v.rev + 5, value: k === "title" ? "INTRUDER" : v.value }])) as unknown as JsonValue }],
         next_after: cur.last_seq + 1, horizon: cur.horizon ?? 0, install_max_edit_seq: null,
       }, 500);
@@ -961,7 +962,10 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
       expect((await pass(e)).outcome).toBe("install_removed");
       e.server.override = (fn) => (fn === "cloud_install_status" ? { data: { ok: true }, error: null, status: 200 } : undefined);
+      const calls = e.server.calls.length;
       expect((await pass(e)).outcome).toBe("install_removed");
+      // the answer resumed nothing: no call after the status check
+      expect(e.server.calls.slice(calls).map((c) => c.fn)).toEqual(["cloud_install_status"]);
       expect(todos.installRemovedAt(db, PROJECT, USER_A)).not.toBeNull();
     });
   });
