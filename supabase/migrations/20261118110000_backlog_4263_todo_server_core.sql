@@ -602,7 +602,7 @@ BEGIN
      WHERE x.id = v_did
        AND x.owner_user_id = p_owner                                                          /*OWNER:create_item*/
        AND (NOT v_desk OR x.source_install_id = p_inst);
-    IF d.id IS NULL OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN                          /*AI:confirmed_create*/
+    IF d.id IS NULL OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN                              /*AI:confirmed_create*/
       RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found');
     END IF;
     IF v_ai AND public._cloud_todo_deal_locked(p_owner, d.id) THEN
@@ -729,7 +729,7 @@ BEGIN
   END IF;
   SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
   IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst)                     /*INSTALL:op*/
-     OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN                                           /*AI:confirmed_op*/
+     OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN                                               /*AI:confirmed_op*/
     RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found');
   END IF;
   IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN                 /*MERGE:purged*/

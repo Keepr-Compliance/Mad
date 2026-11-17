@@ -228,8 +228,9 @@ def mutants():
     m.append(fn_mutant('R7_catalogue_sees_missing_filter', '_mcp_r_list_all_deals', [(" AND dl.removed_at IS NULL /*LIVE:all_deals*/", "", 1)], P('p_reader_catalog')))
     m.append(fn_mutant('S1_ai_restore_unrestricted', AO, [("IF v_ai AND (ent = 'checklist' OR (NOT v_my AND NOT v_ai_restore_template)) THEN", "IF false THEN", 1)], P('p_ai_restore')))
     m.append(fn_mutant('S1_switch_on', AO, [("v_ai_restore_template boolean := false;", "v_ai_restore_template boolean := true;", 1)], P('p_ai_restore')))
-    m.append(fn_mutant('S2_ai_on_unconfirmed', AO, [("IF d.id IS NULL OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN", "IF d.id IS NULL THEN", 1),
-                                                    ("     OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN", "     THEN", 1)], P('p_ai_unconfirmed')))
+    m.append(fn_mutant('S2_ai_on_unconfirmed', AO, [("IF d.id IS NULL OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN", "IF d.id IS NULL THEN", 1),
+                                                    ("     OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN", "     THEN", 1)], P('p_ai_unconfirmed')))
+    m.append(fn_mutant('S2_owner_refused_too', AO, [("OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN                                               /*AI:confirmed_op*/", "OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN /*AI:confirmed_op*/", 1)], P('p_ai_unconfirmed')))
     m.append(fn_mutant('S3_restore_under_removed_install', 'cloud_todo_restore', [("ELSIF d.removed_kind = 'deal' AND public._cloud_install_removed(v_uid, d.source_install_id) THEN", "ELSIF false THEN", 1)], P('p_restore_under_removed_install')))
     for fn, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items'),
                     ('cloud_upsert_messages', 'messages'), ('cloud_upsert_files', 'files'), ('cloud_mark_deal_synced', 'mark_synced'), ('cloud_tombstone', 'tombstone')]:

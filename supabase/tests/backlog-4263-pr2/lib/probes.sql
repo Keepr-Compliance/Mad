@@ -975,12 +975,17 @@ END $p$;
 
 -- S2: AI ops on a deal the readers hide (not confirmed) answer not_found
 CREATE FUNCTION pg_temp.p_ai_unconfirmed() RETURNS text LANGUAGE plpgsql AS $p$
-DECLARE A uuid := pg_temp.id('A'); r1 jsonb; r2 jsonb;
+DECLARE A uuid := pg_temp.id('A'); r1 jsonb; r2 jsonb; r3 jsonb;
 BEGIN
   UPDATE public.cloud_deals SET is_confirmed = false WHERE id = pg_temp.id('D1');
   r1 := pg_temp.ai(A, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'title', 'From AI')));
   r2 := pg_temp.ai(A, jsonb_build_array(pg_temp.op_set(pg_temp.id('m1'), 'note', '"x"')));
-  RETURN pg_temp.pass(pg_temp.st(r1) = 'not_found' AND pg_temp.st(r2) = 'not_found' AND (pg_temp.it(pg_temp.id('m1'))).note IS NULL, r1::text || r2::text);
+  -- the owner can still restore on that deal (cloud_list_removed lists it)
+  PERFORM pg_temp.push(A, pg_temp.id('I1'), pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('m1'), pg_temp.nowt())));
+  r3 := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', pg_temp.id('m1')));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.st(r1) = 'not_found' AND pg_temp.st(r2) = 'not_found' AND (pg_temp.it(pg_temp.id('m1'))).note IS NULL, r1::text || r2::text),
+    pg_temp.pass(pg_temp.st(r3) = 'restored', 'owner restore on an unconfirmed deal: ' || r3::text));
 END $p$;
 
 -- S3: a deal removed on its own, then its install removed: restoring the deal answers install_removed and changes nothing
