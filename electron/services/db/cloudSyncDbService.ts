@@ -41,6 +41,7 @@ import {
   UPSERT_DEAL_STATE_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
+import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
 import {
   applyCloudSyncTriggerRule,
   repairCloudSyncTriggersIfMissing,
@@ -220,6 +221,8 @@ export function enableForUser(
     ).run(nowIso(now), fields.noticeVersion, fields.acceptedAt, projectRef, userId);
     // R1: the triggers exist before any deal is marked, in this transaction.
     requireCloudSyncTriggers(db);
+    // BACKLOG-4263 R3: this computer's todo edit counter (no-op without an install row, or when present).
+    db.prepare(SEED_TODO_COUNTER_SQL).run(projectRef);
     if (!before || before.enabled !== 1) {
       // A fresh enable trusts no earlier record of what was saved online.
       db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
