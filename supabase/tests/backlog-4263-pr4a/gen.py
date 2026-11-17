@@ -428,6 +428,23 @@ BEGIN
     pg_temp.pass(r -> 'results' -> 0 ->> 'op_id' = pg_temp.opid(1)::text, 'op_id echo form'),
     pg_temp.pass(jsonb_typeof(r -> 'results' -> 2 -> 'parts' -> 'note' -> 'rev') = 'number' AND r -> 'results' -> 2 -> 'parts' -> 'note' ->> 'value' = 'booked', 'parts shape'),
     pg_temp.pass(r -> 'results' -> 1 -> 'parts' -> 'done' -> 'value' ? 'is_checked', 'done value shape')));
+  -- C8b My items (contract my_items @ 00bd934db): a second local My items list maps to the live one, items name it by
+  --     the desktop's own local id; a remove of a My items list is not_allowed for the desktop too
+  r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(
+    jsonb_build_object('op_id', pg_temp.opid(21), 'kind', 'create_checklist', 'edited_at', pg_temp.nowt(), 'clock_stepped', true,
+      'deal_id', pg_temp.id('D1'), 'local_id', 'my-desk-2', 'template_id', 'keepr:my-items', 'template_name', 'My items', 'sort_order', 1, 'is_private', true),
+    jsonb_build_object('op_id', pg_temp.opid(22), 'kind', 'create_item', 'edited_at', pg_temp.nowt(), 'clock_stepped', true,
+      'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'my-desk-2', 'local_id', 'i-my-2', 'title', 'Under the mapped list', 'description', NULL,
+      'is_required', NULL, 'expected_document_type', NULL, 'local_created_at', NULL, 'done', jsonb_build_object('is_checked', false, 'checked_at', NULL),
+      'note', NULL, 'due_date', NULL, 'sort_order', 0, 'edit_seq', NULL),
+    jsonb_build_object('op_id', pg_temp.opid(23), 'kind', 'remove', 'edited_at', pg_temp.nowt(), 'clock_stepped', false,
+      'entity', 'checklist', 'deal_id', pg_temp.id('D1'), 'local_id', 'my-desk-2')));
+  PERFORM pg_temp.rec('C8b_answers', r::text);
+  PERFORM pg_temp.rec('C8b_my_items', pg_temp.all_of(
+    pg_temp.pass(pg_temp.st(r, 0) = 'mapped' AND r -> 'results' -> 0 ->> 'cloud_id' = pg_temp.id('my1')::text, 'mapped: ' || pg_temp.st(r, 0)),
+    pg_temp.pass(pg_temp.st(r, 1) = 'added', 'item under the mapped list: ' || pg_temp.st(r, 1)),
+    pg_temp.pass(pg_temp.st(r, 2) = 'not_allowed', 'My items remove: ' || pg_temp.st(r, 2)),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklists WHERE cloud_deal_id = pg_temp.id('D1') AND template_id = 'keepr:my-items') = 1, 'a second list')));
   -- C9 a replay of the same op_ids: kept answers replay exactly; not_found is evaluated again
   PERFORM pg_temp.rec('C9_replay', pg_temp.pass((pg_temp.push(A, I1, pg_temp.nowt(), v_ops) -> 'results' -> 2) = (r -> 'results' -> 2), 'replay differs'));
   -- C10 the raw (unconverted) shapes PR-3's outbox holds are refused per op, as the desktop must never send them

@@ -23,7 +23,7 @@
 import { DRIVER, type TestDb } from "./helpers/sqlite";
 import { dealId, freshDb, insertDeal, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
-import { badTodoFields, FakeServer, jsonType, TODO_FIELD_TYPES } from "./helpers/fakeServer";
+import { badTodoFields, FakeServer, jsonType, refusedFields, TODO_FIELD_TYPES, WIRE_EXAMPLES } from "./helpers/fakeServer";
 import { disableForUser, enableForUser, ensureInstall, preparePass } from "../../db/cloudSyncDbService";
 import * as todos from "../../db/cloudSyncTodoDbService";
 import { prepareRestoredFile, markAllEligibleAfterMigration } from "../../db/cloudSyncTriggers";
@@ -140,7 +140,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       }
       for (const r of shapes) {
         const op = encodeOp(r, { cloudDealId: fid(77, 1), currentEpoch: 0 })!;
-        expect([r.entity, r.part, badTodoFields(op as Record<string, unknown>)]).toEqual([r.entity, r.part, []]);
+        expect([r.entity, r.part, refusedFields(op as Record<string, unknown>)]).toEqual([r.entity, r.part, []]);
         for (const [k, v] of Object.entries(op)) {
           const types = TODO_FIELD_TYPES[k];
           if (types) expect([k, types.some((t) => (t === "integer" ? Number.isInteger(v) : t === jsonType(v)))]).toEqual([k, true]);
@@ -153,6 +153,11 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
         expect(op.op_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
         expect(normOpId(op.op_id)).toBe(r.op_id);
       }
+    });
+
+    it("the contract's wire_types examples: every accepted one passes the check the fake applies, every refused one is refused", () => {
+      for (const op of WIRE_EXAMPLES.accepted) expect([op.kind, refusedFields(op)]).toEqual([op.kind, []]);
+      for (const x of WIRE_EXAMPLES.refused) expect([x.why, refusedFields(x.op).length > 0]).toEqual([x.why, true]);
     });
 
     it("the fake server rejects a raw (unconverted) value exactly as the contract says: is_required 1 and a one-key part object", () => {
@@ -670,6 +675,57 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       turnOn(db, USER_B);
       expect(keys(outbox(db, USER_B))).toEqual([`checklist:${fid(3, 80)}:create`]);
       expect(outbox(db).every((r) => r.owner_user_id === USER_A)).toBe(true);
+    });
+  });
+
+  // ================================================================ My items (contract my_items @ 00bd934db)
+  describe("My items: mapped to the live list online; never removed except with its deal", () => {
+    it("a My items list already live online under another local id: the create answers mapped, the shadow takes that cloud id, the local list stays, its items are added to the online list, no second list", async () => {
+      const { db, deal } = profile({ turnOn: false });
+      const e = engine(db);
+      // the deal online with a My items list made elsewhere (as an AI app will from PR-5)
+      e.server.override = null;
+      db.prepare(
+        "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, 'x', 1, '2026-11-01T00:00:00.000Z')",
+      ).run(PROJECT, USER_A);
+      const real = e.server.transport;
+      let seeded = false;
+      setTransport(e, async (f, a, sig) => {
+        const r = await real(f, a, sig);
+        if (f === "cloud_upsert_deal" && !seeded) {
+          seeded = true;
+          const d = e.server.deals.find((x) => x.localId === deal)!;
+          e.server.todos.push({
+            id: fid(70, 1), owner: USER_A, dealId: d.id, entity: "checklist", localId: fid(70, 1), checklistId: null, templateId: MY_ITEMS_TEMPLATE_ID, removed: false,
+            parts: { order: { rev: 1, value: 0, at: -Infinity, by: "ai_app:conn-1", edit_seq: null }, removed: { rev: 1, value: { removed_at: null, kind: null }, at: -Infinity, by: "ai_app:conn-1", edit_seq: null } },
+          });
+        }
+        return r;
+      });
+      await startAndPass(e);
+      const answers = [...e.server.todoLedger.values()] as Array<Record<string, unknown>>;
+      expect(answers.find((x) => x.cloud_id === fid(70, 1))?.status).toBe("mapped");
+      expect(shadow(db, MY)!.cloud_id).toBe(fid(70, 1));
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklists WHERE id = ?", MY)).toBe(1);
+      expect(e.server.todos.filter((t) => t.entity === "checklist" && t.templateId === MY_ITEMS_TEMPLATE_ID)).toHaveLength(1);
+      expect(onlineItem(e, I2)!.checklistId).toBe(fid(70, 1));
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("a My items list removed locally by any path but its deal: the server's not_allowed is final (op dropped, notice kept), never retried", async () => {
+      const { db, e } = await sentOnce();
+      // the app's own delete statement refuses My items (BACKLOG-3966); a direct delete stands for any other writer
+      db.prepare("DELETE FROM transaction_checklists WHERE id = ?").run(MY);
+      expect(keys(outbox(db))).toContain(`checklist:${MY}:removed`);
+      await pass(e);
+      const remove = allOps(e).find((o) => o.kind === "remove" && o.local_id === MY);
+      expect(remove).toBeDefined();
+      expect(outbox(db).filter((r) => r.local_id === MY)).toEqual([]);
+      expect(db.prepare("SELECT kind FROM cloud_sync_todo_notices WHERE local_id = ?").all(MY)).toEqual([{ kind: "not_allowed" }]);
+      const calls = pushes(e).length;
+      await pass(e);
+      expect(pushes(e)).toHaveLength(calls);
+      expect(e.server.todos.find((t) => t.localId === MY)!.removed).toBe(false);
     });
   });
 

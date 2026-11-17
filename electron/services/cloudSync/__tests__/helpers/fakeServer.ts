@@ -49,13 +49,14 @@
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
 
-/** Contract field_types (cloud-todo-change-v1.json @ 96bb1ca67, unchanged since fa0d63778). base_rev / edit_seq: integers only. */
+/** Contract field_types (cloud-todo-change-v1.json @ 00bd934db: fa0d63778's list plus checklist_id). base_rev / edit_seq: integers only. */
 export const TODO_FIELD_TYPES: Record<string, readonly string[]> = {
   entity: ["string"],
   id: ["string"],
   deal_id: ["string"],
   local_id: ["string"],
   checklist_local_id: ["string"],
+  checklist_id: ["string"],
   template_id: ["string"],
   template_name: ["string", "null"],
   sort_order: ["number", "null"],
@@ -95,6 +96,57 @@ export function badTodoFields(op: Record<string, unknown>): string[] {
   return bad.sort();
 }
 
+/**
+ * The per-part value rule (_cloud_todo_norm, migration :374-411; contract wire_types @ 00bd934db): done is a
+ * boolean or {is_checked: boolean, checked_at}; title a string; note string|null; due YYYY-MM-DD|null; order an
+ * integer|null. Returns the part name when the value is refused.
+ */
+export function badPartValue(part: string, v: unknown): string | null {
+  const t = jsonType(v);
+  switch (part) {
+    case "done":
+      return t === "boolean" || (t === "object" && jsonType((v as Record<string, unknown>).is_checked) === "boolean") ? null : part;
+    case "title":
+      return t === "string" ? null : part;
+    case "note":
+      return t === "string" || t === "null" ? null : part;
+    case "due":
+      return t === "null" || (t === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v as string)) ? null : part;
+    case "order":
+      return t === "null" || (t === "number" && Number.isInteger(v)) ? null : part;
+    default:
+      return part;
+  }
+}
+
+/** Contract wire_types examples (@ 00bd934db), verbatim apart from <uuid> placeholders. */
+export const WIRE_EXAMPLES = {
+  accepted: [
+    { kind: "set", entity: "item", id: "<uuid>", part: "done", value: { is_checked: true, checked_at: "2026-11-17T04:05:08.266Z" }, base_rev: 1, edit_seq: 3, edited_at: "2026-11-17T04:05:08.266Z" },
+    { kind: "set", entity: "item", id: "<uuid>", part: "title", value: "Call lender" },
+    { kind: "create_item", deal_id: "<uuid>", checklist_local_id: "cl1", local_id: "i9", title: "Order survey", is_required: false, done: false },
+  ] as Array<Record<string, unknown>>,
+  refused: [
+    { why: "is_required as 1", op: { kind: "create_item", is_required: 1 } },
+    { why: "done.is_checked as 1", op: { kind: "set", part: "done", value: { is_checked: 1 } } },
+    { why: "part value wrapped by part name", op: { kind: "set", part: "title", value: { title: "Call lender" } } },
+  ] as Array<{ why: string; op: Record<string, unknown> }>,
+};
+
+/** The whole per-op check: the field types plus the part value of a set and the done of a create. */
+export function refusedFields(op: Record<string, unknown>): string[] {
+  const bad = badTodoFields(op);
+  if (op.kind === "set" && typeof op.part === "string") {
+    const b = badPartValue(op.part, op.value ?? null);
+    if (b) bad.push(`value:${b}`);
+  }
+  if (op.kind === "create_item" && "done" in op) {
+    const b = badPartValue("done", op.done);
+    if (b) bad.push("done");
+  }
+  return [...new Set(bad)].sort();
+}
+
 export interface FakeTodoPart {
   rev: number;
   value: JsonValue;
@@ -113,6 +165,8 @@ export interface FakeTodo {
   templateId: string | null;
   removed: boolean;
   parts: Record<string, FakeTodoPart>;
+  /** Contract my_items (@ 00bd934db): other local ids a `mapped` answer recorded for this list. */
+  aliases?: string[];
 }
 
 export interface FakeDeal {
@@ -473,7 +527,7 @@ export class FakeServer {
   }
 
   private todoApplyOp(uid: string, install: string, by: string, op: Record<string, JsonValue>, opId: string, sent: number, recv: number): Record<string, JsonValue> {
-    const bad = badTodoFields(op);
+    const bad = refusedFields(op);
     if (bad.length > 0) return { op_id: opId, status: "rejected", reason: "invalid_value", field: bad.join(",") };
     const edited = typeof op.edited_at === "string" ? Date.parse(op.edited_at) : NaN;
     const age = sent - edited;
@@ -487,9 +541,14 @@ export class FakeServer {
       if (kind === "create_checklist") {
         const ex = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.localId === op.local_id);
         if (ex) return this.todoAnswer(opId, "exists", ex);
+        const alias = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && (t.aliases ?? []).includes(op.local_id as string));
+        if (alias) return this.todoAnswer(opId, "mapped", alias);
         if (op.template_id === "keepr:my-items") {
           const my = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.templateId === "keepr:my-items" && !t.removed);
-          if (my) return this.todoAnswer(opId, "mapped", my);
+          if (my) {
+            my.aliases = [...(my.aliases ?? []), op.local_id as string];
+            return this.todoAnswer(opId, "mapped", my);
+          }
         }
         const t: FakeTodo = {
           id: cloudId(), owner: uid, dealId: deal.id, entity: "checklist", localId: op.local_id as string, checklistId: null,
@@ -502,7 +561,12 @@ export class FakeServer {
         this.todos.push(t);
         return this.todoAnswer(opId, "added", t);
       }
-      const cl = this.todos.find((t) => t.entity === "checklist" && t.dealId === deal.id && t.localId === op.checklist_local_id);
+      const cl = this.todos.find(
+        (t) =>
+          t.entity === "checklist" &&
+          t.dealId === deal.id &&
+          (op.checklist_id !== undefined ? t.id === op.checklist_id : t.localId === op.checklist_local_id || (t.aliases ?? []).includes(op.checklist_local_id as string)),
+      );
       if (!cl) return { op_id: opId, status: "rejected", reason: "parent_missing" };
       const done = op.done && typeof op.done === "object" ? (op.done as Record<string, JsonValue>) : { is_checked: op.done === true, checked_at: null };
       const values: Record<string, JsonValue> = {
@@ -533,11 +597,15 @@ export class FakeServer {
     }
     const ent = (op.entity as string) ?? "item";
     const dl = this.todoDeal(uid, install, op.deal_id);
-    const t = dl ? this.todos.find((x) => x.entity === ent && x.dealId === dl.deal.id && x.localId === op.local_id) : undefined;
+    const t = dl
+      ? this.todos.find((x) => x.entity === ent && x.dealId === dl.deal.id && (x.localId === op.local_id || (x.aliases ?? []).includes(op.local_id as string)))
+      : undefined;
     if (!dl || !t) return { op_id: opId, status: "not_found" };
     const parent = t.checklistId ? this.todos.find((x) => x.id === t.checklistId) : undefined;
     const onRemoved = t.removed || dl.removed || !!parent?.removed;
     if (kind === "remove") {
+      // contract my_items.list_removal: a My items list goes only with its deal, for every actor
+      if (ent === "checklist" && t.templateId === "keepr:my-items") return { op_id: opId, status: "not_allowed", entity: ent, cloud_id: t.id };
       if (t.removed) return this.todoAnswer(opId, "already_removed", t);
       const cur = t.parts.removed;
       t.parts.removed = { rev: cur.rev + 1, value: { removed_at: new Date(recv).toISOString(), kind: ent }, at: Math.max(cur.at, eff), by, edit_seq: es };
