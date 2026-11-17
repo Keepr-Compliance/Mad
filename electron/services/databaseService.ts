@@ -2355,8 +2355,8 @@ class DatabaseService implements IDatabaseService {
       // on every existing row; no existing row is written. The capture triggers are not
       // created here: they follow the Keepr Cloud trigger rule after the chain.
       migrate: (d) => {
-        const has = (sql: string, col: string) => (d.prepare(sql).all() as Array<{ name: string }>).some((c) => c.name === col);
-        if (!has(V81_ITEMS_TABLE_INFO_SQL, "due_date")) d.exec(V81_ADD_DUE_DATE_SQL);
+        const items = d.prepare(V81_ITEMS_TABLE_INFO_SQL).all() as Array<{ name: string }>;
+        if (!items.some((c) => c.name === "due_date")) d.exec(V81_ADD_DUE_DATE_SQL);
         const settings = d.prepare(V81_SETTINGS_TABLE_INFO_SQL).all() as Array<{ name: string }>;
         if (settings.length > 0 && !settings.some((c) => c.name === "install_removed_at")) d.exec(V81_ADD_INSTALL_REMOVED_AT_SQL);
         d.exec(V81_TODO_TABLES_DDL);
