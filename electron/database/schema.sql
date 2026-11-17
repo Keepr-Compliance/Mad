@@ -1974,6 +1974,10 @@ CREATE TABLE IF NOT EXISTS transaction_checklist_items (
   note                   TEXT,
   sort_order             INTEGER NOT NULL DEFAULT 0,
   created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- BACKLOG-4263 (migration v81 adds it to existing databases): the todo's due
+  -- date, YYYY-MM-DD between 2000 and 2100. No index/trigger/view may name it
+  -- here (see v75).
+  due_date               TEXT CHECK (due_date IS NULL OR (date(due_date) IS due_date AND due_date BETWEEN '2000-01-01' AND '2100-12-31')),
   CHECK ((is_checked = 0) = (checked_at IS NULL)),
   FOREIGN KEY (checklist_id) REFERENCES transaction_checklists(id) ON DELETE CASCADE
 );
@@ -2168,6 +2172,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_settings (
   last_state_json    TEXT,
   last_state_at      TEXT,
   turn_off_owed_at   TEXT,
+  install_removed_at TEXT,
   PRIMARY KEY (project_ref, user_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_sync_state (
@@ -2205,6 +2210,112 @@ CREATE TABLE IF NOT EXISTS cloud_sync_runs (
   deals_failed  INTEGER NOT NULL DEFAULT 0,
   rows_rejected INTEGER NOT NULL DEFAULT 0,
   error_code    TEXT
+);
+-- BACKLOG-4263: two-way todos, local side. cloud_sync_settings.install_removed_at
+-- above is added to existing databases by migration v81. The todo outbox, the
+-- per-computer edit counter (edit_seq, clock epoch), the shadow of the cloud's
+-- values, the pull cursor, parked rows, notices, the removed-todo trash and the
+-- apply guard. Tables only: the capture triggers are created in code
+-- (cloudSyncTodoSql.ts) by the same rule as the dirty-mark triggers.
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_outbox (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  entity         TEXT NOT NULL,
+  local_id       TEXT NOT NULL,
+  part           TEXT NOT NULL,
+  transaction_id TEXT,
+  value_json     TEXT,
+  base_rev       INTEGER,
+  edit_seq       INTEGER,
+  edited_at      TEXT NOT NULL,
+  clock_epoch    INTEGER,
+  op_id          TEXT NOT NULL,
+  generation     INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (project_ref, owner_user_id, entity, local_id, part)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_counter (
+  project_ref   TEXT NOT NULL,
+  install_id    TEXT NOT NULL,
+  edit_seq      INTEGER NOT NULL DEFAULT 0,
+  max_wall_seen TEXT,
+  clock_epoch   INTEGER NOT NULL DEFAULT 0,
+  rewound_at    TEXT,
+  PRIMARY KEY (project_ref, install_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_state (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  entity         TEXT NOT NULL,
+  local_id       TEXT NOT NULL,
+  transaction_id TEXT,
+  cloud_id       TEXT,
+  cloud_deal_id  TEXT,
+  done_rev       INTEGER,
+  done_json      TEXT,
+  title_rev      INTEGER,
+  title_json     TEXT,
+  note_rev       INTEGER,
+  note_json      TEXT,
+  due_rev        INTEGER,
+  due_json       TEXT,
+  order_rev      INTEGER,
+  order_json     TEXT,
+  removed_rev    INTEGER,
+  removed_json   TEXT,
+  updated_at     TEXT NOT NULL,
+  PRIMARY KEY (project_ref, owner_user_id, entity, local_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  last_seq       INTEGER NOT NULL DEFAULT 0,
+  full_pull_owed INTEGER NOT NULL DEFAULT 1,
+  updated_at     TEXT,
+  PRIMARY KEY (project_ref, owner_user_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_parked (
+  project_ref   TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL,
+  entity        TEXT NOT NULL,
+  cloud_id      TEXT NOT NULL,
+  change_seq    INTEGER,
+  row_json      TEXT,
+  error_code    TEXT,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  parked_at     TEXT NOT NULL,
+  PRIMARY KEY (project_ref, owner_user_id, entity, cloud_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_notices (
+  id             INTEGER PRIMARY KEY,
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  entity         TEXT NOT NULL,
+  local_id       TEXT NOT NULL,
+  part           TEXT,
+  kind           TEXT NOT NULL,
+  transaction_id TEXT,
+  other_json     TEXT,
+  actor_kind     TEXT,
+  actor_label    TEXT,
+  change_seq     INTEGER,
+  created_at     TEXT NOT NULL,
+  dismissed_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_trash (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  entity         TEXT NOT NULL,
+  local_id       TEXT NOT NULL,
+  transaction_id TEXT,
+  checklist_id   TEXT,
+  removed_with   TEXT,
+  removed_at     TEXT NOT NULL,
+  payload_json   TEXT,
+  PRIMARY KEY (project_ref, owner_user_id, entity, local_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_sync_applying (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  started_at TEXT NOT NULL
 );
 -- BACKLOG-4243 END
 

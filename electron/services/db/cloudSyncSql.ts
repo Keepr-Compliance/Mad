@@ -1,7 +1,7 @@
 /**
  * Keepr Cloud local SQL — BACKLOG-4243 PR-2.
  *
- * The five `cloud_sync_*` tables (declared in schema.sql, mirrored here for
+ * The `cloud_sync_*` tables (declared in schema.sql, mirrored here for
  * the parity test and for suites that build a database from parts), the
  * dirty-mark triggers, and the statements the engine runs. Plan §6, §7.
  *
@@ -25,6 +25,7 @@ import {
   PARTY_ROW_COLUMNS,
   PARTY_SOURCE_LINK_COLUMNS,
 } from "../cloudSync/projection";
+import { CLOUD_SYNC_TODO_TABLES, CLOUD_SYNC_TODO_TABLES_DDL, CLOUD_SYNC_TODO_TRIGGERS } from "./cloudSyncTodoSql";
 
 export const CLOUD_SYNC_TABLES_DDL = `CREATE TABLE IF NOT EXISTS cloud_sync_install (
   project_ref  TEXT PRIMARY KEY,
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_settings (
   last_state_json    TEXT,
   last_state_at      TEXT,
   turn_off_owed_at   TEXT,
+  install_removed_at TEXT,
   PRIMARY KEY (project_ref, user_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_sync_state (
@@ -79,7 +81,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_runs (
   deals_failed  INTEGER NOT NULL DEFAULT 0,
   rows_rejected INTEGER NOT NULL DEFAULT 0,
   error_code    TEXT
-);`;
+);
+${CLOUD_SYNC_TODO_TABLES_DDL}`;
 
 export const CLOUD_SYNC_TABLES = [
   "cloud_sync_install",
@@ -87,6 +90,7 @@ export const CLOUD_SYNC_TABLES = [
   "cloud_sync_state",
   "cloud_sync_dirty",
   "cloud_sync_runs",
+  ...CLOUD_SYNC_TODO_TABLES,
 ] as const;
 
 // ---------------------------------------------------------------- triggers
@@ -245,6 +249,8 @@ export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
       transaction_contacts: ["transaction_id", "contact_id"],
     }),
   ]),
+  // BACKLOG-4263 PR-3: the six todo capture triggers (cloudSyncTodoSql.ts). Same lifecycle rule.
+  ...CLOUD_SYNC_TODO_TRIGGERS,
 ];
 
 // ---------------------------------------------------------------- engine statements

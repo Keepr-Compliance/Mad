@@ -135,6 +135,12 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     const db = freshDb();
     enableUser(db);
     db.pragma("foreign_keys = OFF");
+    // BACKLOG-4263: the todo checklist BEFORE DELETE trigger (on transaction_checklists) reads the
+    // items table, so a rebuild of the items table with it present fails at the rename. The open path
+    // drops every cloud trigger before any migration (dropCloudSyncTriggers); here only that one goes.
+    expect(() => db.exec(`BEGIN; ${rebuildSql(db, "transaction_checklist_items")} COMMIT;`)).toThrow(/trg_cloud_sync_todo_checklist_delete/);
+    db.exec("ROLLBACK");
+    db.exec("DROP TRIGGER trg_cloud_sync_todo_checklist_delete");
     // The repo's rebuild pattern (v72/v78): new table, copy, drop, rename.
     db.exec(rebuildSql(db, "transaction_checklist_items"));
     db.pragma("foreign_keys = ON");
