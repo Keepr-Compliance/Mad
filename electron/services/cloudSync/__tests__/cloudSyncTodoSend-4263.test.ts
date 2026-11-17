@@ -561,6 +561,19 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(outbox(db).map((r) => `${r.op_id}#${r.generation}`)).toEqual(fp);
     });
 
+    it("N1b: turned on before the install row existed (no counter): the pass seeds it before sending, and later edits carry edit_seq", async () => {
+      const { db } = profile({ turnOn: false });
+      db.exec("DELETE FROM cloud_sync_install");
+      turnOn(db);
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).not.toBeNull();
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(0);
+      const e = engine(db);
+      await startAndPass(e);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("counted", I1);
+      expect(outbox(db)[0].edit_seq).not.toBeNull();
+    });
+
     it("N1b: an enabled user with no counter row gets one before any send; ops that had none (NULL edit_seq) are still sent, by time", async () => {
       const { db } = profile({ turnOn: false });
       db.prepare(
@@ -628,12 +641,20 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ users on one computer
   describe("U: another local user's ops; a never-on user", () => {
-    it("the signed-in user's pass sends only that user's ops; another enabled user's wait for that user's own pass", async () => {
+    it("the signed-in user's pass sends only that user's ops; another enabled user's (whose deal is online) wait for that user's own pass", async () => {
       const { db } = profile();
       const deal = dealId();
       insertDeal(db, deal, USER_B);
-      turnOn(db, USER_B);
       db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 81), deal, "tpl-b", "B list", 0);
+      turnOn(db, USER_B);
+      // B's own pass uploads B's deal and todos (B signed in)
+      const eb = makeEngine(db, { user: USER_B });
+      eb.clock.now = new Date();
+      await startAndPass(eb);
+      expect(outbox(db, USER_B)).toEqual([]);
+      eb.service.refreshSchedule();
+      // B edits, then A signs in on the same computer
+      db.prepare("UPDATE transaction_checklists SET sort_order = 3 WHERE id = ?").run(fid(3, 81));
       expect(outbox(db, USER_B)).toHaveLength(1);
       const e = engine(db);
       await startAndPass(e);
@@ -642,15 +663,22 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(pushes(e).every((c) => c.args.p_expected_user_id === USER_A)).toBe(true);
     });
 
-    it("a never-on user's outbox (even a stray row) is never read or sent; a profile with nobody on makes no todo call", async () => {
-      const { db } = profile({ turnOn: false });
+    it("a never-on user's outbox (even a stray row) is never read, dropped or sent by another user's pass", async () => {
+      const { db } = profile();
       db.prepare(
         "INSERT INTO cloud_sync_todo_outbox (project_ref, owner_user_id, entity, local_id, part, value_json, edited_at, op_id) VALUES (?, ?, 'item', ?, 'note', '{}', 'x', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee')",
       ).run(PROJECT, USER_B, I1);
       const e = engine(db);
       await startAndPass(e);
+      expect(allOps(e).map((o) => normOpId(o.op_id))).not.toContain("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+      expect(outbox(db, USER_B)).toHaveLength(1);
+    });
+
+    it("a profile with nobody on makes no todo call", async () => {
+      const { db } = profile({ turnOn: false });
+      const e = engine(db);
+      await startAndPass(e);
       expect(pushes(e)).toHaveLength(0);
-      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_outbox")).toBe(1);
     });
   });
 
