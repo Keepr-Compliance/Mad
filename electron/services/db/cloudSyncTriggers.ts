@@ -26,7 +26,7 @@ import {
   RESET_STATE_AFTER_RESTORE_SQL,
 } from "./cloudSyncSql";
 import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
-import { resetTodosAfterRestore, scanTodosAllEnabled } from "./cloudSyncTodoDbService";
+import { clearApplyGuard, resetTodosAfterRestore, scanTodosAllEnabled } from "./cloudSyncTodoDbService";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -271,6 +271,22 @@ export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silen
   } catch (error) {
     log.warn("[CloudSync] Could not mark deals after a migration", { code: errorCode(error) });
     return false;
+  }
+}
+
+/**
+ * The end of every open, in one transaction: clear the todo apply guard (BACKLOG-4263 N5: its row exists only
+ * inside a confirm transaction, so one found at open was left by a crash), and after an open in which a
+ * versioned migration ran, mark every eligible deal and run the gated todo scan. Never throws.
+ */
+export function prepareCloudSyncAfterOpen(db: SqlDb, migrated: boolean, log: TriggerLog = silentLog): void {
+  try {
+    db.transaction(() => {
+      clearApplyGuard(db);
+      if (migrated) markAllEligibleAfterMigration(db, log);
+    })();
+  } catch (error) {
+    log.warn("[CloudSync] After-open step failed", { code: errorCode(error) });
   }
 }
 
