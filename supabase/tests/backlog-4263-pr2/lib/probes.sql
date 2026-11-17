@@ -1064,3 +1064,52 @@ BEGIN
       pa ->> 'resync', pa ->> 'pages', a1, h1, p2 ->> 'resync_required', p2 ->> 'horizon', e ->> 'resync_required', a1, f ->> 'resync_required',
       c1 ->> 'resync_required', c2 ->> 'resync_required', pg_temp.st(nb), q1 ->> 'resync_required'));
 END $p$;
+
+-- DR3: a desktop My items list mapped onto the live online one; the desktop's items and list ops land on it
+CREATE FUNCTION pg_temp.dr3_mapped_my_items() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); D1 uuid := pg_temp.id('D1'); my1 uuid := pg_temp.id('my1'); s text := pg_temp.nowt();
+        rm jsonb; ri jsonb; rc jsonb; ro jsonb; rr jsonb; rm2 jsonb;
+BEGIN
+  rm := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', D1,
+          'local_id', 'my-new', 'template_id', 'keepr:my-items', 'template_name', 'My items', 'edited_at', s)));
+  ri := pg_temp.push(A, I1, s, jsonb_build_array(
+          jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1, 'checklist_local_id', 'my-new', 'local_id', 'mi1', 'title', 'Mine 1', 'edited_at', s),
+          jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1, 'checklist_local_id', 'my-new', 'local_id', 'mi2', 'title', 'Mine 2', 'edited_at', s)));
+  rc := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1,
+          'checklist_id', my1, 'local_id', 'mi3', 'title', 'Mine 3', 'edited_at', s)));
+  ro := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'checklist', 'deal_id', D1,
+          'local_id', 'my-new', 'part', 'order', 'value', 9, 'base_rev', 1, 'edit_seq', 5, 'edited_at', s)));
+  rr := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'remove', 'entity', 'checklist', 'deal_id', D1,
+          'local_id', 'my-new', 'edited_at', s)));
+  rm2 := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', D1,
+          'local_id', 'my-new', 'template_id', 'keepr:my-items', 'template_name', 'My items', 'edited_at', s)));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.st(rm) = 'mapped' AND (pg_temp.r0(rm) ->> 'cloud_id')::uuid = my1, 'map ' || rm::text),
+    pg_temp.pass(pg_temp.st(ri) = 'added' AND pg_temp.st(ri, 1) = 'added'
+                 AND (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE cloud_checklist_id = my1 AND local_item_id IN ('mi1', 'mi2')) = 2, 'items by local id ' || left(ri::text, 300)),
+    pg_temp.pass(pg_temp.st(rc) = 'added' AND (SELECT cloud_checklist_id FROM public.cloud_deal_checklist_items WHERE cloud_deal_id = D1 AND local_item_id = 'mi3') = my1, 'item by cloud id ' || left(rc::text, 200)),
+    pg_temp.pass(pg_temp.st(ro) = 'applied' AND (SELECT sort_order FROM public.cloud_deal_checklists WHERE id = my1) = 9, 'reorder ' || left(ro::text, 200)),
+    pg_temp.pass(pg_temp.st(rr) = 'not_allowed' AND (SELECT removed_at FROM public.cloud_deal_checklists WHERE id = my1) IS NULL, 'remove My items ' || rr::text),
+    pg_temp.pass(pg_temp.st(rm2) = 'mapped' AND (pg_temp.r0(rm2) ->> 'cloud_id')::uuid = my1, 'repeat create ' || rm2::text),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklists WHERE cloud_deal_id = D1 AND template_id = 'keepr:my-items') = 1, 'one My items list'));
+END $p$;
+
+-- DR3: a checklist named by cloud id or by a mapped local id never reaches another deal's or owner's list
+CREATE FUNCTION pg_temp.dr3_cross() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); I1 uuid := pg_temp.id('I1'); D1 uuid := pg_temp.id('D1'); my1 uuid := pg_temp.id('my1');
+        s text := pg_temp.nowt(); r1 jsonb; r2 jsonb; r3 jsonb;
+BEGIN
+  PERFORM pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', D1,
+          'local_id', 'my-new', 'template_id', 'keepr:my-items', 'template_name', 'My items', 'edited_at', s)));
+  r1 := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D2'),
+          'checklist_id', my1, 'local_id', 'x1', 'title', 'Wrong deal', 'edited_at', s)));
+  r2 := pg_temp.push(A, I1, s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D2'),
+          'checklist_local_id', 'my-new', 'local_id', 'x2', 'title', 'Wrong deal alias', 'edited_at', s)));
+  r3 := pg_temp.push(B, pg_temp.id('IB'), s, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('DB'),
+          'checklist_id', my1, 'local_id', 'x3', 'title', 'Other owner', 'edited_at', s)));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.st(r1) = 'rejected' AND pg_temp.r0(r1) ->> 'reason' = 'parent_missing', 'other deal by id ' || r1::text),
+    pg_temp.pass(pg_temp.st(r2) = 'rejected' AND pg_temp.r0(r2) ->> 'reason' = 'parent_missing', 'other deal by alias ' || r2::text),
+    pg_temp.pass(pg_temp.st(r3) = 'rejected' AND pg_temp.r0(r3) ->> 'reason' = 'parent_missing', 'other owner ' || r3::text),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklist_items WHERE local_item_id IN ('x1', 'x2', 'x3')) = 0, 'nothing attached'));
+END $p$;

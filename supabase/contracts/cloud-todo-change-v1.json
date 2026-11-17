@@ -75,7 +75,7 @@
     ],
     "create_item": [
       "deal_id",
-      "checklist_local_id",
+      "checklist_id | checklist_local_id",
       "local_id",
       "title",
       "description",
@@ -265,7 +265,10 @@
       "boolean",
       "null"
     ],
-    "value": "per part (done boolean|{is_checked, checked_at}; title string; note string|null; due YYYY-MM-DD|null; order integer|null)"
+    "value": "per part (done boolean|{is_checked, checked_at}; title string; note string|null; due YYYY-MM-DD|null; order integer|null)",
+    "checklist_id": [
+      "string"
+    ]
   },
   "pull_errors": [
     "not_authorized",
@@ -336,5 +339,11 @@
         }
       }
     ]
+  },
+  "my_items": {
+    "mapped": "create_checklist with template_id keepr:my-items answers status 'mapped' when the deal already has a live My items list online under another local id. The answer's cloud_id is that list. The server records the desktop's local_id as a name of that list (mapped_local_ids), so every later op from that desktop may keep naming it by its own local_id: create_item checklist_local_id, and set/restore on entity checklist by deal_id + local_id. A repeated create_checklist with that local_id answers 'mapped' again.",
+    "desktop_after_mapped": "Store the answer's cloud_id as the cloud id of the local My items list (the shadow) and keep the local list. Send item creates with checklist_id = that cloud id, or with checklist_local_id = the desktop's own local id (both resolve). Ops already answered rejected/parent_missing are not kept in the ledger, so the same op_id can be sent again. Do not create a second list.",
+    "parent_resolution": "create_item from the desktop names its parent by checklist_id (cloud uuid) or checklist_local_id (the list's local id or a local id answered 'mapped'); the parent must be a checklist of the op's deal, which must be this owner's and this install's. A parent on another deal or of another owner answers rejected/parent_missing.",
+    "list_removal": "A keepr:my-items checklist is removed only with its deal: a remove op on it answers not_allowed for every actor. Its items are removed one by one. Reorder (set order) applies to the one online list."
   }
 }

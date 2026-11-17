@@ -123,7 +123,7 @@ def unit_decls():
 CONTROLS = ['p_parts', 'p_later_wins', 'p_equal', 'p_replay', 'p_edit_seq', 'p_parents', 'p_removal_wins', 'p_ai_rules', 'p_strip',
             "p_lock('reason')", "p_lock('sub')", 'p_cross_owner', 'p_e2', 'p_a1', 'p_f4', 'p_feed', 'p_install', 'p_install_restore',
             'p_soft_delete', 'p_reader_counts', 'p_purge', 'p_purge_now', 'p_claims', 'p_turnoff', 'p_idem', 'p_create',
-            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog', 'p_bad_ids', 'p_resync', 'p_purge_horizon', 'p_off_writes', 'p_types', 'p_reader_catalog', 'p_list_all', 'sr_removed_reorder', 'sr_bad_boolean_aborts', 'sr_ledger_transient', 'p_ai_restore', 'p_ai_unconfirmed', 'p_restore_under_removed_install', 'dr1_masked_deletion', 'dr1_horizon_cases']
+            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog', 'p_bad_ids', 'p_resync', 'p_purge_horizon', 'p_off_writes', 'p_types', 'p_reader_catalog', 'p_list_all', 'sr_removed_reorder', 'sr_bad_boolean_aborts', 'sr_ledger_transient', 'p_ai_restore', 'p_ai_unconfirmed', 'p_restore_under_removed_install', 'dr1_masked_deletion', 'dr1_horizon_cases', 'dr3_mapped_my_items', 'dr3_cross']
 
 AO = '_cloud_todo_apply_op'
 
@@ -162,7 +162,7 @@ def mutants():
     m.append(fn_mutant('C8b_oldest_submission', '_cloud_todo_deal_locked', [("ORDER BY s.version DESC, s.id DESC LIMIT 1", "ORDER BY s.version ASC, s.id ASC LIMIT 1", 1)], P("p_lock('sub')")))
     m.append(fn_mutant('C8c_uploading_locked', '_cloud_todo_deal_locked', [("('submitted', 'under_review', 'resubmitted', 'approved')", "('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')", 1)], P("p_lock('sub')")))
     m.append(fn_mutant('Q1_ai_renames_template', AO, [("IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN", "IF NOT v_desk AND v_part = 'order' THEN", 1)], P('p_ai_rules')))
-    m.append(fn_mutant('Q1_ai_removes_template', AO, [("IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN", "IF NOT v_desk AND ent = 'checklist' THEN", 1)], P('p_ai_rules')))
+    m.append(fn_mutant('Q1_ai_removes_template', AO, [("IF (NOT v_desk AND (ent = 'checklist' OR NOT v_my))", "IF (NOT v_desk AND ent = 'checklist')", 1)], P('p_ai_rules')))
     m.append(fn_mutant('R10_6_strip_dropped', '_cloud_todo_norm', [("IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;", "IF p_ai THEN v := btrim(v); END IF;", 1)], P('p_strip')))
     m.append(fn_mutant('C19_window_dropped', AO, [("AND x.created_at > now() - interval '10 minutes'", "AND false", 1)], P('p_ai_rules')))
     m.append(fn_mutant('P_purge_before_30_days', '_cloud_todo_purge', [("v_cut timestamptz := now() - interval '30 days';", "v_cut timestamptz := now() - interval '1 day';", 1)], P('p_purge')))
@@ -235,6 +235,11 @@ def mutants():
     m.append(fn_mutant('S2_ai_on_unconfirmed', AO, [("IF d.id IS NULL OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN", "IF d.id IS NULL THEN", 1),
                                                     ("     OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN", "     THEN", 1)], P('p_ai_unconfirmed')))
     m.append(fn_mutant('S2_owner_refused_too', AO, [("OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN                                               /*AI:confirmed_op*/", "OR (NOT v_desk AND d.is_confirmed IS NOT TRUE) THEN /*AI:confirmed_op*/", 1)], P('p_ai_unconfirmed')))
+    m.append(fn_mutant('DR3_alias_not_used_for_items', AO, [("OR (op ->> 'checklist_local_id') = ANY (x.mapped_local_ids))))   /*PARENT:alias*/", "OR false)))", 1)], P('dr3_mapped_my_items')))
+    m.append(fn_mutant('DR3_alias_not_recorded', AO, [("UPDATE public.cloud_deal_checklists SET mapped_local_ids = mapped_local_ids || v_lid       /*MYITEMS:alias_record*/", "UPDATE public.cloud_deal_checklists SET mapped_local_ids = mapped_local_ids", 1)], P('dr3_mapped_my_items')))
+    m.append(fn_mutant('DR3_parent_any_deal', AO, [("WHERE x.cloud_deal_id = d.id                                                            /*PARENT:deal*/", "WHERE x.owner_user_id IS NOT NULL", 1)], P('dr3_cross')))
+    m.append(fn_mutant('DR3_my_items_list_removable', AO, [("OR (ent = 'checklist' AND v_my) THEN", "OR false THEN", 1)], P('dr3_mapped_my_items')))
+    m.append(fn_mutant('DR3_checklist_ops_no_alias', AO, [("OR (op ->> 'local_id') = ANY (x.mapped_local_ids))));   /*CHECKLIST:alias*/", ")));", 1)], P('dr3_mapped_my_items')))
     m.append(fn_mutant('S3_restore_under_removed_install', 'cloud_todo_restore', [("ELSIF d.removed_kind = 'deal' AND public._cloud_install_removed(v_uid, d.source_install_id) THEN", "ELSIF false THEN", 1)], P('p_restore_under_removed_install')))
     for fn, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items'),
                     ('cloud_upsert_messages', 'messages'), ('cloud_upsert_files', 'files'), ('cloud_mark_deal_synced', 'mark_synced'), ('cloud_tombstone', 'tombstone')]:

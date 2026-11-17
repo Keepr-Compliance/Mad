@@ -5,7 +5,8 @@
 --   cloud_deal_checklist_items: due_date, removed_kind, created_by_kind, created_by_ref, purged_at, change_seq,
 --     and per part (done, title, note, due, order, removed): <part>_rev (default 1), <part>_eff_at,
 --     <part>_by ('<kind>:<ref>'), <part>_edit_seq
---   cloud_deal_checklists: removed_kind, created_by_kind, created_by_ref, purged_at, change_seq,
+--   cloud_deal_checklists: removed_kind, created_by_kind, created_by_ref, purged_at, change_seq, mapped_local_ids
+--     (desktop local ids answered 'mapped' onto this My items list; they name this list in later ops),
 --     and per part (order, removed) the same four columns
 --   cloud_deals: removed_at, removed_kind ('deal' | 'install'), restorable_until, change_seq
 -- Indexes: UNIQUE (owner_user_id, change_seq) on deals, checklists, items and history; one live
@@ -103,7 +104,8 @@ ALTER TABLE public.cloud_deal_checklists
   ADD COLUMN IF NOT EXISTS removed_rev      bigint NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS removed_eff_at   timestamptz NULL,
   ADD COLUMN IF NOT EXISTS removed_by       text NULL,
-  ADD COLUMN IF NOT EXISTS removed_edit_seq bigint NULL;
+  ADD COLUMN IF NOT EXISTS removed_edit_seq bigint NULL,
+  ADD COLUMN IF NOT EXISTS mapped_local_ids text[] NOT NULL DEFAULT '{}';
 
 ALTER TABLE public.cloud_deal_checklist_items
   ADD COLUMN IF NOT EXISTS due_date         date NULL,
@@ -531,7 +533,7 @@ DECLARE
 BEGIN
   -- every field an op may carry and the JSON types it accepts; any other type rejects this op alone
   SELECT string_agg(f.k, ',' ORDER BY f.k) INTO pt FROM (VALUES
-      ('entity', ARRAY['string']), ('id', ARRAY['string']), ('deal_id', ARRAY['string']), ('local_id', ARRAY['string']), ('checklist_local_id', ARRAY['string']),
+      ('entity', ARRAY['string']), ('id', ARRAY['string']), ('deal_id', ARRAY['string']), ('local_id', ARRAY['string']), ('checklist_local_id', ARRAY['string']), ('checklist_id', ARRAY['string']),
       ('template_id', ARRAY['string']), ('template_name', ARRAY['string','null']), ('sort_order', ARRAY['number','null']), ('is_private', ARRAY['boolean','null']),
       ('title', ARRAY['string']), ('note', ARRAY['string','null']), ('due_date', ARRAY['string','null']), ('done', ARRAY['boolean','object']),
       ('description', ARRAY['string','null']), ('is_required', ARRAY['boolean','null']), ('expected_document_type', ARRAY['string','null']),
@@ -570,6 +572,13 @@ BEGIN
       RETURN jsonb_build_object('op_id', v_opid, 'status', 'rejected', 'reason', 'invalid_value', 'field', 'sort_order');
     END IF;
     SELECT * INTO c FROM public.cloud_deal_checklists x WHERE x.cloud_deal_id = d.id AND x.local_checklist_id = v_lid;
+    IF c.id IS NULL THEN
+      SELECT * INTO c FROM public.cloud_deal_checklists x WHERE x.cloud_deal_id = d.id AND v_lid = ANY (x.mapped_local_ids);   /*MYITEMS:alias_create*/
+      IF c.id IS NOT NULL THEN
+        RETURN jsonb_build_object('op_id', v_opid, 'status', 'mapped', 'entity', 'checklist', 'cloud_id', c.id, 'local_id', c.local_checklist_id,
+                 'cloud_deal_id', d.id, 'parts', public._cloud_todo_checklist_json(c) -> 'parts', 'conflict', false);
+      END IF;
+    END IF;
     IF c.id IS NOT NULL THEN
       RETURN jsonb_build_object('op_id', v_opid, 'status', 'exists', 'entity', 'checklist', 'cloud_id', c.id, 'local_id', c.local_checklist_id,
                'cloud_deal_id', d.id, 'parts', public._cloud_todo_checklist_json(c) -> 'parts', 'conflict', false);
@@ -578,6 +587,8 @@ BEGIN
       SELECT * INTO c FROM public.cloud_deal_checklists x
        WHERE x.cloud_deal_id = d.id AND x.template_id = 'keepr:my-items' AND x.removed_at IS NULL AND x.purged_at IS NULL;
       IF c.id IS NOT NULL THEN                                                                 /*MYITEMS:map*/
+        UPDATE public.cloud_deal_checklists SET mapped_local_ids = mapped_local_ids || v_lid       /*MYITEMS:alias_record*/
+         WHERE id = c.id AND NOT (v_lid = ANY (mapped_local_ids));
         RETURN jsonb_build_object('op_id', v_opid, 'status', 'mapped', 'entity', 'checklist', 'cloud_id', c.id, 'local_id', c.local_checklist_id,
                  'cloud_deal_id', d.id, 'parts', public._cloud_todo_checklist_json(c) -> 'parts', 'conflict', false);
       END IF;
@@ -635,7 +646,14 @@ BEGIN
     IF pt IS NOT NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'rejected', 'reason', 'invalid_value', 'field', pt); END IF;
     -- the checklist: the desktop names it; every other actor adds to the deal's My items list
     IF v_desk THEN
-      SELECT * INTO c FROM public.cloud_deal_checklists x WHERE x.cloud_deal_id = d.id AND x.local_checklist_id = op ->> 'checklist_local_id';
+      -- the parent by cloud id (checklist_id) or by local id, the desktop's own or one answered 'mapped'; always on this deal
+      SELECT * INTO c FROM public.cloud_deal_checklists x
+       WHERE x.cloud_deal_id = d.id                                                            /*PARENT:deal*/
+         AND ((pg_input_is_valid(op ->> 'checklist_id', 'uuid') AND x.id::text = op ->> 'checklist_id')
+              OR (NOT op ? 'checklist_id' AND (x.local_checklist_id = op ->> 'checklist_local_id'
+                                               OR (op ->> 'checklist_local_id') = ANY (x.mapped_local_ids))))   /*PARENT:alias*/
+       ORDER BY (x.local_checklist_id = op ->> 'checklist_local_id') DESC NULLS LAST
+       LIMIT 1;
       IF c.id IS NULL OR c.purged_at IS NOT NULL THEN
         RETURN jsonb_build_object('op_id', v_opid, 'status', 'rejected', 'reason', 'parent_missing');
       END IF;
@@ -724,7 +742,7 @@ BEGIN
      WHERE x.owner_user_id = p_owner                                                          /*OWNER:checklist*/
        AND (x.id = v_tid
             OR (NOT op ? 'id' AND x.cloud_deal_id = v_did
-                AND x.local_checklist_id = op ->> 'local_id'));
+                AND (x.local_checklist_id = op ->> 'local_id' OR (op ->> 'local_id') = ANY (x.mapped_local_ids))));   /*CHECKLIST:alias*/
     IF c.id IS NULL THEN RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_found'); END IF;
     v_id := c.id; v_lid := c.local_checklist_id;
   END IF;
@@ -746,7 +764,9 @@ BEGIN
 
   -- ---------------------------------------------------------------- remove
   IF k = 'remove' THEN
-    IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
+    IF (NOT v_desk AND (ent = 'checklist' OR NOT v_my))
+       OR (ent = 'checklist' AND v_my) THEN                                                          /*RULE:my_items_list_stays*/
+      -- the My items list itself is removed only with its deal (BACKLOG-3966); its items are removed one by one
       RETURN jsonb_build_object('op_id', v_opid, 'status', 'not_allowed', 'entity', ent, 'cloud_id', v_id);
     END IF;
     IF v_rem_self THEN

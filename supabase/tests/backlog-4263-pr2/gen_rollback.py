@@ -76,7 +76,7 @@ ALTER TABLE public.cloud_deal_checklist_items DROP CONSTRAINT IF EXISTS cloud_de
 ALTER TABLE public.cloud_deals DROP COLUMN IF EXISTS removed_at, DROP COLUMN IF EXISTS removed_kind,
   DROP COLUMN IF EXISTS restorable_until, DROP COLUMN IF EXISTS change_seq;
 ''')
-cl=['removed_kind','created_by_kind','created_by_ref','purged_at','change_seq']+[p+s for p in ['order','removed'] for s in ['_rev','_eff_at','_by','_edit_seq']]
+cl=['removed_kind','created_by_kind','created_by_ref','purged_at','change_seq','mapped_local_ids']+[p+s for p in ['order','removed'] for s in ['_rev','_eff_at','_by','_edit_seq']]
 it=['due_date','removed_kind','created_by_kind','created_by_ref','purged_at','change_seq']+[p+s for p in ['done','title','note','due','order','removed'] for s in ['_rev','_eff_at','_by','_edit_seq']]
 out.append('ALTER TABLE public.cloud_deal_checklists '+', '.join('DROP COLUMN IF EXISTS '+c for c in cl)+';\n')
 out.append('ALTER TABLE public.cloud_deal_checklist_items '+', '.join('DROP COLUMN IF EXISTS '+c for c in it)+';\n')
