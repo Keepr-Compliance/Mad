@@ -22,7 +22,8 @@
  * `wrong_account` whenever p_expected_user_id differs from the token's user.
  *
  * BACKLOG-4263 PR-4a — cloud_todo_push, transcribed (not run: PR-2 is not applied on the test database
- * yet) from origin/feature/BACKLOG-4263-todo-server-core @ fa0d63778:
+ * yet) from origin/feature/BACKLOG-4263-todo-server-core @ fa0d63778 (push side re-read at 96bb1ca67:
+ * unchanged; the field_types table below equals that head's contract, checked by diff):
  *   supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql
  *     cloud_todo_push :948-977   refusals not_authorized / wrong_account / invalid_input / not_entitled /
  *                                install_removed / batch_too_large; age = p_sent_at - edited_at, unknowable
@@ -48,7 +49,7 @@
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
 
-/** Contract field_types (cloud-todo-change-v1.json @ fa0d63778). base_rev / edit_seq: integers only. */
+/** Contract field_types (cloud-todo-change-v1.json @ 96bb1ca67, unchanged since fa0d63778). base_rev / edit_seq: integers only. */
 export const TODO_FIELD_TYPES: Record<string, readonly string[]> = {
   entity: ["string"],
   id: ["string"],

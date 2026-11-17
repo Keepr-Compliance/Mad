@@ -12,6 +12,7 @@ import { join } from 'path';
 const REPO = join(__dirname, '../../..');
 const CONTRACT_PATH = join(REPO, 'supabase/contracts/cloud-deal-shape-v1.json');
 const M2_PATH = join(REPO, 'supabase/migrations/20261112190000_backlog_4236_cloud_autosave_schema.sql');
+const M_4A_PATH = join(REPO, 'supabase/migrations/20261118120000_backlog_4263_todo_old_item_path_removed.sql');
 
 const read = (path: string): string => readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
 const C = JSON.parse(read(CONTRACT_PATH));
@@ -109,10 +110,14 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     expect(sorted(C.tolerance.known.blob_states)).toEqual(sorted([...all(/THEN '([a-z_]+)'/g, blob), ...all(/ELSE '([a-z_]+)'/g, blob), ...all(/'state', '([a-z_]+)'/g, blob)]));
   });
 
-  it('writes: the listed functions are exactly those that take p_expected_user_id first, and the mismatch code is emitted', () => {
+  it('writes: the listed functions are exactly those that take p_expected_user_id first, less those a later migration drops, and the mismatch code is emitted', () => {
     const fns = all(/CREATE OR REPLACE FUNCTION public\.(\w+)\(p_expected_user_id uuid, /g, M2);
     expect(fns).toHaveLength(13);
-    expect(sorted(C.writes.functions)).toEqual(sorted(fns));
+    // BACKLOG-4263 PR-4a: checklists and items moved to cloud_todo_push (contract cloud-todo-change-v1); this
+    // migration drops the two one-way upserts.
+    const dropped = all(/DROP FUNCTION IF EXISTS public\.(\w+)\(/g, read(M_4A_PATH));
+    expect(sorted(dropped)).toEqual(['cloud_upsert_checklist_items', 'cloud_upsert_checklists']);
+    expect(sorted(C.writes.functions)).toEqual(sorted(fns.filter((f) => !dropped.includes(f))));
     expect(C.writes.expected_user_argument).toBe('p_expected_user_id');
     expect(C.writes.expected_user_argument_position).toBe(1);
     expect(C.writes.mismatch_error).toBe('wrong_account');

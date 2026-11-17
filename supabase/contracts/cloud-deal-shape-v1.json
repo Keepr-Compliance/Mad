@@ -72,8 +72,6 @@
       "cloud_delete_install",
       "cloud_upsert_deal",
       "cloud_upsert_parties",
-      "cloud_upsert_checklists",
-      "cloud_upsert_checklist_items",
       "cloud_upsert_messages",
       "cloud_upsert_files",
       "cloud_tombstone",
