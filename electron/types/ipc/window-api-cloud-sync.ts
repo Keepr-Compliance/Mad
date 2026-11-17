@@ -69,7 +69,11 @@ export interface CloudSyncRemovedDeal {
   deleting: boolean;
 }
 
-/** BACKLOG-4263 PR-4c: the answer to a restore. `error` codes: see cloudSyncDealArchive RestoreRefusal, signed_out, invalid_input. */
+/**
+ * BACKLOG-4263 PR-4c: the answer to a restore. `error` codes: not_found, not_owner, purge_owed, deal_exists, cloud_off,
+ * restore_failed, archive_not_understood (written by another Keepr version; kept, Delete for good still erases it),
+ * signed_out, invalid_input (cloudSyncDealArchive RestoreRefusal).
+ */
 export interface CloudSyncRestoreResult extends CloudSyncResult {
   /** Rows that could not come back (a link whose email, text, attachment or contact no longer exists). */
   skippedLinks?: number;

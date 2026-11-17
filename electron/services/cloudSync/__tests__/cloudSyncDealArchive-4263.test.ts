@@ -58,6 +58,16 @@ const idle = (e: Engine) => e.service.runner!.whenIdle();
 
 const del = (db: TestDb, deal = DEAL, now = new Date(), flag = true) => deleteLikeTheHandler(db, deal, archive.archiveDealBeforeDelete, now, flag);
 
+/** Rewrites the (only) archive row's payload. */
+const editPayload = (db: TestDb, f: (p: archive.DealArchivePayload) => void) => {
+  const row = db.prepare(`SELECT payload_json FROM ${archive.DEAL_ARCHIVE_TABLE}`).get() as { payload_json: string };
+  const p = JSON.parse(row.payload_json) as archive.DealArchivePayload;
+  f(p);
+  db.prepare(`UPDATE ${archive.DEAL_ARCHIVE_TABLE} SET payload_json = ?`).run(JSON.stringify(p));
+};
+/** A column name that would break the INSERT if it ever reached the SQL text. */
+const HOSTILE = 'x") VALUES (1); DROP TABLE contacts; --';
+
 const restore = (db: TestDb, user = USER_A, deal = DEAL, audits: Row[] = []) =>
   archive.restoreArchivedDeal(db, { userId: user, transactionId: deal, now: new Date(), audit: (e) => void audits.push(e) });
 
@@ -284,6 +294,38 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(archiveRows(db)).toBe(1);
     });
 
+    it.each([
+      ["another payload format (a later build)", (p: archive.DealArchivePayload) => void (p.format = 99)],
+      ["a table this build does not restore", (p: archive.DealArchivePayload) => void (p.tables.sr_future_table = [{ id: "x", transaction_id: DEAL }])],
+      ["a SET NULL list this build does not know", (p: archive.DealArchivePayload) => void ((p.set_null as Record<string, string[]>).sr_future_ref = ["x"])],
+    ])("an archive this build does not understand (%s): archive_not_understood, nothing written, the row kept", (_label, f) => {
+      const { db } = profile();
+      del(db);
+      editPayload(db, f);
+      const before = db.prepare(`SELECT * FROM ${archive.DEAL_ARCHIVE_TABLE}`).all();
+      expect(restore(db)).toEqual({ ok: false, code: "archive_not_understood" });
+      for (const [t, rows] of Object.entries(snapshotDeal(db, DEAL))) expect([t, rows.length]).toEqual([t, 0]);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
+      expect(db.prepare(`SELECT * FROM ${archive.DEAL_ARCHIVE_TABLE}`).all()).toEqual(before);
+      // still listed, and still purged at 30 days
+      expect(archive.listArchivedDeals(db, USER_A)).toHaveLength(1);
+      expect(archive.purgeExpiredDealArchive(db, new Date(Date.now() + 31 * DAY))).toBe(1);
+    });
+
+    it("an archived column the current table no longer has (dropped by a later version) is ignored: deal and child rows restore exactly, and the name never reaches the SQL", () => {
+      const { db } = profile();
+      const before = snapshotDeal(db, DEAL);
+      del(db);
+      editPayload(db, (p) => {
+        p.deal.sr_dropped_col = "gone";
+        (p.deal as Record<string, unknown>)[HOSTILE] = 1;
+        p.tables.transaction_checklist_items[0].sr_dropped_col = "gone";
+      });
+      expect(restore(db)).toMatchObject({ ok: true, skippedTotal: 0 });
+      expect(snapshotDeal(db, DEAL)).toEqual(before);
+      expect(n(db, "SELECT COUNT(*) AS n FROM contacts")).toBeGreaterThan(0);
+    });
+
     it("the audit entry failing cancels the whole restore", () => {
       const { db } = profile();
       del(db);
@@ -425,6 +467,23 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
     });
   });
 
+  describe("COLS: todo records", () => {
+    it("an archived todo-record column the current table no longer has is ignored; the shadow comes back", async () => {
+      const { db, e } = await synced();
+      void e;
+      const shadow = shadowRows(db, DEAL);
+      expect(shadow).toBeGreaterThan(0);
+      del(db);
+      editPayload(db, (p) => {
+        expect(p.cloud.todo_state.length).toBeGreaterThan(0);
+        p.cloud.todo_state[0].sr_dropped_col = "gone";
+        p.cloud.todo_state[0][HOSTILE] = 1;
+      });
+      expect(restore(db)).toMatchObject({ ok: true });
+      expect(shadowRows(db, DEAL)).toBe(shadow);
+    });
+  });
+
   // ================================================================ ONLINE
   describe("ONLINE: a deal restored online is restored here by the pull (W33)", () => {
     it("the pull restores it from the archive inside the page, the todo rows of the same pull apply to it, another side's change arrives, and nothing echoes", async () => {
@@ -470,6 +529,18 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(e.server.deals).toHaveLength(1);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_dirty WHERE transaction_id = ?", DEAL)).toBe(0);
       db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = 0, full_pull_owed = 1, horizon = NULL").run();
+      await pass(e);
+      expect(n(db, "SELECT COUNT(*) AS n FROM transactions WHERE id = ?", DEAL)).toBe(0);
+      expect(archiveRows(db)).toBe(1);
+      expect(e.audits).toEqual([]);
+    });
+
+    it("an archive this build does not understand is not restored by the pull (skipped, row kept)", async () => {
+      const { db, e } = await synced();
+      del(db);
+      await pass(e);
+      editPayload(db, (p) => void (p.format = 99));
+      e.server.restoreDealOnline(e.server.softRemovedDeals[0]);
       await pass(e);
       expect(n(db, "SELECT COUNT(*) AS n FROM transactions WHERE id = ?", DEAL)).toBe(0);
       expect(archiveRows(db)).toBe(1);
@@ -673,8 +744,7 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       del(db);
       e.service.refreshSchedule();
       await e.service.runner!.whenIdle();
-      expect(await e.service.deleteDealForGood(DEAL)).toMatchObject({ success: true });
-      await pass(e);
+      expect(await e.service.deleteDealForGood(DEAL)).toEqual({ success: true, status: "done" });
       expect(archiveRows(db)).toBe(0);
       expect(e.server.callsTo("cloud_purge_deal_now")).toHaveLength(0);
     });
@@ -727,12 +797,55 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(archive.listArchivedDeals(db, USER_A)).toEqual([expect.objectContaining({ deleting: true })]);
     });
 
+    it("an archive this build does not understand is still erased by Delete for good, online first", async () => {
+      const { db, e } = await synced();
+      const cloudId = e.server.deals[0].id;
+      del(db);
+      await pass(e);
+      editPayload(db, (p) => void (p.format = 99));
+      expect(await e.service.deleteDealForGood(DEAL)).toEqual({ success: true, status: "done" });
+      expect(e.server.callsTo("cloud_purge_deal_now").map((c) => c.args.p_cloud_deal_id)).toEqual([cloudId]);
+      expect(e.server.softRemovedDeals).toEqual([]);
+      expect(archiveRows(db)).toBe(0);
+    });
+
+    it("an unreadable archive row (not JSON) never breaks the list, the pass or another project's clean-up, and Delete for good still erases it online first", async () => {
+      const { db, e } = await synced();
+      del(db);
+      await pass(e);
+      db.prepare(`UPDATE ${archive.DEAL_ARCHIVE_TABLE} SET payload_json = 'not json'`).run();
+      expect(archive.listArchivedDeals(db, USER_A)).toEqual([expect.objectContaining({ transactionId: DEAL, propertyAddress: null })]);
+      expect(restore(db)).toEqual({ ok: false, code: "restore_failed" });
+      expect(await e.service.deleteDealForGood(DEAL)).toEqual({ success: true, status: "done" });
+      expect(e.server.callsTo("cloud_purge_deal_now")).toHaveLength(1);
+      expect(e.server.softRemovedDeals).toEqual([]);
+      expect(archiveRows(db)).toBe(0);
+    });
+
     it("another local user's row: not_owner, nothing marked", async () => {
       const { db } = profile();
       del(db);
       const e = engine(db, undefined, USER_B);
       expect(await e.service.deleteDealForGood(DEAL)).toEqual({ success: false, error: "not_owner" });
       expect(archive.listArchivedDeals(db, USER_A)).toEqual([expect.objectContaining({ deleting: false })]);
+    });
+  });
+
+  // ================================================================ reconcile listing rule
+  describe("the reconcile: an ok listing without its rows is a failed read", () => {
+    it("nothing is forgotten, marked or uploaded again, and the reconcile is retried later", async () => {
+      const { db, e } = await synced();
+      const state = db.prepare("SELECT cloud_id, content_hash, last_status FROM cloud_sync_state WHERE entity = 'deal'").all();
+      const shadow = shadowRows(db, DEAL);
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      e.server.override = (fn) => (fn === "cloud_list_install_rows" ? { data: { ok: true }, error: null, status: 200 } : undefined);
+      const upserts = e.server.callsTo("cloud_upsert_deal").length;
+      await pass(e);
+      expect(db.prepare("SELECT cloud_id, content_hash, last_status FROM cloud_sync_state WHERE entity = 'deal'").all()).toEqual(state);
+      expect(shadowRows(db, DEAL)).toBe(shadow);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_dirty")).toBe(0);
+      expect(e.server.callsTo("cloud_upsert_deal").length).toBe(upserts);
+      expect(db.prepare("SELECT last_state_at FROM cloud_sync_settings").get()).toEqual({ last_state_at: null });
     });
   });
 

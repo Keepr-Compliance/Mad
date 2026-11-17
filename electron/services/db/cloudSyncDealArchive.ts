@@ -156,14 +156,36 @@ function readArchiveRow(db: SqlDb, transactionId: string): { owner_user_id: stri
   );
 }
 
-function parsePayload(json: string): DealArchivePayload | null {
+/**
+ * The payload, when this build restores everything it holds: its own format, and no table or SET NULL list this
+ * build does not restore. A payload written by another build (going back to an older build is allowed) is not
+ * understood: restoring it would drop that build's rows silently, so the restore is refused and the row kept.
+ * "unreadable" (not JSON, no deal row) and "not_understood" are answered separately.
+ */
+function parsePayload(json: string): { payload: DealArchivePayload } | { refusal: "unreadable" | "not_understood" } {
+  let p: DealArchivePayload;
   try {
-    const p = JSON.parse(json) as DealArchivePayload;
-    return p && typeof p === "object" && p.deal && typeof p.deal === "object" ? p : null;
+    p = JSON.parse(json) as DealArchivePayload;
   } catch {
-    return null;
+    return { refusal: "unreadable" };
   }
+  if (!p || typeof p !== "object" || !p.deal || typeof p.deal !== "object") return { refusal: "unreadable" };
+  const known = new Set(DEAL_ARCHIVE_TABLES.map((t) => t.table));
+  const knownSetNull = new Set<string>(DEAL_ARCHIVE_SET_NULL_TABLES);
+  if (
+    p.format !== DEAL_ARCHIVE_FORMAT ||
+    !p.tables ||
+    typeof p.tables !== "object" ||
+    Object.keys(p.tables).some((t) => !known.has(t)) ||
+    Object.keys(p.set_null ?? {}).some((t) => !knownSetNull.has(t))
+  ) {
+    return { refusal: "not_understood" };
+  }
+  return { payload: p };
 }
+
+/** A json_extract that answers NULL (instead of raising) for a payload that is not valid JSON. */
+const J = (path: string) => `CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '${path}') END`;
 
 // ---------------------------------------------------------------- write (inside the delete's transaction)
 
@@ -242,7 +264,7 @@ export function listArchivedDeals(db: SqlDb, userId: string): ArchivedDeal[] {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return [];
   const rows = db
     .prepare(
-      `SELECT transaction_id, archived_at, purge_owed_at, json_extract(payload_json, '$.deal.property_address') AS address
+      `SELECT transaction_id, archived_at, purge_owed_at, ${J("$.deal.property_address")} AS address
          FROM ${DEAL_ARCHIVE_TABLE} WHERE owner_user_id = ? ORDER BY archived_at DESC, transaction_id`,
     )
     .all(userId) as Array<{ transaction_id: string; archived_at: string; purge_owed_at: string | null; address: string | null }>;
@@ -262,14 +284,14 @@ export function listArchivedDeals(db: SqlDb, userId: string): ArchivedDeal[] {
  */
 export function noteDealRemovedOnline(db: SqlDb, transactionId: string): void {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return;
-  db.prepare(`UPDATE ${DEAL_ARCHIVE_TABLE} SET payload_json = json_set(payload_json, '$.cloud.removed_online', 1) WHERE transaction_id = ?`).run(transactionId);
+  db.prepare(`UPDATE ${DEAL_ARCHIVE_TABLE} SET payload_json = json_set(payload_json, '$.cloud.removed_online', 1) WHERE transaction_id = ? AND json_valid(payload_json)`).run(transactionId);
 }
 
 /** This user's archive row of the deal exists and its removal online was confirmed (the pull's restore check). */
 export function archivedDealRemovedOnline(db: SqlDb, userId: string, transactionId: string): boolean {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return false;
   return !!db
-    .prepare(`SELECT 1 FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ? AND json_extract(payload_json, '$.cloud.removed_online') = 1`)
+    .prepare(`SELECT 1 FROM ${DEAL_ARCHIVE_TABLE} WHERE transaction_id = ? AND owner_user_id = ? AND ${J("$.cloud.removed_online")} = 1`)
     .get(transactionId, userId);
 }
 
@@ -289,7 +311,12 @@ export type RestoreRefusal =
   /** The deal's own row could not be inserted; the whole restore rolled back, the archive row is kept. */
   | "restore_failed"
   /** A restore inside a pull: this computer's own removal of the deal is still waiting to be sent. */
-  | "removal_pending";
+  | "removal_pending"
+  /**
+   * The archive was written by another build (another payload format, or a table this build does not restore).
+   * Nothing changed; the row is kept until its 30 days end or Delete for good erases it.
+   */
+  | "archive_not_understood";
 
 export type RestoreResult =
   | {
@@ -343,8 +370,9 @@ export function restoreArchivedDeal(db: SqlDb, args: RestoreArgs): RestoreResult
       if (row.owner_user_id !== args.userId) throw new RestoreAbort("not_owner");
       if (row.purge_owed_at !== null) throw new RestoreAbort("purge_owed");
       if (db.prepare("SELECT 1 FROM transactions WHERE id = ?").get(args.transactionId)) throw new RestoreAbort("deal_exists");
-      const payload = parsePayload(row.payload_json);
-      if (!payload) throw new RestoreAbort("restore_failed");
+      const parsed = parsePayload(row.payload_json);
+      if ("refusal" in parsed) throw new RestoreAbort(parsed.refusal === "not_understood" ? "archive_not_understood" : "restore_failed");
+      const payload = parsed.payload;
       // The local user's id was unified since the delete (users_local id rewritten; the FK moved owner_user_id,
       // not the ids inside the payload): the rows come back under the owner's current id.
       remapUser(payload, String(payload.deal.user_id), row.owner_user_id);
@@ -515,9 +543,9 @@ export function listOwedDealPurges(db: SqlDb, userId: string): OwedPurge[] {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return [];
   const rows = db
     .prepare(
-      `SELECT transaction_id, json_extract(payload_json, '$.cloud.project_ref') AS project_ref,
-              json_extract(payload_json, '$.cloud.cloud_deal_id') AS cloud_deal_id,
-              json_extract(payload_json, '$.cloud.removed_online') AS removed_online
+      `SELECT transaction_id, ${J("$.cloud.project_ref")} AS project_ref,
+              ${J("$.cloud.cloud_deal_id")} AS cloud_deal_id,
+              ${J("$.cloud.removed_online")} AS removed_online
          FROM ${DEAL_ARCHIVE_TABLE} WHERE owner_user_id = ? AND purge_owed_at IS NOT NULL ORDER BY purge_owed_at, transaction_id`,
     )
     .all(userId) as Array<{ transaction_id: string; project_ref: string | null; cloud_deal_id: string | null; removed_online: number | null }>;
@@ -570,7 +598,7 @@ export function deleteDealArchiveForUser(db: SqlDb, userId: string): void {
 /** Forgetting another Keepr Cloud project: rows archived under any other project go. */
 export function deleteDealArchiveOtherProjects(db: SqlDb, projectRef: string): void {
   if (!hasTable(db, DEAL_ARCHIVE_TABLE)) return;
-  db.prepare(`DELETE FROM ${DEAL_ARCHIVE_TABLE} WHERE json_extract(payload_json, '$.cloud.project_ref') IS NOT ?`).run(projectRef);
+  db.prepare(`DELETE FROM ${DEAL_ARCHIVE_TABLE} WHERE ${J("$.cloud.project_ref")} IS NOT ?`).run(projectRef);
 }
 
 /** After a backup restore: a row whose deal the restored file holds goes. */

@@ -6,6 +6,7 @@
  */
 import type { SqlDb } from "../../../db/cloudSyncSqlDb";
 import { DEAL_ARCHIVE_SET_NULL_TABLES, DEAL_ARCHIVE_TABLES } from "../../../db/cloudSyncDealArchive";
+import { REPOINT_MESSAGE_TRANSACTION_SQL } from "../../../db/messageDbService";
 
 type Row = Record<string, unknown>;
 
@@ -179,11 +180,16 @@ export function snapshotDeal(db: SqlDb, deal: string): Record<string, Row[]> {
   return out;
 }
 
-/** Exactly what deleteTransactionSync does, on a test handle (the archive step, the DELETE), in one transaction. */
+/**
+ * What deleteTransactionSync (electron/services/db/transactionDbService.ts) does, on a test handle, in one
+ * transaction: the archive step, the texts naming the deal, the DELETE, each of those texts re-pointed.
+ */
 export function deleteLikeTheHandler(db: SqlDb, deal: string, archive: (db: SqlDb, id: string, flag: boolean, now: Date) => boolean, now: Date, flag = true): boolean {
   return db.transaction(() => {
     const a = archive(db, deal, flag, now);
+    const named = db.prepare("SELECT id FROM messages WHERE transaction_id = ?").all(deal) as Array<{ id: string }>;
     db.prepare("DELETE FROM transactions WHERE id = ?").run(deal);
+    for (const { id } of named) db.prepare(REPOINT_MESSAGE_TRANSACTION_SQL as unknown as string).run(id);
     return a;
   })();
 }
