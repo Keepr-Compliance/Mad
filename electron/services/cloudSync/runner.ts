@@ -740,7 +740,13 @@ export class CloudSyncRunner {
         this.log.warn("[CloudSync] Reconcile read failed", { code: res.code, kind });
         return null;
       }
-      for (const r of Array.isArray(res.body.rows) ? (res.body.rows as Array<Record<string, unknown>>) : []) {
+      // BACKLOG-4263 PR-4c: an ok answer without its rows is not "nothing online" (Delete for good would erase the
+      // local copy on it; the reconcile would read every deal as gone online).
+      if (!Array.isArray(res.body.rows)) {
+        this.log.warn("[CloudSync] Reconcile read failed", { code: "no_rows", kind });
+        return null;
+      }
+      for (const r of res.body.rows as Array<Record<string, unknown>>) {
         if (!r || typeof r !== "object" || typeof r.cloud_id !== "string" || typeof r.local_id !== "string") continue;
         // A moved child has a removed row on the old deal and a live one on the new: keep the live one.
         if (r.removed === true && out.get(r.local_id)?.removed === false) continue;

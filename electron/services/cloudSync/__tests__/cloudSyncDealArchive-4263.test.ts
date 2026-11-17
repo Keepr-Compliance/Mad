@@ -117,6 +117,51 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
     });
   });
 
+  // ================================================================ SET
+  describe("SET: the archived tables are exactly the schema's children of a deal (derived from schema.sql)", () => {
+    type Fk = { from: string; to: string; onDelete: string };
+    /** Every foreign key of every table of a database built from schema.sql (pragma_foreign_key_list). */
+    function foreignKeys(db: TestDb): Fk[] {
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+      return tables.flatMap((t) =>
+        (db.prepare(`SELECT "table" AS ref, on_delete FROM pragma_foreign_key_list('${t}')`).all() as Array<{ ref: string; on_delete: string }>).map((f) => ({
+          from: t,
+          to: f.ref,
+          onDelete: f.on_delete,
+        })),
+      );
+    }
+
+    it("every table a deal delete removes (CASCADE to transactions, and CASCADE to any of those, at any depth) is archived, every SET NULL child records its ids, and nothing else hangs off a deal's rows", () => {
+      const db = freshDb();
+      const fks = foreignKeys(db);
+      // positive controls: the walk reads the schema, and finds edges it must find
+      expect(fks.length).toBeGreaterThan(30);
+      expect(fks).toContainEqual({ from: "communications", to: "transactions", onDelete: "CASCADE" });
+      expect(fks).toContainEqual({ from: "transaction_checklist_items", to: "transaction_checklists", onDelete: "CASCADE" });
+      // the deal's rows: transactions and, transitively, every table that cascades from one of them
+      const removed = new Set<string>(["transactions"]);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const f of fks) {
+          if (removed.has(f.to) && f.onDelete === "CASCADE" && !removed.has(f.from)) {
+            removed.add(f.from);
+            grew = true;
+          }
+        }
+      }
+      removed.delete("transactions");
+      expect([...removed].sort()).toEqual(archive.DEAL_ARCHIVE_TABLES.map((t) => t.table).sort());
+      // a SET NULL reference to the deal: ids recorded
+      const setNull = fks.filter((f) => f.to === "transactions" && f.onDelete === "SET NULL").map((f) => f.from);
+      expect([...new Set(setNull)].sort()).toEqual([...archive.DEAL_ARCHIVE_SET_NULL_TABLES].sort());
+      // no other action on a deal or on one of its rows (a RESTRICT would block the delete; a SET NULL into one
+      // of the archived tables would lose a link the archive does not record)
+      const other = fks.filter((f) => (f.to === "transactions" || removed.has(f.to)) && f.onDelete !== "CASCADE" && !(f.to === "transactions" && f.onDelete === "SET NULL"));
+      expect(other).toEqual([]);
+    });
+  });
+
   // ================================================================ SKIP / COLS
   describe("SKIP and COLS: what cannot come back is skipped and counted, nothing else is lost (W35)", () => {
     it("a link whose email, text, attachment or contact is gone is skipped and counted; a checklist link left without members goes; a SET NULL-type reference whose text is gone comes back NULL", () => {
@@ -144,6 +189,31 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(after.transaction_stage_history[0].trigger_message_id).toBeNull();
       expect({ ...after.transaction_stage_history[0], trigger_message_id: before.transaction_stage_history[0].trigger_message_id }).toEqual(before.transaction_stage_history[0]);
       expect(after.transaction_contacts).toEqual(before.transaction_contacts);
+    });
+
+    it("a person removed from Contacts since the delete (a tombstone, the only way the app removes a contact): the deal comes back with that person still on it, the contact stays removed, nothing is skipped", () => {
+      const { db, fx } = profile();
+      const before = snapshotDeal(db, DEAL);
+      del(db);
+      // contacts:remove -> removeContactSync (electron/services/db/contactDbService.ts:2431-2439), statement text transcribed
+      db.prepare(`UPDATE contacts
+        SET removed_at = datetime('now'),
+            removed_reason = ?
+      WHERE id = ? AND removed_at IS NULL`).run("user_unimported", fx.contact);
+      expect(restore(db)).toMatchObject({ ok: true, skippedTotal: 0 });
+      expect(snapshotDeal(db, DEAL).transaction_contacts).toEqual(before.transaction_contacts);
+      expect(n(db, "SELECT COUNT(*) AS n FROM contacts WHERE id = ? AND removed_at IS NOT NULL", fx.contact)).toBe(1);
+    });
+
+    it("a person whose contact row no longer exists (only a local user delete removes one outright): that party is skipped and counted, the rest of the deal comes back", () => {
+      const { db, fx } = profile();
+      del(db);
+      db.prepare("DELETE FROM contacts WHERE id = ?").run(fx.contact);
+      const r = restore(db);
+      expect(r).toMatchObject({ ok: true, skipped: { transaction_contacts: 1 }, skippedTotal: 1 });
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_contacts WHERE transaction_id = ?", DEAL)).toBe(0);
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_participants WHERE transaction_id = ?", DEAL)).toBe(1);
+      expect(n(db, "SELECT COUNT(*) AS n FROM transaction_checklist_items")).toBe(1);
     });
 
     it("a review-queue row whose email is now linked to another deal stays with that deal and is counted", () => {
@@ -619,6 +689,42 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(e.server.deals).toEqual([]);
       expect(e.server.softRemovedDeals).toEqual([]);
       expect(archiveRows(db)).toBe(0);
+    });
+
+    it.each([
+      ["the listing call fails (transport)", () => new Error("offline")],
+      ["the listing is refused (non-ok answer)", () => ({ data: { ok: false, error: "unknown" }, error: null, status: 200 })],
+      ["the listing answers ok without its rows", () => ({ data: { ok: true }, error: null, status: 200 })],
+    ])("no online id in the archive and %s: still owed, nothing erased here or online", async (_label, answer) => {
+      const { db, e } = await synced();
+      db.prepare("DELETE FROM cloud_sync_state WHERE entity = 'deal'").run();
+      del(db);
+      await pass(e);
+      expect(e.server.deals).toHaveLength(1);
+      e.server.override = (fn) => (fn === "cloud_list_install_rows" ? (answer() as never) : undefined);
+      expect(await e.service.deleteDealForGood(DEAL)).toEqual({ success: true, status: "pending" });
+      expect(archive.listArchivedDeals(db, USER_A)).toEqual([expect.objectContaining({ deleting: true })]);
+      expect(e.server.callsTo("cloud_purge_deal_now")).toHaveLength(0);
+      expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(0);
+      expect(e.server.deals).toHaveLength(1);
+    });
+
+    it("the session changes between the removal and the purge: the purge is not sent and the row stays owed", async () => {
+      const { db, e } = await synced();
+      db.prepare("DELETE FROM cloud_sync_state WHERE entity = 'deal'").run();
+      del(db);
+      await pass(e);
+      e.server.override = (fn, args) => {
+        if (fn !== "cloud_delete_deal") return undefined;
+        const r = e.server.respond(fn, args);
+        e.authUser.id = USER_B; // another account signs in while the removal is in flight
+        return { data: r as never, error: null, status: 200 };
+      };
+      const res = await e.service.deleteDealForGood(DEAL);
+      expect(res).toEqual({ success: true, status: "pending" });
+      expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(1);
+      expect(e.server.callsTo("cloud_purge_deal_now")).toHaveLength(0);
+      expect(archive.listArchivedDeals(db, USER_A)).toEqual([expect.objectContaining({ deleting: true })]);
     });
 
     it("another local user's row: not_owner, nothing marked", async () => {
