@@ -10,7 +10,6 @@
  */
 import { parseDbTimestamp } from "../../utils/dbTimestamp";
 import { dealLockReason } from "../transactionEligibility";
-import { isPrivateChecklist } from "../db/checklistPrivacy";
 import { contentHash, type JsonValue } from "./jcs";
 
 /** Bumped when a normalisation rule changes (stored per state row). */
@@ -254,38 +253,6 @@ export const PARTY_HASHED_FIELDS = [
   "details_withheld",
 ] as const;
 
-/** transaction_checklists columns the checklist projection reads. */
-export const CHECKLIST_SOURCE_COLUMNS = ["id", "transaction_id", "template_id", "template_name", "sort_order", "selected_at"] as const;
-export const CHECKLIST_HASHED_FIELDS = ["template_id", "template_name", "sort_order", "selected_at", "is_private"] as const;
-
-/** transaction_checklist_items columns the item projection reads. */
-export const ITEM_SOURCE_COLUMNS = [
-  "id",
-  "checklist_id",
-  "title",
-  "description",
-  "is_required",
-  "expected_document_type",
-  "is_checked",
-  "checked_at",
-  "note",
-  "sort_order",
-  "created_at",
-] as const;
-export const ITEM_HASHED_FIELDS = [
-  "local_checklist_id",
-  "title",
-  "description",
-  "is_required",
-  "expected_document_type",
-  "is_checked",
-  "checked_at",
-  "note",
-  "sort_order",
-  "local_created_at",
-  "links",
-] as const;
-
 export const GOOGLE_CONTACTS_SOURCE = "google_contacts";
 
 function cleanBool(value: unknown): boolean | null {
@@ -293,11 +260,6 @@ function cleanBool(value: unknown): boolean | null {
   if (typeof value === "boolean") return value;
   const n = Number(value);
   return Number.isFinite(n) ? n !== 0 : null;
-}
-
-function cleanInt(value: unknown): number | null {
-  const n = cleanNumber(value);
-  return n === null ? null : Math.trunc(n);
 }
 
 export interface PartySource {
@@ -379,34 +341,8 @@ export function buildPartyDto(source: PartySource): { [key: string]: JsonValue }
   };
 }
 
-export function buildChecklistDto(row: Record<string, unknown>): { [key: string]: JsonValue } {
-  return {
-    template_id: cleanText(row.template_id),
-    template_name: cleanText(row.template_name),
-    sort_order: cleanInt(row.sort_order),
-    selected_at: instant(row.selected_at),
-    is_private: isPrivateChecklist(typeof row.template_id === "string" ? row.template_id : null),
-  };
-}
-
-/** `links` is null in Checkpoint 1 (plan §2.3). */
-export function buildItemDto(row: Record<string, unknown>): { [key: string]: JsonValue } {
-  return {
-    local_checklist_id: cleanText(row.checklist_id),
-    title: cleanText(row.title),
-    description: cleanText(row.description),
-    is_required: cleanBool(row.is_required),
-    expected_document_type: cleanText(row.expected_document_type),
-    is_checked: cleanBool(row.is_checked),
-    checked_at: instant(row.checked_at),
-    note: cleanText(row.note),
-    sort_order: cleanInt(row.sort_order),
-    local_created_at: instant(row.created_at),
-    links: null,
-  };
-}
-
-export type ChildKind = "party" | "checklist" | "checklist_item";
+/** Kinds the one-way path still uploads per deal (checklists and items moved to todo changes, BACKLOG-4263 PR-4a). */
+export type ChildKind = "party";
 
 export interface ProjectedChild {
   kind: ChildKind;

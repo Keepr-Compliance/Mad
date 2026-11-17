@@ -1,0 +1,19 @@
+{
+  "migration": "supabase/migrations/20261118120000_backlog_4263_todo_old_item_path_removed.sql",
+  "migration_md5": "afa685443879bc17cf4faf9c44aa0036",
+  "pr2_source": "this tree, last changed in 0c6edef8f",
+  "prechecked_pr2_bodies_md5": {
+    "public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)": "e557b64992885fa2b3decff2f5b24781",
+    "public.cloud_tombstone(uuid,uuid,text,uuid[])": "ac6e76a613b5aa10a0b95743c902c84c",
+    "public.cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb)": "1bfb259e707b388a76610c26c26ce47e",
+    "public.cloud_upsert_checklists(uuid,uuid,uuid,jsonb)": "7ed9daf67e8b16258ab0b61dd26dfb4e"
+  },
+  "written_bodies_md5": {
+    "public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)": "27af78e9a1df25e99a9db81b77013d31",
+    "public.cloud_tombstone(uuid,uuid,text,uuid[])": "d687b1d11184ec4ebb519d12935b5fd1"
+  },
+  "dropped": [
+    "public.cloud_upsert_checklists(uuid,uuid,uuid,jsonb)",
+    "public.cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb)"
+  ]
+}

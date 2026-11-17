@@ -32,10 +32,16 @@ import { parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity, SessionUser } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
+import * as todoStore from "../db/cloudSyncTodoDbService";
+import { sendTodos, type TodoSendSummary } from "./todos/sender";
 
 export const SAVED_ROW_STATUSES = ["applied", "unchanged"] as const;
 
-export const ONLINE_KINDS = ["deal", "party", "checklist", "checklist_item"] as const;
+/**
+ * Kinds the daily reconcile lists and compares. Checklists and items are not here (BACKLOG-4263 PR-4a):
+ * they are sent as todo changes, and the reconcile never re-sends them (plan W3).
+ */
+export const ONLINE_KINDS = ["deal", "party"] as const;
 export type OnlineKind = (typeof ONLINE_KINDS)[number];
 export interface OnlineRow {
   cloudId: string;
@@ -106,6 +112,8 @@ export interface PassSummary {
   done: number;
   failed: number;
   state?: ServerState;
+  /** BACKLOG-4263 PR-4a: what the todo sender did in this pass. */
+  todos?: TodoSendSummary;
 }
 
 class StopPass extends Error {
@@ -289,10 +297,11 @@ export class CloudSyncRunner {
     }
     if (!fresh.local_confirmed_at) return this.finish({ outcome: "needs_confirmation", done: 0, failed: 0, state });
 
-    store.preparePass(db, deps.projectRef, pinned.userId, state.acceptedAt, this.log);
+    store.preparePass(db, deps.projectRef, pinned.userId, state.acceptedAt, this.log, this.now());
 
     let done = 0;
     let failed = 0;
+    let todoSummary: TodoSendSummary | undefined;
     try {
       if (this.reconcileDue(db, pinned.userId)) await this.reconcile(db, pinned, installId);
       const due = store.selectDueDirty(db, pinned.userId, this.now(), DEALS_PER_PASS);
@@ -302,6 +311,19 @@ export class CloudSyncRunner {
         if (r === "done") done++;
         else if (r === "failed") failed++;
       }
+      // BACKLOG-4263 PR-4a: todo changes, after the deals (an op names its deal by cloud id).
+      todoSummary = await sendTodos({
+        db,
+        client: deps.client,
+        projectRef: deps.projectRef,
+        userId: pinned.userId,
+        installId,
+        now: () => this.now(),
+        guard: () => this.guard(pinned),
+        stopOn: (res) => this.stopOn(res),
+        log: this.log,
+      });
+      if (todoSummary.confirmed > 0) this.sentThisPass++;
     } catch (error) {
       if (error instanceof StopPass) {
         if (error.outcome === "wrong_account") return this.wrongAccount(state, done, failed);
@@ -309,7 +331,7 @@ export class CloudSyncRunner {
       }
       throw error;
     }
-    return this.finish({ outcome: "done", done, failed, state });
+    return this.finish({ outcome: "done", done, failed, state, todos: todoSummary });
   }
 
   private wrongAccount(state: ServerState, done = 0, failed = 0): PassSummary {
@@ -393,7 +415,11 @@ export class CloudSyncRunner {
     store.recordNonRetryableFailure(db, row, code);
   }
   private forgetDeal(db: SqlDb, userId: string, transactionId: string): void {
-    store.deleteDealState(db, this.deps.projectRef, userId, transactionId);
+    db.transaction(() => {
+      store.deleteDealState(db, this.deps.projectRef, userId, transactionId);
+      // BACKLOG-4263 PR-4a: the cloud lost this deal; its todos are scanned again against an empty shadow.
+      todoStore.resetTodoDeal(db, this.deps.projectRef, userId, transactionId, this.now());
+    })();
   }
   private recordSynced(...a: Parameters<typeof store.recordDealSynced>): void {
     store.recordDealSynced(...a);
@@ -406,9 +432,6 @@ export class CloudSyncRunner {
   }
   private recordSaved(...a: Parameters<typeof store.recordChildrenSaved>): void {
     store.recordChildrenSaved(...a);
-  }
-  private forgetHashes(...a: Parameters<typeof store.forgetChildHashes>): void {
-    store.forgetChildHashes(...a);
   }
 
   private async processDeal(db: SqlDb, pinned: SessionUser, installId: string, row: store.DirtyRow): Promise<DealResult> {
@@ -435,7 +458,7 @@ export class CloudSyncRunner {
         this.stopOn(res);
         const gone = res.kind === "ok" || (res.kind === "refused" && res.code === "not_found");
         if (!gone) return this.recordFailure(db, row, res);
-        this.forgetDeleted(db, projectRef, pinned.userId, row.transaction_id, row.generation);
+        this.forgetDeleted(db, projectRef, pinned.userId, row.transaction_id, row.generation, this.now());
         if (res.kind === "ok") this.sentThisPass++;
         return "done";
       }
@@ -577,6 +600,7 @@ export class CloudSyncRunner {
     const deleteCandidates: string[] = [];
     const recordedDealCloudIds = new Set<string>();
     const dealsWithState = new Set<string>();
+    const todoResetDeals: string[] = [];
 
     for (const st of states) {
       if (st.entity !== "deal") continue;
@@ -586,6 +610,7 @@ export class CloudSyncRunner {
       if (eligible.has(st.local_id)) {
         if (!on || on.cloudId !== st.cloud_id) {
           // Gone online: forget the deal and every child record of it, then send it all again.
+          todoResetDeals.push(st.local_id);
           nullHashes.push({ entity: "deal", localId: st.local_id });
           for (const c of states) if (c.entity !== "deal" && c.transaction_id === st.local_id) nullHashes.push({ entity: c.entity, localId: c.local_id });
           mark.add(st.local_id);
@@ -604,6 +629,7 @@ export class CloudSyncRunner {
 
     for (const st of states) {
       if (st.entity === "deal" || st.removed !== 0 || !st.cloud_id) continue;
+      if (!(ONLINE_KINDS as readonly string[]).includes(st.entity)) continue;
       const on = (online[st.entity as OnlineKind] as Map<string, OnlineRow> | undefined)?.get(st.local_id);
       if (!on || on.cloudId !== st.cloud_id || on.removed || on.contentHash !== st.content_hash) {
         nullHashes.push({ entity: st.entity, localId: st.local_id });
@@ -651,7 +677,7 @@ export class CloudSyncRunner {
       db,
       projectRef,
       pinned.userId,
-      { nullHashes, markDeals: [...mark], adoptDeals: adopt, summaryJson: JSON.stringify(summary) },
+      { nullHashes, markDeals: [...mark], adoptDeals: adopt, summaryJson: JSON.stringify(summary), todoResetDeals },
       this.now(),
     );
     return summary;
@@ -669,9 +695,9 @@ export class CloudSyncRunner {
   }
 
   /**
-   * Sends one deal's children: tombstones of rows that moved away, then people,
-   * checklists, items (checklists before items), then tombstones of rows gone
-   * locally (items, checklists, people). Each response's accepted rows are
+   * Sends one deal's people: tombstones of rows that moved away, then people,
+   * then tombstones of people gone locally. (Checklists and items are todo
+   * changes since BACKLOG-4263 PR-4a: todos/sender.ts.) Each response's accepted rows are
    * recorded in one transaction. Any rejected, missing or unknown row leaves the
    * deal not saved (parked) and no mark call is made (R3).
    */
@@ -714,8 +740,7 @@ export class CloudSyncRunner {
       return "ok";
     };
 
-    const upsert = async (kind: ChildKind, rows: ProjectedChild[]): Promise<{ parentMissing: ProjectedChild[] } | "not_found" | DealResult> => {
-      const parentMissing: ProjectedChild[] = [];
+    const upsert = async (kind: ChildKind, rows: ProjectedChild[]): Promise<"ok" | "not_found" | DealResult> => {
       for (const batch of batches(rows)) {
         this.guard(pinned);
         const res = await this.deps.client.upsertChildren(kind, pinned.userId, installId, cloudDealId, batch.map((b) => b.payload));
@@ -737,8 +762,6 @@ export class CloudSyncRunner {
             typeof r.cloud_id === "string"
           ) {
             accepted.push({ localId: sent.localId, cloudId: r.cloud_id, hash: sent.hash, version: typeof r.version === "number" ? r.version : null });
-          } else if (kind === "checklist_item" && status === "rejected" && r?.reason === "parent_missing") {
-            parentMissing.push(sent);
           } else {
             allAccepted = false;
             this.log.warn("[CloudSync] Row not saved", { kind, code: status || "missing", deal: shortId(row.transaction_id) });
@@ -749,7 +772,7 @@ export class CloudSyncRunner {
           this.sentThisPass++;
         }
       }
-      return { parentMissing };
+      return "ok";
     };
 
     const moved = await tombstone(plan.moved);
@@ -757,24 +780,9 @@ export class CloudSyncRunner {
     for (const kind of CHILD_KINDS) {
       const r = await upsert(kind, plan.send[kind]);
       if (r === "not_found") return { kind: "not_found" };
-      if (typeof r === "string") return { kind: "failed", result: r };
-      if (kind === "checklist_item" && r.parentMissing.length > 0) {
-        // §8.4b: a missing parent is repaired once by sending the parent checklist again.
-        const parentIds = [...new Set(r.parentMissing.map((p) => String(p.payload.local_checklist_id)))];
-        this.forgetHashes(db, projectRef, pinned.userId, "checklist", parentIds);
-        const parents = this.planDealChildren(db, pinned.userId, row.transaction_id).send.checklist.filter((c) =>
-          parentIds.includes(c.localId),
-        );
-        const p1 = await upsert("checklist", parents);
-        if (p1 === "not_found") return { kind: "not_found" };
-        if (typeof p1 === "string") return { kind: "failed", result: p1 };
-        const again = await upsert("checklist_item", r.parentMissing);
-        if (again === "not_found") return { kind: "not_found" };
-        if (typeof again === "string") return { kind: "failed", result: again };
-        if (again.parentMissing.length > 0) allAccepted = false;
-      }
+      if (r !== "ok") return { kind: "failed", result: r };
     }
-    const order: ChildKind[] = ["checklist_item", "checklist", "party"];
+    const order: ChildKind[] = ["party"];
     const removed = await tombstone(order.flatMap((k) => plan.tombstone.filter((t) => t.kind === k)));
     if (removed !== "ok") return { kind: "failed", result: removed };
 

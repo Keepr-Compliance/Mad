@@ -114,6 +114,17 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("BACKLOG-4263 N5: the todo apply guard is cleared by the real open path (a row left by a crash is gone after the next open)", async () => {
+    const first = loadService();
+    await expect(first.initialize()).resolves.toBe(true);
+    (first.db as DatabaseType).prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'crash')").run();
+    await first.close();
+    const second = loadService();
+    await expect(second.initialize()).resolves.toBe(true);
+    expect((second.db as DatabaseType).prepare("SELECT COUNT(*) AS n FROM cloud_sync_applying").get()).toEqual({ n: 0 });
+    await second.close();
+  });
+
   it("UPGRADE: a database at the current version without the cloud tables gains the tables at the next open, no triggers until Keepr Cloud is turned on, no version change and no marks", async () => {
     const first = loadService();
     await expect(first.initialize()).resolves.toBe(true);
@@ -170,7 +181,9 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     const db = svc.db as DatabaseType;
     seed(db);
     turnOn(db);
-    expect(names(db, "trigger", "trg_cloud_sync_item_%").length).toBe(3);
+    // BACKLOG-4263 PR-4a: the item triggers are the todo capture ones now (3 on the items table).
+    expect(names(db, "trigger", "trg_cloud_sync_todo_item_%").length).toBe(3);
+    expect(names(db, "trigger", "trg_cloud_sync_item_%")).toEqual([]);
     const rebuild = (d: DatabaseType, table: string) => {
       const ddl = (d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql;
       d.exec(`${ddl.replace(/^CREATE TABLE\s+("?)[A-Za-z_]+\1/, `CREATE TABLE ${table}_new`)};

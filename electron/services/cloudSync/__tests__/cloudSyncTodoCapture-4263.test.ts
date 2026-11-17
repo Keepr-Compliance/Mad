@@ -93,7 +93,7 @@ function opsOf(db: TestDb, run: () => void): string[] {
 }
 
 describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
-  it("there are 6 todo triggers, all in CLOUD_SYNC_TRIGGERS under the trg_cloud_sync_ prefix (28 in all)", () => {
+  it("there are 6 todo triggers, all in CLOUD_SYNC_TRIGGERS under the trg_cloud_sync_ prefix (22 in all after PR-4a)", () => {
     expect(CLOUD_SYNC_TODO_TRIGGERS.map((t) => t.name).sort()).toEqual([
       "trg_cloud_sync_todo_checklist_delete",
       "trg_cloud_sync_todo_checklist_insert",
@@ -104,7 +104,7 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     ]);
     const db = setup();
     const live = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_cloud_sync_%'").all() as Row[];
-    expect(live).toHaveLength(28);
+    expect(live).toHaveLength(22);
     expect(live.map((r) => r.name).sort()).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
     db.close();
   });
@@ -426,7 +426,7 @@ function sourceFiles(dir: string): string[] {
 describe(`C32 no trigger names an app-registered SQL function [${DRIVER}]`, () => {
   const ROOT = path.join(__dirname, "..", "..", "..", "..");
 
-  it("every one of the 28 triggers is created and fires on a plain connection with no app function registered; no insert, update or delete on any table they watch raises", () => {
+  it("every one of the 22 triggers is created and fires on a plain connection with no app function registered; no insert, update or delete on any table they watch raises", () => {
     const db = openTestDb(); // a bare connection: nothing registered
     db.exec(SCHEMA_SQL);
     db.pragma("foreign_keys = ON");
