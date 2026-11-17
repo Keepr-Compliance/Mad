@@ -1,7 +1,7 @@
 {
   "migration": "supabase/migrations/20261118120000_backlog_4263_todo_old_item_path_removed.sql",
   "migration_md5": "afa685443879bc17cf4faf9c44aa0036",
-  "pr2_source": "origin/feature/BACKLOG-4263-todo-server-core @ 0c6edef8f",
+  "pr2_source": "this tree, last changed in 0c6edef8f",
   "prechecked_pr2_bodies_md5": {
     "public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)": "e557b64992885fa2b3decff2f5b24781",
     "public.cloud_tombstone(uuid,uuid,text,uuid[])": "ac6e76a613b5aa10a0b95743c902c84c",

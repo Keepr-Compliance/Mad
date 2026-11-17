@@ -25,7 +25,8 @@ MARK = '/*BODY:4263-4a*/'
 def src(path):
     p = os.path.join(REPO, path)
     if os.path.exists(p):
-        return open(p).read(), 'tree'
+        last = subprocess.run(['git', '-C', REPO, 'log', '-1', '--format=%h', '--', path], capture_output=True, text=True).stdout.strip()
+        return open(p).read(), f'this tree, last changed in {last}'
     out = subprocess.run(['git', '-C', REPO, 'show', f'{PR2_REF}:{path}'], capture_output=True, text=True, check=True).stdout
     return out, PR2_REF + ' @ ' + subprocess.run(['git', '-C', REPO, 'rev-parse', '--short=9', PR2_REF], capture_output=True, text=True).stdout.strip()
 

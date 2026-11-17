@@ -155,6 +155,18 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       }
     });
 
+    it("the fake's field types and wire examples are the contract file's (supabase/contracts/cloud-todo-change-v1.json in this tree)", () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const c = require("../../../../supabase/contracts/cloud-todo-change-v1.json") as {
+        field_types: Record<string, unknown>;
+        wire_types: { examples_accepted: unknown[]; examples_refused: unknown[] };
+      };
+      const { rule: _r, value: _v, ...types } = c.field_types;
+      expect(TODO_FIELD_TYPES).toEqual(types);
+      expect(WIRE_EXAMPLES.accepted).toEqual(c.wire_types.examples_accepted);
+      expect(WIRE_EXAMPLES.refused).toEqual(c.wire_types.examples_refused);
+    });
+
     it("the contract's wire_types examples: every accepted one passes the check the fake applies, every refused one is refused", () => {
       for (const op of WIRE_EXAMPLES.accepted) expect([op.kind, refusedFields(op)]).toEqual([op.kind, []]);
       for (const x of WIRE_EXAMPLES.refused) expect([x.why, refusedFields(x.op).length > 0]).toEqual([x.why, true]);

@@ -2,7 +2,7 @@
 -- BACKLOG-4263 PR-4a controls for supabase/migrations/20261118120000_backlog_4263_todo_old_item_path_removed.sql, in ONE call that ends in RAISE (nothing persists).
 -- Venue: the test project, through ~/.claude/bin/kt-sql, AFTER 20261118110000 is applied there and BEFORE
 -- this file's migration is (its pre-check refuses otherwise). Afterwards: select extensions.pg_stat_statements_reset().
--- Fixtures: PR-2's harness library (supabase/tests/backlog-4263-pr2/lib, origin/feature/BACKLOG-4263-todo-server-core @ 0c6edef8f), run id pr4a-harness; invented ids and @example.test
+-- Fixtures: PR-2's harness library (supabase/tests/backlog-4263-pr2/lib, this tree, last changed in 0c6edef8f), run id pr4a-harness; invented ids and @example.test
 -- addresses only. Read the result from the RAISE text: every control value is PASS or names what failed.
 -- BACKLOG-4263 PR-2 harness helpers. Loaded after the migration, inside the same transaction.
 -- Every id, name and address is invented and derived from pr4a-harness (random per run, filled by harness.py).
