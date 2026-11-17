@@ -18,12 +18,12 @@ import {
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { getPrompt, PROMPTS } from './prompts';
 import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
-import { getDeal, GET_DEAL_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
+import { getDeal, GET_DEAL_TOOL, listAllDeals, LIST_ALL_DEALS_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
 import { SERVER_INSTRUCTIONS, TOOL_MESSAGES } from './tools/text';
 
 /** The tools, in the order tools/list returns them. */
-export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL];
+export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL, LIST_ALL_DEALS_TOOL];
 
 export const MCP_SERVER_NAME = 'keepr';
 export const MCP_SERVER_VERSION = '0.1.0';
@@ -59,6 +59,7 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     [LIST_DEALS_TOOL.name, (args) => listDeals(atDigest(), args)],
     [GET_DEAL_TOOL.name, (args) => getDeal(atDigest(), args)],
     [GET_DEAL_CHECKLISTS_TOOL.name, (args) => getDealChecklists(atDigest(), args)],
+    [LIST_ALL_DEALS_TOOL.name, (args) => listAllDeals(atDigest(), args)],
   ]);
 
   server.setRequestHandler('tools/call', async (request) => {

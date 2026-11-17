@@ -27,7 +27,9 @@ export type Shape =
   | { t: 'number'; nullable?: boolean }
   | { t: 'boolean'; nullable?: boolean }
   | { t: 'object'; props: Readonly<Record<string, Shape>> }
-  | { t: 'array'; items: Shape };
+  | { t: 'array'; items: Shape }
+  /** a fixed-length array: exactly these positions, each with its own shape (BACKLOG-4263 rows) */
+  | { t: 'tuple'; items: readonly Shape[] };
 
 const str = (nullable = false): Shape => ({ t: 'string', nullable });
 const int = (nullable = false): Shape => ({ t: 'integer', nullable });
@@ -146,6 +148,37 @@ export const CHECKLISTS_SHAPE = frame('keepr.get_deal_checklists', {
   more: bool(),
 });
 
+/**
+ * list_all_deals (BACKLOG-4263, supabase/migrations/20261118100000_backlog_4263_mcp_list_all_deals.sql).
+ * Columnar: `columns` is exactly ALL_DEALS_COLUMNS in this order, and each row holds one value per column.
+ */
+const ALL_DEALS_ROW: Array<[string, Shape]> = [
+  ['deal_id', id()],
+  ['address', str(true)],
+  ['transaction_type', str(true)],
+  ['status', str(true)],
+  ['started_on', day()],
+  ['closed_on', day()],
+  ['mutual_acceptance_date', day()],
+  ['closing_deadline', day()],
+  ['listing_price', num()],
+  ['sale_price', num()],
+  ['earnest_money_amount', num()],
+  ['commission_offered_rate', num()],
+  ['commission_actual_rate', num()],
+  ['commission_gross_amount', num()],
+  ['saved_from', int(true)],
+  ['found_by', oneOf(['person', 'keepr'], true)],
+  ['locked', str(true)],
+];
+export const ALL_DEALS_COLUMNS: readonly string[] = ALL_DEALS_ROW.map(([k]) => k);
+
+export const LIST_ALL_DEALS_SHAPE = frame('keepr.list_all_deals', {
+  columns: { t: 'tuple', items: ALL_DEALS_COLUMNS.map((k) => oneOf([k])) },
+  rows: arr({ t: 'tuple', items: ALL_DEALS_ROW.map(([, sh]) => sh) }),
+  page: obj({ returned: int(), next_cursor: { t: 'string', pattern: UUID, nullable: true } }),
+});
+
 export const STATUS_SHAPE = obj({
   connected: bool(),
   provider: oneOf(['anthropic', 'openai']),
@@ -170,6 +203,8 @@ export function checkShape(v: unknown, s: Shape): boolean {
     }
     case 'array':
       return Array.isArray(v) && v.every((x) => checkShape(x, s.items));
+    case 'tuple':
+      return Array.isArray(v) && v.length === s.items.length && s.items.every((it, i) => checkShape(v[i], it));
     case 'string':
       if (v === null) return s.nullable === true;
       return typeof v === 'string' && (!s.pattern || s.pattern.test(v)) && (!s.values || s.values.includes(v));
@@ -198,6 +233,19 @@ export function toJsonSchema(s: Shape): JsonSchema {
       };
     case 'array':
       return { type: 'array', items: toJsonSchema(s.items) };
+    case 'tuple': {
+      // Declared loosely (any position may hold any of the types used); checkShape checks each position.
+      const types = new Set<string>();
+      const values: unknown[] = [];
+      for (const it of s.items) {
+        const j = toJsonSchema(it);
+        for (const t of ([] as unknown[]).concat(j.type)) types.add(String(t));
+        if (Array.isArray(j.enum)) values.push(...j.enum);
+      }
+      const items: JsonSchema = { type: [...types] };
+      if (values.length === s.items.length && s.items.every((it) => it.t === 'string' && it.values)) items.enum = values;
+      return { type: 'array', items, minItems: s.items.length, maxItems: s.items.length };
+    }
     default: {
       const type = s.nullable ? [s.t, 'null'] : s.t;
       const out: JsonSchema = { type };
