@@ -7,7 +7,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { CHECKLISTS_SHAPE, checkShape, GET_DEAL_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
+import { CHECKLISTS_SHAPE, checkShape, GET_DEAL_SHAPE, LIST_ALL_DEALS_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
 
 export const RPC_TIMEOUT_MS = 8000;
 
@@ -409,6 +409,29 @@ export async function listDealsFor(cfg: ClientConfig, a: ListDealsArgs): Promise
   });
   if ('kind' in res) return res;
   return checkDataToolEnvelope(res.data, LIST_DEALS_SHAPE);
+}
+
+// mcp_list_all_deals(p_secret text, p_at_digest bytea, p_resource text, p_status text,
+//                    p_closed_from text, p_closed_to text, p_cursor text)  (BACKLOG-4263)
+export interface ListAllDealsArgs extends AccessArgs {
+  status: string | null;
+  closedFrom: string | null;
+  closedTo: string | null;
+  cursor: string | null;
+}
+
+export async function listAllDealsFor(cfg: ClientConfig, a: ListAllDealsArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_list_all_deals', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_status: a.status,
+    p_closed_from: a.closedFrom,
+    p_closed_to: a.closedTo,
+    p_cursor: a.cursor,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, LIST_ALL_DEALS_SHAPE);
 }
 
 export interface GetDealArgs extends AccessArgs {

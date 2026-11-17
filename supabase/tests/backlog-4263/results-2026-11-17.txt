@@ -1,0 +1,284 @@
+(ids from the run replaced by <id:n>)
+MUTATION APPLIED ISO_owner_term_only (_mcp_r_list_all_deals)
+  - dl.owner_user_id = v_uid /*OWN:all_deals*/
+  + true /*OWN:all_deals*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_and_rls (_mcp_r_list_all_deals)
+  - dl.owner_user_id = v_uid /*OWN:all_deals*/
+  + true /*OWN:all_deals*/
+MUTATION APPLIED ISO_rls_only (ddl)
+  + ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_inst_owner_and_rls (_mcp_r_list_all_deals)
+  - x.owner_user_id = v_uid /*OWN:all_inst*/
+  + true /*OWN:all_inst*/
+MUTATION APPLIED CONF_dropped (_mcp_r_list_all_deals)
+  - AND dl.is_confirmed /*CONF:all*/
+  + 
+MUTATION APPLIED GATE_no_secret_check (mcp_list_all_deals)
+  - IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN | RETURN public._mcp_refuse('not_connected'); | END IF;
+  + 
+MUTATION APPLIED GATE_outcome_ignored (mcp_list_all_deals)
+  - IF g.outcome IS DISTINCT FROM 'ok' THEN | RETURN public._mcp_refuse(g.outcome); | END IF;
+  + 
+MUTATION APPLIED RO_no_read_only (mcp_list_all_deals)
+  - PERFORM set_config('transaction_read_only', 'on', true);
+  + 
+MUTATION APPLIED READER_volatile (_mcp_r_list_all_deals)
+  - RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+  + RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+MUTATION APPLIED ENT_term_dropped_schema_version (_mcp_r_list_all_deals)
+  - (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1) | OR
+  + 
+MUTATION APPLIED ENT_term_dropped_licensed (_mcp_r_list_all_deals)
+  -  | OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  + 
+MUTATION APPLIED ENT_term_dropped_enabled (_mcp_r_list_all_deals)
+  -  | OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true)
+  + 
+MUTATION APPLIED ENT_no_check (_mcp_r_list_all_deals)
+  - IF (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1) | OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true) | OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_json
+  + 
+MUTATION APPLIED ACL_reader_to_anon (acl)
+  + SET ROLE mcp_reader; GRANT EXECUTE ON FUNCTION public._mcp_r_list_all_deals(text, date, date, uuid) TO anon; RESET ROLE
+MUTATION APPLIED ACL_reader_to_authenticated (acl)
+  + SET ROLE mcp_reader; GRANT EXECUTE ON FUNCTION public._mcp_r_list_all_deals(text, date, date, uuid) TO authenticated; RESET ROLE
+MUTATION APPLIED ACL_tool_to_authenticated (acl)
+  + GRANT EXECUTE ON FUNCTION public.mcp_list_all_deals(text, bytea, text, text, text, text, text) TO authenticated
+MUTATION APPLIED BOUND_bytes_removed (_mcp_r_list_all_deals)
+  - AND s.cum <= 85000 /*BOUND:bytes*/
+  + 
+MUTATION APPLIED BOUND_rows_removed (_mcp_r_list_all_deals)
+  - s.rk <= 500 /*BOUND:rows*/ AND
+  + 
+MUTATION APPLIED BOUND_strict_less (_mcp_r_list_all_deals)
+  - s.cum <= 85000 /*BOUND:bytes*/
+  + s.cum < 85000 /*BOUND:bytes*/
+MUTATION APPLIED BOUND_plus_one (_mcp_r_list_all_deals)
+  - s.cum <= 85000 /*BOUND:bytes*/
+  + s.cum <= 85001 /*BOUND:bytes*/
+MUTATION APPLIED BOUND_no_separator (_mcp_r_list_all_deals)
+  - sum(octet_length(r.j::text) + 2)
+  + sum(octet_length(r.j::text))
+MUTATION APPLIED KEY_ge (_mcp_r_list_all_deals)
+  - dl.id > p_after_id) /*KEY:after*/
+  + dl.id >= p_after_id) /*KEY:after*/
+MUTATION APPLIED PAGE_order_by_save_time (_mcp_r_list_all_deals)
+  - AND (p_after_id IS NULL OR dl.id > p_after_id) /*KEY:after*/
+  + AND (p_after_id IS NULL OR (dl.last_synced_at, dl.id) > ((SELECT y.last_synced_at FROM public.cloud_deals y WHERE y.id = p_after_id), p_after_id)) /*KEY:after*/
+  - ORDER BY dl.id /*ORDER:all*/
+  + ORDER BY dl.last_synced_at, dl.id /*ORDER:all*/
+  - row_number() OVER (ORDER BY c.id) AS rk
+  + row_number() OVER (ORDER BY c.last_synced_at, c.id) AS rk
+MUTATION APPLIED PAGE_cursor_first_row (_mcp_r_list_all_deals)
+  - ORDER BY pg.rk DESC LIMIT 1
+  + ORDER BY pg.rk LIMIT 1
+MUTATION APPLIED ARG_dropped_status (mcp_list_all_deals)
+  - (p_status IS NULL OR p_status IN ('active', 'pending', 'closed')) IS NOT TRUE /*ARG:status*/ | OR
+  + 
+MUTATION APPLIED ARG_dropped_from (mcp_list_all_deals)
+  - OR (p_closed_from IS NULL OR p_closed_from ~ '^\d{4}-\d{2}-\d{2}$') IS NOT TRUE /*ARG:from*/
+  + 
+MUTATION APPLIED ARG_dropped_to (mcp_list_all_deals)
+  - OR (p_closed_to IS NULL OR p_closed_to ~ '^\d{4}-\d{2}-\d{2}$') IS NOT TRUE /*ARG:to*/
+  + 
+MUTATION APPLIED ARG_dropped_cursor (mcp_list_all_deals)
+  -  | OR (p_cursor IS NULL OR p_cursor ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') IS NOT TRUE /*ARG:cursor*/
+  + 
+MUTATION APPLIED ARG_dropped_range (mcp_list_all_deals)
+  - v_from > v_to /*ARG:range*/
+  + false /*ARG:range*/
+MUTATION APPLIED MASK_address_plain (_mcp_r_list_all_deals)
+  - public._mcp_clean(c.property_address, 300)
+  + c.property_address
+MUTATION APPLIED NUM_type_not_checked_listing_price (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'listing_price') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_listing_price (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'listing_price') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_listing_price (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'listing_price') <= 30
+  + octet_length(c.details ->> 'listing_price') <= 31
+MUTATION APPLIED NUM_type_not_checked_sale_price (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'sale_price') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_sale_price (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'sale_price') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_sale_price (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'sale_price') <= 30
+  + octet_length(c.details ->> 'sale_price') <= 31
+MUTATION APPLIED NUM_type_not_checked_earnest_money_amount (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'earnest_money_amount') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_earnest_money_amount (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'earnest_money_amount') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_earnest_money_amount (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'earnest_money_amount') <= 30
+  + octet_length(c.details ->> 'earnest_money_amount') <= 31
+MUTATION APPLIED NUM_type_not_checked_commission_offered_rate (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'commission_offered_rate') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_commission_offered_rate (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'commission_offered_rate') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_commission_offered_rate (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'commission_offered_rate') <= 30
+  + octet_length(c.details ->> 'commission_offered_rate') <= 31
+MUTATION APPLIED NUM_type_not_checked_commission_actual_rate (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'commission_actual_rate') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_commission_actual_rate (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'commission_actual_rate') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_commission_actual_rate (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'commission_actual_rate') <= 30
+  + octet_length(c.details ->> 'commission_actual_rate') <= 31
+MUTATION APPLIED NUM_type_not_checked_commission_gross_amount (_mcp_r_list_all_deals)
+  - jsonb_typeof(c.details -> 'commission_gross_amount') = 'number' AND
+  + 
+MUTATION APPLIED NUM_length_not_checked_commission_gross_amount (_mcp_r_list_all_deals)
+  - AND octet_length(c.details ->> 'commission_gross_amount') <= 30
+  + 
+MUTATION APPLIED NUM_length_31_commission_gross_amount (_mcp_r_list_all_deals)
+  - octet_length(c.details ->> 'commission_gross_amount') <= 30
+  + octet_length(c.details ->> 'commission_gross_amount') <= 31
+MUTATION APPLIED TXT_not_cut_transaction_type (_mcp_r_list_all_deals)
+  - public._mcp_txt(c.transaction_type, 20)
+  + c.transaction_type
+MUTATION APPLIED TXT_not_cut_status (_mcp_r_list_all_deals)
+  - public._mcp_txt(c.status, 20)
+  + c.status
+MUTATION APPLIED TXT_not_cut_locked (_mcp_r_list_all_deals)
+  - public._mcp_txt(c.lock_reason, 20)
+  + c.lock_reason
+MUTATION APPLIED ROWMAX_address_not_cut (_mcp_r_list_all_deals)
+  - public._mcp_clean(c.property_address, 300)
+  + public._mcp_strip(c.property_address)
+MUTATION APPLIED DATE_rule_dropped (_mcp_r_list_all_deals)
+  - CASE WHEN jsonb_typeof(c.details -> 'closing_deadline') = 'string' AND c.details ->> 'closing_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN c.details -> 'closing_deadline' END
+  + c.details -> 'closing_deadline'
+MUTATION APPLIED COLUMN_swapped (_mcp_r_list_all_deals)
+  - 'listing_price', 'sale_price'
+  + 'sale_price', 'listing_price'
+MUTATION APPLIED FILTER_closed_local_zone (_mcp_r_list_all_deals)
+  - (p_closed_to IS NULL OR (dl.closed_at AT TIME ZONE 'UTC')::date <= p_closed_to)
+  + (p_closed_to IS NULL OR (dl.closed_at AT TIME ZONE 'Pacific/Kiritimati')::date <= p_closed_to)
+MUTATION APPLIED RATE_enter_twice (mcp_list_all_deals)
+  - g := public._mcp_enter(p_at_digest, p_resource, 'list_all_deals');
+  + g := public._mcp_enter(p_at_digest, p_resource, 'list_all_deals'); | g := public._mcp_enter(p_at_digest, p_resource, 'list_all_deals');
+MUTATION APPLIED RATE_gate_without_bump (mcp_list_all_deals)
+  - g := public._mcp_enter(p_at_digest, p_resource, 'list_all_deals');
+  + g := pg_temp.p4263_enter_nobump(p_at_digest, p_resource, 'list_all_deals');
+MUTATION APPLIED LOG_wrong_tool (mcp_list_all_deals)
+  - g := public._mcp_enter(p_at_digest, p_resource, 'list_all_deals');
+  + g := public._mcp_enter(p_at_digest, p_resource, 'list_deals');
+MUTATION APPLIED LOG_no_finish (mcp_list_all_deals)
+  - PERFORM public._mcp_finish(g.call_id, v_out, CASE WHEN v_out = 'ok' THEN jsonb_array_length(v_res -> 'rows') END, v_t0);
+  + 
+MUTATION APPLIED LOG_tool_check_not_widened (ddl)
+  + ALTER TABLE public.mcp_call_log DROP CONSTRAINT mcp_call_log_tool_check; ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_tool_check CHECK (tool IS NULL OR tool IN ('get_status', 'list_deal
+MUTATION APPLIED ROLLBACK_no_delete (rollback text)
+  - DELETE FROM public.mcp_call_log WHERE tool = ...;
+composed: 432481 bytes, mutants 61
+offline md5: {"_mcp_r_list_all_deals": "6ea286c67274464080b19fa439b5d9ac", "mcp_list_all_deals": "5b12fa79e9f010af2c7c8752f23d3c9c"}
+wall_s=40
+BASE                                         {"A1": "applied", "A2": "applied", "A3": "applied", "A4": "applied", "A5": "applied", "A6": "applied", "A7": "applied", "B1": "applied", "F0": "applied", "G0": "applied", "DC1": "applied", "DD1": "applied", "F_n": 420, "G_n": 600, "del_A5": "OK", "C_state": "{\"path\": null, \"reason\": \"assignment_lapsed\", \"storage\": {\"used_bytes\": 0, \"quota_bytes\": null}, \"user_id\": \"<id:1>\", \"entitled\": false, \"licensed\": false, \"settings\": {\"enabled\": true, \"accepted_at\": \"2026-11-17T04:39:31.143357+00:00\", \"notice_version\": 1}, \"schema_version\": 1,
+C_p_args                                     PASS
+C_p_bound                                    PASS
+C_p_boundary                                 PASS
+C_p_cursor_stable                            PASS
+C_p_ent                                      PASS
+C_p_filters                                  PASS
+C_p_grants                                   PASS
+C_p_iso                                      PASS
+C_p_log                                      PASS
+C_p_mask                                     PASS
+C_p_md5                                      PASS
+C_p_rate                                     PASS
+C_p_removed                                  PASS
+C_p_ro                                       PASS
+C_p_rollback                                 PASS
+C_p_rowmax                                   PASS
+C_p_tokens                                   PASS
+C_p_unconfirmed                              PASS
+C_p_values                                   PASS
+FX_all_a                                     2097 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 4, "n
+FX_all_a_closed                              1479 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "n
+FX_all_a_none                                1224 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 0, "n
+FX_all_b                                     1412 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "n
+FX_all_f_page1                               86028 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 346, 
+FX_all_f_page2                               19353 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 74, "
+M_ACL_reader_to_anon                         want=red   RED ok  FAIL: reader:anon reader:extra anon_count 
+M_ACL_reader_to_authenticated                want=red   RED ok  FAIL: reader:authenticated reader:extra 
+M_ACL_tool_to_authenticated                  want=red   RED ok  FAIL: tool:authenticated tool:extra 
+M_ARG_dropped_cursor                         want=red   RED ok  FAIL: #1 FAIL: accepted: -/-/-/<id:2>; -/-/-/{<id:2>}; -/-/-/d2946c616f2c4d4696ab400244d5cad6;  | #3 FAIL: invalid_input not logged
+M_ARG_dropped_from                           want=red   RED ok  FAIL: #1 FAIL: accepted: -/2026-1-1/-/-;  | #3 FAIL: invalid_input not logged
+M_ARG_dropped_range                          want=red   RED ok  FAIL: #1 FAIL: accepted: -/2026-03-02/2026-03-01/-;  | #3 FAIL: invalid_input not logged
+M_ARG_dropped_status                         want=red   RED ok  FAIL: #1 FAIL: accepted: rejected/-/-/-;  | #3 FAIL: invalid_input not logged
+M_ARG_dropped_to                             want=red   RED ok  FAIL: #1 FAIL: accepted: -/-/20260101/-;  | #3 FAIL: invalid_input not logged
+M_BOUND_bytes_removed                        want=red   RED ok  FAIL: #1 FAIL: {"err": "too_large", "pages": 1}{"err": "OK", "ids": ["<id:3>", "<id:4>", "<id:5>", "<id:6>", "<id:7>", "<id:8>", "<id:9>", "<id:10>", "02fb77ab-3
+M_BOUND_no_separator                         want=red   RED ok  FAIL: #4 FAIL: rows bytes 85505/74408
+M_BOUND_plus_one                             want=red   RED ok  FAIL: #2 FAIL: at 85001: {"returned": 346, "next_cursor": "<id:11>"} bytes 85001
+M_BOUND_rows_removed                         want=red   RED ok  FAIL: #3 FAIL: G not every deal once: 501 | #7 FAIL: pages 2/1 | #9 FAIL: G page 1 {"returned": 501, "next_cursor": null} bytes 74557
+M_BOUND_strict_less                          want=red   RED ok  FAIL: #1 FAIL: at 85000: bytes 84755 returned {"returned": 345, "next_cursor": "<id:12>"}
+M_COLUMN_swapped                             want=red   RED ok  FAIL: #2 FAIL: ["deal_id", "address", "transaction_type", "status", "started_on", "closed_on", "mutual_acceptance_date", "closing_deadline", "sale_price", "listing_price", "earnest_money_amount", "commission_offered_rate", "commission_actual_rate", "commission_gross_amount", "saved_from", "found_by", "locked"]
+M_CONF_dropped                               want=red   RED ok  FAIL: #2 FAIL: pending detection returned | #3 FAIL: rejected returned
+M_DATE_rule_dropped                          want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, "soon", null, null, null, null, null, null, 2, "person", "submitted-lllllllll…"]
+M_ENT_no_check                               want=red   RED ok  FAIL: #1 FAIL: cloud off: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "next_cursor": null}, "rows": [[ | #3 FAIL: licence revoked, enabled true: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "next_cursor": null}, "rows": [[ | #5 FAIL: schema_version 2: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals
+M_ENT_term_dropped_enabled                   want=red   RED ok  FAIL: #1 FAIL: cloud off: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "next_cursor": null}, "rows": [[ | #6 FAIL: not_entitled not logged
+M_ENT_term_dropped_licensed                  want=red   RED ok  FAIL: #3 FAIL: licence revoked, enabled true: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 1, "next_cursor": null}, "rows": [[ | #6 FAIL: not_entitled not logged
+M_ENT_term_dropped_schema_version            want=red   RED ok  FAIL: #5 FAIL: schema_version 2: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 4, "next_cursor": null}, "rows": [[ | #6 FAIL: not_entitled not logged
+M_FILTER_closed_local_zone                   want=red   RED ok  FAIL: #4 FAIL: closed_to (UTC date) | #5 FAIL: from = to, inclusive
+M_GATE_no_secret_check                       want=red   RED ok  FAIL: #1 FAIL: wrong secret | #2 FAIL: no secret
+M_GATE_outcome_ignored                       want=red   RED ok  FAIL: #3 FAIL: expired token | #4 FAIL: unknown token
+M_ISO_inst_owner_and_rls                     want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, null, null, null, 3, "person", "submitted-lllllllll…"]
+M_ISO_owner_term_and_rls                     want=red   RED ok  FAIL: #1 FAIL: A got OK rows=446 | #2 FAIL: B got OK rows=446 | #3 FAIL: B1 in A
+M_ISO_owner_term_only                        want=green GREEN ok  PASS
+M_ISO_rls_only                               want=green GREEN ok  PASS
+M_KEY_ge                                     want=red   RED ok  FAIL: #2 FAIL: F not every deal once: 421 | #3 FAIL: G not every deal once: 601
+M_LOG_no_finish                              want=red   RED ok  FAIL: #3 FAIL: list_all_deals/pending/-
+M_LOG_tool_check_not_widened                 want=red   RED ok  FAIL: #1 FAIL: ERR 23514 new row for relation "mcp_call_log" violates check constraint "mcp_call_log_tool_check" | #2 FAIL: log rows +0 | #3 FAIL: -/ok/-
+M_LOG_wrong_tool                             want=red   RED ok  FAIL: #3 FAIL: list_deals/ok/4
+M_MASK_address_plain                         want=red   RED ok  FAIL: ["<id:2>", "1847 Alder Ridge Ln Unit 4111 1111 1111 1111, Fernhollow, WA 98999", "purchase", "closed", "2026-01-05", "2026-03-15", "2026-02-01", "2026-03-14", 625000, 612000, 10000, 2.5, 2.75, 16830.5, 1, "person", null]
+M_NUM_length_31_commission_actual_rate       want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, null, null, 1234567890123456789012345678901, null, 1, "person", null]
+M_NUM_length_31_commission_gross_amount      want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, null, null, 1234567890123456789012345678901, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_31_commission_offered_rate      want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, 1234567890123456789012345678901, null, null, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_31_earnest_money_amount         want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, 1234567890123456789012345678901, null, null, null, 1, "person", null]
+M_NUM_length_31_listing_price                want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, 1234567890123456789012345678901, null, null, null, null, null, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_31_sale_price                   want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, 1234567890123456789012345678901, null, null, null, null, 1, "person", null]
+M_NUM_length_not_checked_commission_actual_rate want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, null, null, 1234567890123456789012345678901, null, 1, "person", null]
+M_NUM_length_not_checked_commission_gross_amount want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, null, null, 1234567890123456789012345678901, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_not_checked_commission_offered_rate want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, 1234567890123456789012345678901, null, null, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_not_checked_earnest_money_amount want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, 1234567890123456789012345678901, null, null, null, 1, "person", null]
+M_NUM_length_not_checked_listing_price       want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, 1234567890123456789012345678901, null, null, null, null, null, 2, "person", "submitted-lllllllll…"]
+M_NUM_length_not_checked_sale_price          want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, 1234567890123456789012345678901, null, null, null, null, 1, "person", null]
+M_NUM_type_not_checked_commission_actual_rate want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, null, "2.5", null, 2, "person", "submitted-lllllllll…"]
+M_NUM_type_not_checked_commission_gross_amount want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, null, null, null, "12000", 1, "person", null]
+M_NUM_type_not_checked_commission_offered_rate want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, null, null, null, "2.5", null, null, 1, "person", null]
+M_NUM_type_not_checked_earnest_money_amount  want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, "5000", null, null, null, 2, "person", "submitted-lllllllll…"]
+M_NUM_type_not_checked_listing_price         want=red   RED ok  FAIL: #9 FAIL: A6 ["<id:14>", "9 Thistle Gap Rd, Fernhollow, WA 98999", "purchase", "closed", null, "2025-12-31", null, null, "480000", null, null, null, null, null, 1, "person", null]
+M_NUM_type_not_checked_sale_price            want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, "4111 1111 1111 1111", null, null, null, null, 2, "person", "submitted-lllllllll…"]
+M_PAGE_cursor_first_row                      want=red   RED ok  FAIL: #2 FAIL: F not every deal once: 6920 | #3 FAIL: G not every deal once: 10000 | #7 FAIL: pages 20/20 | #10 FAIL: next_cursor is not the last row
+M_PAGE_order_by_save_time                    want=red   RED ok  FAIL: #2 FAIL: skipped or repeated: 421 rows, 420 distinct
+M_RATE_enter_twice                           want=red   RED ok  FAIL: #1 FAIL: after one call conn=2 user=2 | #2 FAIL: ..............rate_limited@16 rate_limited@17 rate_limited@18 rate_limited@19 rate_limited@20 rate_limited@21 rate_limited@22 rate_limited@23 rate_limited@24 rate_limited@25 rate_limited@26 rate_limited@27 rate_limited@28 rate_limited@29 rate_limited@30 rate_limited@31 
+M_RATE_gate_without_bump                     want=red   RED ok  FAIL: #1 FAIL: after one call conn=0 user=0 | #2 FAIL: ..............................
+M_READER_volatile                            want=red   RED ok  FAIL: #1 FAIL: A got error rows=0 | #2 FAIL: B got error rows=0
+M_ROLLBACK_no_delete                         want=red   RED ok  FAIL: rollback failed: check constraint "mcp_call_log_tool_check" of relation "mcp_call_log" is violated by some row
+M_ROWMAX_address_not_cut                     want=red   RED ok  FAIL: max row bytes 2155 ["<id:15>", "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀
+M_RO_no_read_only                            want=red   RED ok  FAIL: #1 FAIL: reader write not refused: {"ok": true, "result": {"v": 1, "kind": "keepr.list_all_deals", "page": {"returned": 4, "next_cursor": null}, "rows": [["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98
+M_TXT_not_cut_locked                         want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "active-ssssssssssss…", null, null, null, null, null, null, null, null, null, null, 2, "person", "sub­mitted-llllllllllllllllllllllllllllllllllllllllllllllllllllllllllll"]
+M_TXT_not_cut_status                         want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sale-tttttttttttttt…", "act‮ive-ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss", null, null, null, null, null, null, null, null, null, null, 2, "person", "submitted-lllllllll…"]
+M_TXT_not_cut_transaction_type               want=red   RED ok  FAIL: #8 FAIL: A2 ["<id:13>", "52 Cobble Wren Ct, Larchmont Bay, WA 98998", "sa​le-tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt", "active-ssssssssssss…", null, null, null, null, null, null, null, null, null, null, 2, "person", "submitted-lllllllll…"]
+PRE_4263_objects                             0
+PRE_anon_mcp                                 9
+PRE_ledger_4244                              1
+PRE_ledger_4263                              0
+PRE_mcp_function_count                       39
+PRE_tool_check                               CHECK (((tool IS NULL) OR (tool = ANY (ARRAY['get_status'::text, 'list_deals'::text, 'get_deal'::text, 'get_deal_checklists'::text]))))
+fp_after_apply                               89eb026c3517c2b632e85dc8e29e5303
+CONTROLS pass=19 fail=0 total=19
+MUTANTS as_expected=61 unexpected=0 total=61
+fixtures written: data-tools-4263.json
