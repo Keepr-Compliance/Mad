@@ -27,6 +27,7 @@ import {
 } from "./cloudSyncSql";
 import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
 import { clearApplyGuard, resetTodosAfterRestore, scanTodosAllEnabled } from "./cloudSyncTodoDbService";
+import { deleteDealArchiveForExistingDeals, purgeExpiredDealArchive } from "./cloudSyncDealArchive";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -251,6 +252,10 @@ export function resetSyncStateAfterRestore(db: SqlDb, now: Date = new Date()): b
     db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
     // BACKLOG-4263 plan §3.4 / E4: the cloud's todos win; waiting ops of online todos go, a full pull is owed.
     resetTodosAfterRestore(db, now);
+    // BACKLOG-4263 PR-4c (plan §14 F6): an archived deal the restored file holds is no longer restorable from the
+    // archive; the 30-day purge still applies to the rest.
+    deleteDealArchiveForExistingDeals(db);
+    purgeExpiredDealArchive(db, now);
   })();
   return true;
 }
@@ -279,11 +284,13 @@ export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silen
  * inside a confirm transaction, so one found at open was left by a crash), and after an open in which a
  * versioned migration ran, mark every eligible deal and run the gated todo scan. Never throws.
  */
-export function prepareCloudSyncAfterOpen(db: SqlDb, migrated: boolean, log: TriggerLog = silentLog): void {
+export function prepareCloudSyncAfterOpen(db: SqlDb, migrated: boolean, log: TriggerLog = silentLog, now: Date = new Date()): void {
   try {
     db.transaction(() => {
       clearApplyGuard(db);
       if (migrated) markAllEligibleAfterMigration(db, log);
+      // BACKLOG-4263 PR-4c (plan §14 F6): the 30-day purge of deleted deals kept for a restore, every open.
+      purgeExpiredDealArchive(db, now);
     })();
   } catch (error) {
     log.warn("[CloudSync] After-open step failed", { code: errorCode(error) });

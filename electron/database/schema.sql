@@ -2321,6 +2321,17 @@ CREATE TABLE IF NOT EXISTS cloud_sync_applying (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
   started_at TEXT NOT NULL
 );
+-- BACKLOG-4263 PR-4c (migration v83 creates it on existing databases): a Keepr Cloud user's deleted deal, kept
+-- 30 days for a restore on this computer. Read and written only by electron/services/db/cloudSyncDealArchive.ts
+-- (mirror: DEAL_ARCHIVE_DDL there).
+CREATE TABLE IF NOT EXISTS cloud_sync_deal_archive (
+  transaction_id TEXT PRIMARY KEY,
+  owner_user_id  TEXT NOT NULL REFERENCES users_local(id) ON DELETE CASCADE,
+  archived_at    TEXT NOT NULL,
+  payload_json   TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  purge_owed_at  TEXT
+);
 -- BACKLOG-4243 END
 
 -- Initialize schema version if not exists.

@@ -33,6 +33,7 @@ import type { SessionIdentity, SessionUser } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
 import * as todoStore from "../db/cloudSyncTodoDbService";
+import * as archive from "../db/cloudSyncDealArchive";
 import { sendTodos, type TodoSendSummary } from "./todos/sender";
 import { pullTodos, type TodoPullSummary } from "./todos/puller";
 
@@ -108,7 +109,21 @@ export interface RunnerDeps {
   reportFailure?: (code: string) => void;
   /** Reconcile guards (plan §8.5 step 4). */
   launchFacts?: () => { installCreatedThisLaunch: boolean; restoredThisLaunch: boolean };
+  /**
+   * BACKLOG-4263 PR-4c: records a deal restore's TRANSACTION_CREATE audit entry inside the restore's transaction
+   * (throws to cancel it). Without it no restore runs: a restore is never left unaudited.
+   */
+  auditRestore?: (entry: { userId: string; transactionId: string; archivedAt: string; via: "computer" | "online" }) => void;
 }
+
+/** BACKLOG-4263 PR-4c (Q8): where one "Delete for good" stands after a try. */
+export type DealPurgeStatus =
+  /** Erased online and here. */
+  | "done"
+  /** Still owed: offline, a failed call, or this computer's own removal not yet sent; retried every pass. */
+  | "pending"
+  /** The online copy was restored elsewhere: nothing was erased, the owed mark is cleared. */
+  | "restored_elsewhere";
 
 export interface PassSummary {
   outcome: PassOutcome;
@@ -255,6 +270,103 @@ export class CloudSyncRunner {
     });
   }
 
+  /**
+   * BACKLOG-4263 PR-4c (plan §14, F5): restore one deal this user deleted on this computer, from its archive, in
+   * one local transaction under the pass lock (never between a pass's calls). The next pass uploads it again,
+   * which un-removes the online copy under the same id (F4).
+   */
+  restoreDeal(userId: string, transactionId: string): Promise<archive.RestoreResult | { ok: false; code: "signed_out" }> {
+    return this.exclusive(async () => {
+      const session = await this.deps.identity.current();
+      if (!session || session.userId !== userId || this.deps.getAuthUserId() !== userId) return { ok: false, code: "signed_out" } as const;
+      const audit = this.deps.auditRestore;
+      if (!audit) return { ok: false, code: "restore_failed" } as const;
+      return archive.restoreArchivedDeal(this.deps.db(), { userId, transactionId, now: this.now(), audit });
+    });
+  }
+
+  /**
+   * BACKLOG-4263 PR-4c (Q8, plan §14 "Delete for good"): server first, then local. Marks the row owed (one local
+   * transaction; Restore is refused from then on), then tries to finish it under the pass lock. A try that cannot
+   * finish leaves the mark: every later pass retries.
+   */
+  deleteDealForGood(userId: string, transactionId: string): Promise<{ ok: boolean; code: string; status?: DealPurgeStatus }> {
+    return this.exclusive(async () => {
+      const session = await this.deps.identity.current();
+      if (!session || session.userId !== userId || this.deps.getAuthUserId() !== userId) return { ok: false, code: "signed_out" };
+      const pinned: SessionUser = { userId, epoch: session.epoch };
+      const db = this.deps.db();
+      const marked = archive.markDealPurgeOwed(db, userId, transactionId, this.now());
+      if (marked !== "ok") return { ok: false, code: marked };
+      try {
+        const status = await this.finishOwedPurges(db, pinned, this.deps.installId(), transactionId);
+        return { ok: true, code: "", status: status.get(transactionId) ?? "pending" };
+      } catch (error) {
+        if (error instanceof StopPass) return { ok: true, code: error.outcome, status: "pending" };
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Tries every owed Delete for good of the pinned user (or one deal). Per row:
+   * - this computer's own removal of the deal still waiting (a dirty mark): left for the deal step;
+   * - the online deal id: the archive's, else this user's sync record, else this install's online rows by local
+   *   id (a deal deleted before its first upload was recorded); none online at all: only the local row goes;
+   * - a live online copy this computer has not removed (no confirmed removal recorded: found by that lookup, or a
+   *   sync record forgotten before the removal was sent) is removed first, then purged;
+   * - purged / not_found: the row goes; not_removed after a confirmed removal: restored elsewhere, the mark is
+   *   cleared; anything else: kept.
+   */
+  private async finishOwedPurges(db: SqlDb, pinned: SessionUser, installId: string, only?: string): Promise<Map<string, DealPurgeStatus>> {
+    const out = new Map<string, DealPurgeStatus>();
+    const online: { rows?: Map<string, OnlineRow> | null } = {};
+    for (const owed of archive.listOwedDealPurges(db, pinned.userId)) {
+      if (only && owed.transactionId !== only) continue;
+      const status = await this.tryOwedPurge(db, pinned, installId, owed, online);
+      out.set(owed.transactionId, status);
+      // One local write per deal, after its server step: the row goes (done) or its owed mark is cleared.
+      if (status !== "pending") archive.settleDealPurge(db, pinned.userId, owed.transactionId, status);
+    }
+    return out;
+  }
+
+  /** The server step of one owed Delete for good (no local write; see finishOwedPurges). */
+  private async tryOwedPurge(
+    db: SqlDb,
+    pinned: SessionUser,
+    installId: string,
+    owed: archive.OwedPurge,
+    online: { rows?: Map<string, OnlineRow> | null },
+  ): Promise<DealPurgeStatus> {
+    if (store.isMarked(db, owed.transactionId)) return "pending";
+    let cloudId = owed.cloudDealId ?? store.getDealState(db, this.deps.projectRef, pinned.userId, owed.transactionId)?.cloud_id ?? null;
+    let removedOnline = owed.removedOnline;
+    if (!cloudId) {
+      if (online.rows === undefined) online.rows = await this.listOnline(pinned, installId, "deal");
+      if (!online.rows) return "pending";
+      const on = online.rows.get(owed.transactionId);
+      // Nothing online for this deal: only the local row goes.
+      if (!on) return "done";
+      cloudId = on.cloudId;
+      if (on.removed) removedOnline = true;
+    }
+    if (!removedOnline) {
+      // Not removed online by this computer yet: remove it first (a removed deal answers ok again).
+      this.guard(pinned);
+      const del = await this.deps.client.deleteDeal(pinned.userId, cloudId);
+      this.stopOn(del);
+      if (!(del.kind === "ok" || (del.kind === "refused" && del.code === "not_found"))) return "pending";
+    }
+    this.guard(pinned);
+    const res = await this.deps.client.purgeDealNow(pinned.userId, cloudId);
+    this.stopOn(res);
+    if (res.kind === "ok" && (res.body.status === "purged" || res.body.status === "not_found")) return "done";
+    if (res.kind === "refused" && res.code === "not_removed") return "restored_elsewhere";
+    this.log.warn("[CloudSync] Delete for good not finished (will retry)", { code: res.kind === "ok" ? "bad_answer" : res.code });
+    return "pending";
+  }
+
   /** Resolves when no pass is running. */
   whenIdle(): Promise<void> {
     return this.running ? this.running.then(() => undefined, () => undefined) : Promise.resolve();
@@ -363,6 +475,8 @@ export class CloudSyncRunner {
         if (r === "done") done++;
         else if (r === "failed") failed++;
       }
+      // BACKLOG-4263 PR-4c (Q8): Delete for good still owed, after the deals (their removals went first).
+      await this.finishOwedPurges(db, pinned, installId);
       // BACKLOG-4263 PR-4a: todo changes, after the deals (an op names its deal by cloud id).
       const todoDeps = {
         db,
@@ -374,6 +488,7 @@ export class CloudSyncRunner {
         guard: () => this.guard(pinned),
         stopOn: (res: CallResult) => this.stopOn(res),
         log: this.log,
+        auditRestore: deps.auditRestore,
       };
       todoSummary = await sendTodos(todoDeps);
       if (todoSummary.confirmed > 0) this.sentThisPass++;
@@ -625,7 +740,13 @@ export class CloudSyncRunner {
         this.log.warn("[CloudSync] Reconcile read failed", { code: res.code, kind });
         return null;
       }
-      for (const r of Array.isArray(res.body.rows) ? (res.body.rows as Array<Record<string, unknown>>) : []) {
+      // BACKLOG-4263 PR-4c: an ok answer without its rows is not "nothing online" (Delete for good would erase the
+      // local copy on it; the reconcile would read every deal as gone online).
+      if (!Array.isArray(res.body.rows)) {
+        this.log.warn("[CloudSync] Reconcile read failed", { code: "no_rows", kind });
+        return null;
+      }
+      for (const r of res.body.rows as Array<Record<string, unknown>>) {
         if (!r || typeof r !== "object" || typeof r.cloud_id !== "string" || typeof r.local_id !== "string") continue;
         // A moved child has a removed row on the old deal and a live one on the new: keep the live one.
         if (r.removed === true && out.get(r.local_id)?.removed === false) continue;
@@ -898,14 +1019,20 @@ export class CloudSyncRunner {
     }
     const cloudId = r.cloud_id as string;
     const version = typeof r.version === "number" ? r.version : null;
-    store.writeDealState(
-      db,
-      this.deps.projectRef,
-      pinned.userId,
-      row.transaction_id,
-      { cloudId, hash: projected.hash, hashVersion: HASH_VERSION, cloudVersion: version, status: "saved" },
-      this.now(),
-    );
+    db.transaction(() => {
+      store.writeDealState(
+        db,
+        this.deps.projectRef,
+        pinned.userId,
+        row.transaction_id,
+        { cloudId, hash: projected.hash, hashVersion: HASH_VERSION, cloudVersion: version, status: "saved" },
+        this.now(),
+      );
+      // BACKLOG-4263 PR-4c: a todo record that names another online copy of this deal (a deal restored here from
+      // its archive after its online copy was purged, or after a machine rebind) is forgotten, and the deal's
+      // todos are queued again against the new copy.
+      todoStore.resetTodoDealIfOtherCloudDeal(db, this.deps.projectRef, pinned.userId, row.transaction_id, cloudId, this.now());
+    })();
     return { kind: "saved", cloudId, version };
   }
 }

@@ -10,7 +10,7 @@
  * the plan feature map already in memory carries a Keepr Cloud key.
  */
 import type { CloudClient } from "./cloudClient";
-import { CloudSyncRunner, type PassSummary, type RunnerLog } from "./runner";
+import { CloudSyncRunner, type PassSummary, type RunnerDeps, type RunnerLog } from "./runner";
 import { isNoticeSupported } from "./notice";
 import { parseState, type ServerState } from "./stateReader";
 import { restoreEpoch } from "../db/cloudSyncTriggers";
@@ -18,8 +18,12 @@ import type { SessionIdentity } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
 import * as todoStore from "../db/cloudSyncTodoDbService";
+import * as archive from "../db/cloudSyncDealArchive";
 import type {
+  CloudSyncDeleteForGoodResult,
   CloudSyncPausedReason,
+  CloudSyncRemovedDeal,
+  CloudSyncRestoreResult,
   CloudSyncResult,
   CloudSyncView,
 } from "../../types/ipc/window-api-cloud-sync";
@@ -50,6 +54,8 @@ export interface CloudSyncServiceDeps {
   now?: () => Date;
   log?: RunnerLog;
   reportFailure?: (code: string) => void;
+  /** BACKLOG-4263 PR-4c: the restore's audit entry (RunnerDeps.auditRestore). */
+  auditRestore?: RunnerDeps["auditRestore"];
 }
 
 export class CloudSyncService {
@@ -74,6 +80,7 @@ export class CloudSyncService {
           now: deps.now,
           log: deps.log,
           reportFailure: deps.reportFailure,
+          auditRestore: deps.auditRestore,
           launchFacts: () => ({
             installCreatedThisLaunch: this.installCreatedThisLaunch,
             restoredThisLaunch: restoreEpoch() > 0,
@@ -134,6 +141,13 @@ export class CloudSyncService {
   /** Runs a pass when Keepr Cloud is on here; otherwise nothing. */
   async kick(): Promise<PassSummary | null> {
     if (!this.runner || this.timer === null) return null;
+    // BACKLOG-4263 PR-4c (plan §14 F6): the 30-day purge of deleted deals kept for a restore, on every tick,
+    // before the pass and never behind its early returns (offline, signed out, paused).
+    try {
+      archive.purgeExpiredDealArchive(this.deps.db(), this.now());
+    } catch {
+      /* the next tick or the next open retries */
+    }
     let summary: PassSummary;
     try {
       summary = await this.runner.runPass();
@@ -403,6 +417,44 @@ export class CloudSyncService {
     this.refreshSchedule();
     await this.kick();
     return { success: true };
+  }
+
+  /** BACKLOG-4263 PR-4c: this user's deals deleted on this computer and still restorable here. Local only. */
+  async listRemovedDeals(): Promise<CloudSyncRemovedDeal[]> {
+    const userId = await this.actingUser();
+    if (!userId) return [];
+    const now = this.now().getTime();
+    return archive
+      .listArchivedDeals(this.deps.db(), userId)
+      .filter((d) => Date.parse(d.restorableUntil) > now)
+      .map((d) => ({
+        transactionId: d.transactionId,
+        propertyAddress: d.propertyAddress,
+        removedAt: d.archivedAt,
+        restorableUntil: d.restorableUntil,
+        deleting: d.deleting,
+      }));
+  }
+
+  /** BACKLOG-4263 PR-4c (plan §14 F5): restore one of them here; the next pass un-removes it online. */
+  async restoreDeal(transactionId: string): Promise<CloudSyncRestoreResult> {
+    const userId = await this.actingUser();
+    if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    const r = await this.runner.restoreDeal(userId, transactionId);
+    if (!r.ok) return { success: false, error: r.code };
+    void this.kick();
+    return { success: true, skippedLinks: r.skippedTotal, otherDealAtAddress: r.otherDealAtAddress };
+  }
+
+  /** BACKLOG-4263 PR-4c (Q8): erase one of them now: online first, then here. */
+  async deleteDealForGood(transactionId: string): Promise<CloudSyncDeleteForGoodResult> {
+    const userId = await this.actingUser();
+    if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    const r = await this.runner.deleteDealForGood(userId, transactionId);
+    if (!r.ok) return { success: false, error: r.code };
+    // Still owed (offline, or this computer's removal of the deal not sent yet): the next pass finishes it.
+    if (r.status === "pending") void this.kick();
+    return { success: true, status: r.status };
   }
 
   /** Deletes the online copies of other installs idle for 30+ days. Main lists them again here. */

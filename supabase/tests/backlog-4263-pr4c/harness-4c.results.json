@@ -1,0 +1,211 @@
+{
+ "C41_grants": {
+  "anon": false,
+  "authenticated": true,
+  "mcp_functions_naming_it": 0,
+  "mcp_functions_total": 41
+ },
+ "F_push_creates": [
+  "added",
+  "added",
+  "added",
+  "added",
+  "added",
+  "added"
+ ],
+ "Q1_delete": {
+  "keys": [
+   "blobs_fenced",
+   "deleted",
+   "ok",
+   "restorable"
+  ],
+  "ok": true,
+  "restorable": true
+ },
+ "Q1b_delete_again": {
+  "ok": true
+ },
+ "Q1c_list_removed": {
+  "deal_keys": [
+   "address",
+   "deal_id",
+   "removed_at",
+   "removed_kind",
+   "restorable_until",
+   "source_install_id"
+  ],
+  "has_D1": 1
+ },
+ "Q1d_install_rows_removed_flag": [
+  {
+   "d1": true,
+   "removed": true
+  },
+  {
+   "d1": false,
+   "removed": false
+  }
+ ],
+ "Q2a_live_deal": {
+  "error": "not_removed",
+  "ok": false
+ },
+ "Q2b_wrong_account": {
+  "error": "wrong_account",
+  "ok": false
+ },
+ "Q2c_null_id": {
+  "error": "invalid_input",
+  "ok": false
+ },
+ "Q2d_other_owner": {
+  "ok": true,
+  "status": "not_found"
+ },
+ "Q2e_anon": "ERR 42501",
+ "Q2f_d1_still_there": {
+  "deal": 1,
+  "items": 1
+ },
+ "Q2g_purged": {
+  "ok": true,
+  "status": "purged"
+ },
+ "Q2h_after_purge": {
+  "checklists": 0,
+  "deal": 0,
+  "head_moved": true,
+  "history": 0,
+  "horizon_moved": true,
+  "items": 0,
+  "list_removed_has_D1": 0
+ },
+ "Q2i_purge_again": {
+  "ok": true,
+  "status": "not_found"
+ },
+ "Q2j_delete_after_purge": {
+  "error": "not_found",
+  "ok": false
+ },
+ "Q2k_pull_after_purge": {
+  "page": {
+   "error": null,
+   "head": 3,
+   "horizon_type": "number",
+   "horizon_zero": false,
+   "install_max_edit_seq": 5,
+   "n": 0,
+   "next_after": 3,
+   "ok": true,
+   "resync": true,
+   "rows": []
+  },
+  "resync": true
+ },
+ "Q3_reupload_after_purge": {
+  "restored": false,
+  "same_id": false,
+  "status": "applied"
+ },
+ "Q4_reupload_removed": {
+  "restored": true,
+  "same_id": true,
+  "status": "unchanged"
+ },
+ "Q4b_pull_after_reupload": {
+  "error": null,
+  "head": 4,
+  "horizon_type": "number",
+  "horizon_zero": false,
+  "install_max_edit_seq": 5,
+  "n": 3,
+  "next_after": 4,
+  "ok": true,
+  "resync": false,
+  "rows": [
+   {
+    "e": "deal",
+    "outcome": null,
+    "purged": null,
+    "removed": false,
+    "seq": 1
+   },
+   {
+    "e": "checklist",
+    "outcome": null,
+    "purged": false,
+    "removed": false,
+    "seq": 2
+   },
+   {
+    "e": "item",
+    "outcome": null,
+    "purged": false,
+    "removed": false,
+    "seq": 3
+   }
+  ]
+ },
+ "Q4c_purge_now_after_reupload": {
+  "error": "not_removed",
+  "ok": false
+ },
+ "Q5_restore_online": {
+  "renumbered": 3,
+  "status": "restored"
+ },
+ "Q5b_pull_after_restore_online": {
+  "deal_local_id": "d4",
+  "deal_row_keys": [
+   "change_seq",
+   "cloud_id",
+   "entity",
+   "local_id",
+   "removed_at",
+   "removed_kind",
+   "restorable_until"
+  ],
+  "page": {
+   "error": null,
+   "head": 4,
+   "horizon_type": "number",
+   "horizon_zero": false,
+   "install_max_edit_seq": 5,
+   "n": 3,
+   "next_after": 4,
+   "ok": true,
+   "resync": false,
+   "rows": [
+    {
+     "e": "deal",
+     "outcome": null,
+     "purged": null,
+     "removed": false,
+     "seq": 1
+    },
+    {
+     "e": "checklist",
+     "outcome": null,
+     "purged": false,
+     "removed": false,
+     "seq": 2
+    },
+    {
+     "e": "item",
+     "outcome": null,
+     "purged": false,
+     "removed": false,
+     "seq": 3
+    }
+   ]
+  }
+ },
+ "Q5c_purge_now_restored": {
+  "error": "not_removed",
+  "ok": false
+ },
+ "on_A": true,
+ "on_B": true
+}

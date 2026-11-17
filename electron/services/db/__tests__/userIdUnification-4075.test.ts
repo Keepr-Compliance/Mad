@@ -160,7 +160,9 @@ describe("BACKLOG-4075: migrateUserIdForUnification on the migrated schema", () 
     ).all() as Array<{ t: string }>).map((r) => r.t);
     expect(fkTables.length).toBeGreaterThan(30);
     const derived = listUserIdColumns(db);
-    expect(derived.every((d) => d.column === "user_id")).toBe(true);
+    // BACKLOG-4263 PR-4c: the deal archive's owner column is the one FK to users_local not named user_id; it moves
+    // with the user like every other (a restore maps the ids inside its payload to the current owner).
+    expect(derived.filter((d) => d.column !== "user_id")).toEqual([{ table: "cloud_sync_deal_archive", column: "owner_user_id" }]);
     expect(derived.map((d) => d.table).sort()).toEqual([...fkTables, ...USER_ID_WITHOUT_FK].sort());
   });
 

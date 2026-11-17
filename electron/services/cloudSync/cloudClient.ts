@@ -142,6 +142,15 @@ export class CloudClient {
   }
 
   /**
+   * BACKLOG-4263 PR-4c (Q8): erase one removed deal now (migration 20261118110000 `cloud_purge_deal_now`).
+   * Answers {ok:true, status:'purged'|'not_found'}; refused not_removed (the deal is live online),
+   * wrong_account, not_authorized, invalid_input.
+   */
+  purgeDealNow(expectedUserId: string, cloudDealId: string): Promise<CallResult> {
+    return this.call("cloud_purge_deal_now", { p_expected_user_id: expectedUserId, p_cloud_deal_id: cloudDealId });
+  }
+
+  /**
    * cloud_upsert_parties. Checklists and items no longer go this way (BACKLOG-4263 PR-4a): they are sent
    * as todo changes through todoPush, and migration 20261118120000 drops the two old item functions.
    */

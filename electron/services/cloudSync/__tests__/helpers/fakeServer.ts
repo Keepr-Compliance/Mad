@@ -77,6 +77,19 @@
  *   _cloud_todo_purge :1261-  an item or checklist removed > 30 days: purged (no content) with a new number; the
  *                                owner's forgotten_through_seq rises to the deleted numbers and forgotten_at takes
  *                                a new number (observed O8b-d).
+ *   BACKLOG-4263 PR-4c, observed on the test database by supabase/tests/backlog-4263-pr4c/harness-4c.sql
+ *   (results: harness-4c.results.json):
+ *   cloud_delete_deal of a deal already removed: ok again (Q1b); of a purged deal: not_found (Q2j).
+ *   cloud_purge_deal_now :1358-1375 + _cloud_todo_purge_deal :1227-1259: a live deal -> {ok:false, error:
+ *                                not_removed} (Q2a, Q4c, Q5c); another owner's deal or none -> {ok:true, status:
+ *                                not_found} (Q2d, Q2i); a removed deal -> {ok:true, status: purged}, the deal, its
+ *                                checklists, items and history gone, forgotten_through_seq and forgotten_at raised, so
+ *                                a pull from before it answers resync_required (Q2g, Q2h, Q2k); wrong_account (Q2b),
+ *                                invalid_input for a NULL id (Q2c).
+ *   cloud_upsert_deal of a purged deal's local id: a NEW online deal (Q3); of a removed one: the same id, status
+ *                                unchanged when the hash is equal, restored:true, children renumbered (Q4, Q4b).
+ *   cloud_todo_restore of a deal (another side's restore): status restored; the next pull carries the deal row
+ *                                (removed_at null, local_id = the desktop's) and its live children renumbered (Q5, Q5b).
  */
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
@@ -403,6 +416,10 @@ export class FakeServer {
       }
       case "cloud_delete_deal": {
         const i = this.deals.findIndex((d) => d.id === a.p_cloud_deal_id && d.owner === uid);
+        // PR-4c (observed Q1b): a deal already removed answers ok again, with no change.
+        if (i < 0 && this.softRemovedDeals.some((d) => d.id === a.p_cloud_deal_id && d.owner === uid)) {
+          return { ok: true, deleted: { parties: 0, checklists: 0, checklist_items: 0, messages: 0, files: 0 }, blobs_fenced: 0, restorable: true };
+        }
         if (i < 0) return { ok: false, error: "not_found" };
         const gone = this.deals.splice(i, 1)[0];
         this.children = this.children.filter((c) => c.dealId !== gone.id);
@@ -410,6 +427,15 @@ export class FakeServer {
         gone.changeSeq = this.nextSeq(uid);
         this.softRemovedDeals.push(gone);
         return { ok: true, deleted: { parties: 0, checklists: 0, checklist_items: 0, messages: 0, files: 0 }, blobs_fenced: 0 };
+      }
+      case "cloud_purge_deal_now": {
+        // PR-4c (observed Q2a-Q2k, Q4c, Q5c)
+        if (!a.p_cloud_deal_id) return { ok: false, error: "invalid_input" };
+        if (this.deals.some((d) => d.id === a.p_cloud_deal_id && d.owner === uid)) return { ok: false, error: "not_removed" };
+        const soft = this.softRemovedDeals.find((d) => d.id === a.p_cloud_deal_id && d.owner === uid);
+        if (!soft) return { ok: true, status: "not_found" };
+        this.purgeDealOnline(soft);
+        return { ok: true, status: "purged" };
       }
       case "cloud_mark_deal_synced": {
         if (!this.entitled()) return { ok: false, error: "not_entitled" };
@@ -850,6 +876,31 @@ export class FakeServer {
     t.parts.removed = { rev: cur.rev + 1, value: { removed_at: null, kind: null }, at: this.serverNow(), by, edit_seq: null };
     t.removed = false;
     t.changeSeq = this.nextSeq(t.owner);
+  }
+
+  /**
+   * PR-4c: _cloud_todo_purge_deal :1227-1259 (shared by cloud_purge_deal_now and the daily purge of a deal past its
+   * 30 days): the removed deal, its todos and their events go; forgotten_through_seq rises to the highest number
+   * deleted and forgotten_at takes a new number (observed Q2h, Q2k).
+   */
+  purgeDealOnline(d: FakeDeal): void {
+    const seqs = [d.changeSeq ?? 0, ...this.todos.filter((t) => t.dealId === d.id).map((t) => t.changeSeq ?? 0), ...this.events.filter((e) => e.dealId === d.id).map((e) => e.seq)];
+    this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== d);
+    this.todos = this.todos.filter((t) => t.dealId !== d.id);
+    this.events = this.events.filter((e) => e.dealId !== d.id);
+    const mark = this.nextSeq(d.owner);
+    const h = this.feed.get(d.owner) as { last: number; forgotThrough: number; forgotAt: number };
+    h.forgotThrough = Math.max(h.forgotThrough, ...seqs);
+    h.forgotAt = mark;
+  }
+
+  /** PR-4c: cloud_todo_restore of a removed deal by another side (:1108-1158, F4 at _cloud_todo_unremove_deal; Q5). */
+  restoreDealOnline(d: FakeDeal): void {
+    this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== d);
+    this.deals.push(d);
+    d.removedKind = null;
+    d.changeSeq = this.nextSeq(d.owner);
+    for (const t of this.todos) if (t.dealId === d.id && !t.removed && !t.purged) t.changeSeq = this.nextSeq(d.owner);
   }
 
   /** The daily purge of one removed todo (observed O8): no content, a new number, the forgotten markers move. */

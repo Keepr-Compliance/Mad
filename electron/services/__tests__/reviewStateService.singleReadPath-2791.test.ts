@@ -25,6 +25,9 @@ const ROOT = path.join(__dirname, "../../..");
 /** Files allowed to touch the review stores directly. */
 const OWNERS = [
   "electron/services/reviewStateService.ts",
+  // BACKLOG-4263 PR-4c: the deal archive copies a deleted deal's rows of every table its delete removes, this
+  // one among them, and inserts them back on a restore. It reads no review state and decides nothing about it.
+  "electron/services/db/cloudSyncDealArchive.ts",
   // The migration and the schema create the table; they do not read state.
   "electron/services/databaseService.ts",
   "electron/database/schema.sql",

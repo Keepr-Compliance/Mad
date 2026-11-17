@@ -57,6 +57,36 @@ export interface CloudSyncResult {
   pendingOnline?: boolean;
 }
 
+/** BACKLOG-4263 PR-4c: one deal this user deleted on this computer, restorable here (Settings › Keepr Cloud › Removed). */
+export interface CloudSyncRemovedDeal {
+  transactionId: string;
+  propertyAddress: string | null;
+  /** ISO time of the delete. */
+  removedAt: string;
+  /** ISO time after which it can no longer be restored (30 days after the delete). */
+  restorableUntil: string;
+  /** "Delete for good" was asked and is not finished yet (shown as "Deleting…"; Restore is refused). */
+  deleting: boolean;
+}
+
+/**
+ * BACKLOG-4263 PR-4c: the answer to a restore. `error` codes: not_found, not_owner, purge_owed, deal_exists, cloud_off,
+ * restore_failed, archive_not_understood (written by another Keepr version; kept, Delete for good still erases it),
+ * signed_out, invalid_input (cloudSyncDealArchive RestoreRefusal).
+ */
+export interface CloudSyncRestoreResult extends CloudSyncResult {
+  /** Rows that could not come back (a link whose email, text, attachment or contact no longer exists). */
+  skippedLinks?: number;
+  /** Another deal on this computer has the same address (restored anyway). */
+  otherDealAtAddress?: boolean;
+}
+
+/** BACKLOG-4263 PR-4c (Q8): the answer to "Delete for good". */
+export interface CloudSyncDeleteForGoodResult extends CloudSyncResult {
+  /** done: erased online and here; pending: will finish when Keepr is online; restored_elsewhere: nothing erased. */
+  status?: "done" | "pending" | "restored_elsewhere";
+}
+
 export interface WindowApiCloudSync {
   getView: () => Promise<CloudSyncView>;
   turnOn: (args: { noticeVersion: number }) => Promise<CloudSyncResult>;
@@ -69,4 +99,10 @@ export interface WindowApiCloudSync {
   deleteOldInstalls: () => Promise<CloudSyncResult>;
   /** BACKLOG-4263 PR-4b: "Save this computer's deals again" after its online copy was removed elsewhere. */
   reclaimInstall: () => Promise<CloudSyncResult>;
+  /** BACKLOG-4263 PR-4c: this user's deals deleted on this computer in the last 30 days. No screen yet (PR-6). */
+  listRemovedDeals: () => Promise<CloudSyncRemovedDeal[]>;
+  /** BACKLOG-4263 PR-4c: restore one of them on this computer. No screen yet (PR-6). */
+  restoreDeal: (args: { transactionId: string }) => Promise<CloudSyncRestoreResult>;
+  /** BACKLOG-4263 PR-4c (Q8): erase one of them now, online and here. No screen yet (PR-6). */
+  deleteDealForGood: (args: { transactionId: string }) => Promise<CloudSyncDeleteForGoodResult>;
 }

@@ -435,6 +435,22 @@ export function resetTodoDeal(db: SqlDb, projectRef: string, userId: string, tra
   })();
 }
 
+/**
+ * BACKLOG-4263 PR-4c: after a deal's header was saved under `cloudDealId`: when any todo record of the deal names
+ * another online deal (the copy it was recorded against is gone), the deal is reset as resetTodoDeal does. Returns
+ * the ops the reset queued (0 when nothing named another copy).
+ */
+export function resetTodoDealIfOtherCloudDeal(db: SqlDb, projectRef: string, userId: string, transactionId: string, cloudDealId: string, now: Date): number {
+  if (!hasTable(db, "cloud_sync_todo_state")) return 0;
+  const other = db
+    .prepare(
+      `SELECT 1 FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND transaction_id = ?
+          AND cloud_deal_id IS NOT NULL AND cloud_deal_id <> ? LIMIT 1`,
+    )
+    .get(projectRef, userId, transactionId, cloudDealId);
+  return other ? resetTodoDeal(db, projectRef, userId, transactionId, now) : 0;
+}
+
 // ---------------------------------------------------------------- backup restore (plan §3.4, E4)
 
 /**

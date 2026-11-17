@@ -1021,6 +1021,19 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
     ref: "BACKLOG-4263",
   },
+  // BACKLOG-4263 PR-4c: a Keepr Cloud user's deleted deal, kept 30 days for a restore on this computer.
+  {
+    key: "TABLE:cloud_sync_deal_archive",
+    what: "New table: a deleted deal's rows (the deal and the 15 tables its delete removes), kept 30 days for a restore on this computer.",
+    why: "BACKLOG-4263 PR-4c (plan §14): Keepr Cloud users only. Declared in schema.sql (IF NOT EXISTS) and created by migration v83 too; read and written only by cloudSyncDealArchive.ts.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_deal_archive_1",
+    what: "SQLite's automatic index for cloud_sync_deal_archive' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

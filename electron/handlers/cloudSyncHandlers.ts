@@ -28,6 +28,7 @@ import sessionSecurityService from "../services/sessionSecurityService";
 import { onSessionChanged } from "../services/authEvents";
 import { getDeviceId } from "../services/deviceService";
 import logService from "../services/logService";
+import { recordDealRestoreAuditSync } from "../services/cloudSync/restoreAudit";
 import { portalUrl } from "../utils/portalUrl";
 import { isStrictFeatureAllowed } from "./featureGateHandlers";
 
@@ -44,7 +45,16 @@ export const CLOUD_SYNC_CHANNELS = [
   "cloud-sync:delete-online-not-here",
   "cloud-sync:delete-old-installs",
   "cloud-sync:reclaim-install",
+  "cloud-sync:list-removed-deals",
+  "cloud-sync:restore-deal",
+  "cloud-sync:delete-deal-for-good",
 ] as const;
+
+/** The transaction id a renderer sends (a string of sane length; main reads everything else itself). */
+function transactionIdArg(args: unknown): string | null {
+  const v = (args as { transactionId?: unknown } | null)?.transactionId;
+  return typeof v === "string" && v.length > 0 && v.length <= 200 ? v : null;
+}
 
 /** Registers the channels against one service. */
 export function registerCloudSyncHandlers(service: CloudSyncService): void {
@@ -62,6 +72,16 @@ export function registerCloudSyncHandlers(service: CloudSyncService): void {
   ipcMain.handle("cloud-sync:delete-online-not-here", () => service.deleteOnlineNotHere());
   ipcMain.handle("cloud-sync:delete-old-installs", () => service.deleteOldInstalls());
   ipcMain.handle("cloud-sync:reclaim-install", () => service.reclaimInstall());
+  // BACKLOG-4263 PR-4c: deals deleted on this computer, restorable 30 days (Settings › Keepr Cloud › Removed, PR-6).
+  ipcMain.handle("cloud-sync:list-removed-deals", () => service.listRemovedDeals());
+  ipcMain.handle("cloud-sync:restore-deal", (_event, args: unknown) => {
+    const id = transactionIdArg(args);
+    return id ? service.restoreDeal(id) : { success: false, error: "invalid_input" };
+  });
+  ipcMain.handle("cloud-sync:delete-deal-for-good", (_event, args: unknown) => {
+    const id = transactionIdArg(args);
+    return id ? service.deleteDealForGood(id) : { success: false, error: "invalid_input" };
+  });
 }
 
 const supabaseTransport: RpcTransport = async (fn, args, signal) => {
@@ -145,6 +165,8 @@ function installCloudSyncUnguarded(): CloudSyncService {
     reportFailure: (code) => {
       Sentry.captureMessage("cloud-sync pass failed", { tags: { code } });
     },
+    // BACKLOG-4263 PR-4c (plan §14 F3): a restored deal is recorded as TRANSACTION_CREATE, inside the restore.
+    auditRestore: recordDealRestoreAuditSync,
   });
   registerCloudSyncHandlers(service);
   installed = service;

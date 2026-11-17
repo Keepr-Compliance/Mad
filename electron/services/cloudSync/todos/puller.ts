@@ -18,6 +18,7 @@ import {
   applyTodoPage,
   resetTodoCursorForFullPull,
   type PageCounts,
+  type PullCtx,
 } from "../../db/cloudSyncTodoPullDb";
 
 /** Contract `pull.limit`. */
@@ -40,6 +41,8 @@ export interface TodoPullDeps {
   stopOn: (res: CallResult) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
   pageSize?: number;
+  /** BACKLOG-4263 PR-4c: see PullCtx.auditRestore. */
+  auditRestore?: PullCtx["auditRestore"];
 }
 
 export interface TodoPullSummary {
@@ -141,7 +144,7 @@ export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
       }
       const counts = applyTodoPage(
         db,
-        { projectRef, userId, installId: deps.installId, now: deps.now() },
+        { projectRef, userId, installId: deps.installId, now: deps.now(), auditRestore: deps.auditRestore },
         {
           rows,
           next_after: nextAfter,

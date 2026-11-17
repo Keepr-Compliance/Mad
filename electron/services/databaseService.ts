@@ -101,6 +101,8 @@ import {
 } from "./db/migrationV81Sql";
 // BACKLOG-4263 PR-4b: migration v82 (the todo pull cursor's horizon and full-pull kind).
 import { V82_ADD_FULL_PULL_KIND_SQL, V82_ADD_HORIZON_SQL, V82_CURSOR_TABLE_INFO_SQL } from "./db/migrationV82Sql";
+// BACKLOG-4263 PR-4c: migration v83 (the 30-day deal archive for a restore on this computer).
+import { V83_DEAL_ARCHIVE_DDL } from "./db/migrationV83Sql";
 import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
@@ -2379,6 +2381,16 @@ class DatabaseService implements IDatabaseService {
         if (!cols.some((c) => c.name === "full_pull_kind")) d.exec(V82_ADD_FULL_PULL_KIND_SQL);
       },
     },
+    {
+      version: 83,
+      description:
+        "BACKLOG-4263 deal restore on this computer: the 30-day archive of a Keepr Cloud user's deleted deals",
+      // CREATE TABLE IF NOT EXISTS: a fresh install already has the table from schema.sql (run before the chain).
+      // Empty; no existing row is written; no trigger, index or view names it. Re-runnable.
+      migrate: (d) => {
+        d.exec(V83_DEAL_ARCHIVE_DDL);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2945,8 +2957,8 @@ class DatabaseService implements IDatabaseService {
    * BACKLOG-3339: the synchronous delete, for a caller that writes the delete
    * and its audit entry in one `dbTransaction`.
    */
-  deleteTransactionSync(transactionId: string): void {
-    transactionDb.deleteTransactionSync(transactionId);
+  deleteTransactionSync(transactionId: string, options: { archiveForRestore?: boolean } = {}): void {
+    transactionDb.deleteTransactionSync(transactionId, options);
   }
 
   async findExistingTransactionsByAddresses(
