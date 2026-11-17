@@ -970,6 +970,80 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     });
   });
 
+  // ================================================================ S6 / R6 (re-review of #3594)
+  describe("S6 / R6", () => {
+    it("S6: a restored link with one member whose evidence is gone and one whose evidence remains comes back with the remaining member", async () => {
+      const { db, e } = await synced();
+      db.prepare("INSERT INTO emails (id, user_id, external_id, source, subject) VALUES (?, ?, 'ext-1', 'gmail', 'Report')").run(fid(9, 1), USER_A);
+      db.prepare("INSERT INTO emails (id, user_id, external_id, source, subject) VALUES (?, ?, 'ext-2', 'gmail', 'Gone')").run(fid(9, 2), USER_A);
+      db.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES (?, ?, 'email', 'Mail', 0)").run(fid(10, 1), I1);
+      db.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)").run(fid(11, 1), fid(10, 1), fid(9, 1));
+      db.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)").run(fid(11, 2), fid(10, 1), fid(9, 2));
+      const t = onlineItem(e, I1);
+      e.server.removeOnline(t);
+      await pass(e);
+      expect(item(db, I1)).toBeUndefined();
+      db.prepare("DELETE FROM emails WHERE id = ?").run(fid(9, 2));
+      e.server.restoreOnline(t);
+      await pass(e);
+      expect(db.prepare("SELECT id FROM transaction_checklist_links WHERE item_id = ?").all(I1)).toEqual([{ id: fid(10, 1) }]);
+      expect(db.prepare("SELECT id FROM transaction_checklist_link_members ORDER BY id").all()).toEqual([{ id: fid(11, 1) }]);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_notices WHERE kind = 'links_not_restored'")).toBe(0);
+    });
+
+    /** A file older than this computer's online history: the older note and shadow, the counter before the newer edit. */
+    async function rolledBack() {
+      const { db, e } = await synced();
+      const old = { shadow: shadow(db, I1)!, counter: (db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter").get() as { edit_seq: number }).edit_seq };
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer, from here", I1);
+      await pass(e);
+      expect(onlineItem(e, I1).parts.note.edit_seq as number).toBeGreaterThan(old.counter);
+      quietly(db, () => {
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(null, I1);
+        db.prepare("UPDATE cloud_sync_todo_state SET note_rev = ?, note_json = ? WHERE local_id = ?").run(old.shadow.note_rev, old.shadow.note_json, I1);
+        db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = ?").run(old.counter);
+      });
+      return { db, e };
+    }
+
+    it("R6: a reclaim (or an account reset) on a file older than this computer's online history makes the full pull cloud-wins ('behind'): the newer online value comes back and nothing older is pushed", async () => {
+      const { db, e } = await rolledBack();
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: null });
+      const r = await pass(e);
+      expect(r.pull).toMatchObject({ fullPullDone: true });
+      expect(item(db, I1)!.note).toBe("newer, from here");
+      expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
+      expect(outbox(db)).toEqual([]);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+    });
+
+    it("R6: the 'behind' decision is stored with the first page, so a crash before the next page cannot turn the rest into keep-local", async () => {
+      const { db, e } = await rolledBack();
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      let k = 0;
+      const client = new CloudClient(async (fn, args, signal) => {
+        if (fn === "cloud_todo_pull" && ++k === 2) throw new Error("network");
+        return e.server.transport(fn, args, signal);
+      }, 5_000);
+      const r = await pullTodos({ db, client, projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: () => new Date(), guard: () => undefined, stopOn: () => undefined, pageSize: 1 });
+      expect(r).toMatchObject({ outcome: "failed", pages: 1 });
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "behind" });
+    });
+
+    it("R6: a reclaim on a file that is NOT behind stays keep-local: a local value of a part this computer wrote last, never sent, reaches the cloud", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("sent", I1);
+      await pass(e);
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("never sent", I1));
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      await pass(e);
+      expect(onlineItem(e, I1).parts.note.value).toBe("never sent");
+      expect(item(db, I1)!.note).toBe("never sent");
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+    });
+  });
+
   // ================================================================ BATCH
   describe("BATCH: the sender's caps on a full batch", () => {
     it("250 todos with long notes go out in calls of at most 200 ops and 921,600 bytes of compact JSON (server: 200 ops, 1,048,576 bytes); every op applies", async () => {

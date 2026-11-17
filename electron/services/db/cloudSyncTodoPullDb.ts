@@ -1061,9 +1061,37 @@ export function applyTodoPage(
     // The full pull's kind (cloudSyncTodoDbService.writeCursorOwed / resetTodoCursorForFullPull): 'restore' and
     // 'resync' let the cloud's value win everywhere; NULL (turn-on, the one-time step, an account reset) keeps a
     // part this computer wrote last.
-    const cloudWins =
+    // SR review 1, R6: a database file older than this computer's own online history (rolled back by a copy or
+    // Time Machine, not seen as a restore). The FIRST page of a keep-local full pull (kind NULL) reports the
+    // highest edit_seq this install stored online; when it is above the local counter's (read before the raise,
+    // counter not marked rewound), this file has not seen its own later edits, so the pull becomes cloud-wins
+    // ('behind'), stored with the cursor in this page's transaction so a crash between pages cannot flip it.
+    // Old-engine rows carry no edit_seq (NULL max), a rebind has a new install id, and a file that is not behind
+    // has counter >= that max: those stay keep-local.
+    let kind = cur?.full_pull_kind ?? null;
+    const installNow = currentInstallId(db, ctx.projectRef);
+    if (
       full &&
-      (cur?.full_pull_kind === "restore" || cur?.full_pull_kind === "resync");
+      kind === null &&
+      cur?.last_seq === 0 &&
+      page.install_max_edit_seq !== null &&
+      installNow
+    ) {
+      const k = db
+        .prepare(
+          "SELECT edit_seq, rewound_at FROM cloud_sync_todo_counter WHERE project_ref = ? AND install_id = ?",
+        )
+        .get(ctx.projectRef, installNow) as
+        { edit_seq: number; rewound_at: string | null } | undefined;
+      if (k && !k.rewound_at && k.edit_seq < page.install_max_edit_seq) {
+        kind = "behind";
+        db.prepare(
+          "UPDATE cloud_sync_todo_cursor SET full_pull_kind = 'behind' WHERE project_ref = ? AND owner_user_id = ?",
+        ).run(ctx.projectRef, ctx.userId);
+      }
+    }
+    const cloudWins =
+      full && (kind === "restore" || kind === "resync" || kind === "behind");
     db.prepare(
       "INSERT OR REPLACE INTO cloud_sync_applying (id, started_at) VALUES (1, ?)",
     ).run(ctx.now.toISOString());
