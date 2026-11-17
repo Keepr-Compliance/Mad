@@ -2265,12 +2265,16 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_state (
   updated_at     TEXT NOT NULL,
   PRIMARY KEY (project_ref, owner_user_id, entity, local_id)
 );
+-- BACKLOG-4263 PR-4b (migration v82 adds the last two columns to existing databases): horizon is the
+-- pull horizon stored with last_seq; full_pull_kind 'restore' marks a full pull owed after a backup restore.
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
   project_ref    TEXT NOT NULL,
   owner_user_id  TEXT NOT NULL,
   last_seq       INTEGER NOT NULL DEFAULT 0,
   full_pull_owed INTEGER NOT NULL DEFAULT 1,
   updated_at     TEXT,
+  horizon        INTEGER,
+  full_pull_kind TEXT,
   PRIMARY KEY (project_ref, owner_user_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_parked (

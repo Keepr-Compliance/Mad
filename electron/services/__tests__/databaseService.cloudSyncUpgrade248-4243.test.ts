@@ -255,6 +255,8 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_tx_insert",
   "trg_cloud_sync_tx_update",
 ];
+/** The latest local schema version this build ships (BACKLOG-4263 PR-4b: v82). */
+const LATEST_VERSION = 82;
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -749,16 +751,16 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     db.close();
   });
 
-  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at v81 with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
+  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at the latest version (v82) with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
     const { before } = buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "table", "cloud_sync_%")).toEqual([...CLOUD_SYNC_TABLES].sort());
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
     for (const t of CLOUD_SYNC_TABLES) expect([t, count(db, t)]).toEqual([t, 0]);
     // Row for row, every column the table had before, every table the file had before.
     expect(changedTables(db, before)).toEqual(["schema_version"]);
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     // v81's columns exist and are NULL on every row (BACKLOG-4263).
     expect(columns(db, "transaction_checklist_items")).toContain("due_date");
     expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE due_date IS NOT NULL").get()).toEqual({ n: 0 });
@@ -774,14 +776,14 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80 and v81 (79 -> 81); the next open changes nothing", async () => {
+  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80, v81 and v82 (79 -> 82); the next open changes nothing", async () => {
     const { before } = buildV79Profile(dir);
     expect(before.has("cloud_sync_dirty")).toBe(false);
     expect(before.has("cloud_sync_todo_outbox")).toBe(false);
     expect(before.get("transaction_checklist_items")!.cols).not.toContain("due_date");
     expect(before.get("schema_version")!.rows[0]).toContain("79");
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
     // The tables are exactly the declared shape (schema.sql, mirrored by CLOUD_SYNC_TABLES_DDL).
     const shape = new RealDatabase(":memory:");
@@ -821,7 +823,9 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       ["marks", (sql) => sql === MARK_ALL_ELIGIBLE_FOR_USER_SQL],
       ["todo clear", (sql) => sql.startsWith("DELETE FROM cloud_sync_todo_trash WHERE project_ref = ? AND owner_user_id = ?")],
       ["todo cursor", (sql) => sql.startsWith("INSERT INTO cloud_sync_todo_cursor")],
-      ["initial scan", (sql) => sql.includes("INSERT INTO cloud_sync_todo_outbox") && sql.includes("DO NOTHING")],
+      // BACKLOG-4263 PR-4b: the turn-on no longer scans (the scan runs after the first full pull); its last todo
+      // write is the counter seed.
+      ["counter seed", (sql) => sql.startsWith("INSERT INTO cloud_sync_todo_counter")],
     ];
     // Every step is checked, then compared in one assertion, so a red names every step that leaked.
     const outcomes: Array<{ step: string; threw: boolean; hit: boolean; triggers: string[]; changed: string[] }> = [];
@@ -855,23 +859,27 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     expect(eligibleDeals(db, U_ON)).toEqual([D1, D4]);
     expect(dirtyIds(db)).toEqual([D1, D4]);
     expect(db.prepare("SELECT user_id, enabled FROM cloud_sync_settings").all()).toEqual([{ user_id: U_ON, enabled: 1 }]);
-    // What enabling writes is cloud_sync_settings and cloud_sync_dirty, and (BACKLOG-4263) the todo cursor and
-    // the initial scan's outbox rows; every other row is as the open left it.
-    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty", "cloud_sync_todo_cursor", "cloud_sync_todo_outbox"])).toEqual([]);
+    // What enabling writes is cloud_sync_settings and cloud_sync_dirty, and (BACKLOG-4263) the todo cursor; every
+    // other row is as the open left it. PR-4b: no outbox row yet (the scan runs after the first full pull).
+    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty", "cloud_sync_todo_cursor"])).toEqual([]);
     expect(db.prepare("SELECT owner_user_id, last_seq, full_pull_owed FROM cloud_sync_todo_cursor").all()).toEqual([{ owner_user_id: U_ON, last_seq: 0, full_pull_owed: 1 }]);
-    // The initial scan: one create per checklist and item of the user's deals, every one with the scan epoch.
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    // The pass: deals, then the full pull (empty online), then the scan queues one create per checklist and item
+    // of the user's deals (every one with the scan epoch), sent in the same pass.
     const userTodos =
       (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists c JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n +
       (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n;
     expect(userTodos).toBeGreaterThan(0);
-    expect(db.prepare("SELECT part, clock_epoch, owner_user_id FROM cloud_sync_todo_outbox GROUP BY part, clock_epoch, owner_user_id").all()).toEqual([
-      { part: "create", clock_epoch: -1, owner_user_id: U_ON },
-    ]);
-    expect(count(db, "cloud_sync_todo_outbox")).toBe(userTodos);
 
     const e = makeEngineOn(db);
     e.service.refreshSchedule();
     await e.service.runner!.whenIdle();
+    const created = e.server.callsTo("cloud_todo_push").flatMap((c) => c.args.p_ops as Array<Record<string, unknown>>);
+    expect(created).toHaveLength(userTodos);
+    expect(new Set(created.map((o) => `${o.kind}:${o.clock_stepped}`))).toEqual(new Set(["create_checklist:true", "create_item:true"]));
+    expect(e.server.callsTo("cloud_todo_pull").length).toBeGreaterThan(0);
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    expect(db.prepare("SELECT full_pull_owed FROM cloud_sync_todo_cursor").all()).toEqual([{ full_pull_owed: 0 }]);
     expect(e.server.callsTo("cloud_upsert_deal")).toHaveLength(2);
     expect(e.server.deals).toHaveLength(2);
     expect(dirtyIds(db)).toEqual([]);
@@ -904,7 +912,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     pre.close();
 
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(columns(db, "cloud_sync_settings")).toEqual([...before.get("cloud_sync_settings")!.cols, "install_removed_at"]);
     expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
     expect(db.prepare("SELECT install_removed_at FROM cloud_sync_settings").all()).toEqual([{ install_removed_at: null }]);
@@ -930,7 +938,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     const first = await openWithThisBuild();
     await first.svc.close();
     const db = openAs248(path.join(dir, "mad.db"));
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
     const results = runWrites248(db);
     expect(results.every((r) => r.added.length === 0 && r.bumped === 0 && r.ops.length === 0 && r.trash.length === 0)).toBe(true);
@@ -954,8 +962,9 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       enable(first.db);
       first.db.exec("DELETE FROM cloud_sync_dirty");
       // BACKLOG-4263 PR-4a: the turn-on's initial scan queued the existing todos; 2.48.0's writes come after.
+      // BACKLOG-4263 PR-4b: the turn-on writes no op (the scan runs after the first full pull).
       const scanned = count(first.db, "cloud_sync_todo_outbox");
-      expect(scanned).toBeGreaterThan(0);
+      expect(scanned).toBe(0);
       first.db.exec("DELETE FROM cloud_sync_todo_outbox");
       expect(count(first.db, "cloud_sync_todo_counter")).toBe(withCounter ? 1 : 0);
       await first.svc.close();
@@ -1105,7 +1114,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     old.close();
 
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(ALL_TRIGGERS);
     expect(dirtyIds(db)).toEqual([D1, D4, NEW_DEAL].sort());
 

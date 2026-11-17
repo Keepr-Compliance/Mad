@@ -42,6 +42,11 @@ export interface CloudSyncView {
   lastSavedAt: string | null;
   /** True when "Manage AI apps" can open the portal page. */
   aiAppsAvailable: boolean;
+  /**
+   * BACKLOG-4263 PR-4b: this computer's online copy was removed from another computer; nothing is saved until
+   * the user chooses to save this computer's deals again (`reclaimInstall`). No screen shows it yet (PR-6).
+   */
+  installRemoved?: boolean;
 }
 
 export interface CloudSyncResult {
@@ -62,4 +67,6 @@ export interface WindowApiCloudSync {
   openAiApps: () => Promise<CloudSyncResult>;
   deleteOnlineNotHere: () => Promise<CloudSyncResult>;
   deleteOldInstalls: () => Promise<CloudSyncResult>;
+  /** BACKLOG-4263 PR-4b: "Save this computer's deals again" after its online copy was removed elsewhere. */
+  reclaimInstall: () => Promise<CloudSyncResult>;
 }

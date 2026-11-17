@@ -259,6 +259,20 @@ export function disableForUser(db: SqlDb, projectRef: string, userId: string, ow
   })();
 }
 
+/**
+ * BACKLOG-4263 PR-4b (D2): after cloud_reclaim_install answered ok, for THIS user only, in one transaction:
+ * forget the user's sync records (the next pass uploads every deal again under the same install id, which
+ * un-removes them online), clear the user's todo state and stop (D6 / E1), seed the counter, owe a full pull,
+ * and mark the user's eligible deals. Other local users and the install row are untouched.
+ */
+export function reclaimInstallForUser(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+  db.transaction(() => {
+    db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
+    db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+    startTodoTracking(db, projectRef, userId, now);
+  })();
+}
+
 /** The server confirmed the turn-off: clear the owed marker, then apply the trigger rule, together. */
 export function clearTurnOffOwed(db: SqlDb, projectRef: string, userId: string): void {
   db.transaction(() => {

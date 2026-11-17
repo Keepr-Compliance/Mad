@@ -34,6 +34,7 @@ import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
 import * as todoStore from "../db/cloudSyncTodoDbService";
 import { sendTodos, type TodoSendSummary } from "./todos/sender";
+import { pullTodos, type TodoPullSummary } from "./todos/puller";
 
 export const SAVED_ROW_STATUSES = ["applied", "unchanged"] as const;
 
@@ -81,7 +82,9 @@ export type PassOutcome =
   | "other_project"
   | "blocked"
   | "unknown_state"
-  | "stopped";
+  | "stopped"
+  /** BACKLOG-4263 PR-4b: this computer's online copy was removed elsewhere; nothing is sent until reclaimed. */
+  | "install_removed";
 
 export interface RunnerLog {
   info(message: string, meta?: Record<string, unknown>): void;
@@ -114,6 +117,9 @@ export interface PassSummary {
   state?: ServerState;
   /** BACKLOG-4263 PR-4a: what the todo sender did in this pass. */
   todos?: TodoSendSummary;
+  /** BACKLOG-4263 PR-4b: what the todo puller did, and the sender's second run after a full pull's scan. */
+  pull?: TodoPullSummary;
+  todosAfterPull?: TodoSendSummary;
 }
 
 class StopPass extends Error {
@@ -137,6 +143,10 @@ export class CloudSyncRunner {
   lastSummary: PassSummary | null = null;
   /** Server writes this pass that the server accepted (upsert saved, delete, mark synced). */
   private sentThisPass = 0;
+  /** BACKLOG-4263 PR-4b: the user the running pass is pinned to (for the install_removed stop). */
+  private passUser: string | null = null;
+  /** BACKLOG-4263 PR-4b (D2): users whose install_removed stop was checked online this launch (once each). */
+  private readonly installStatusChecked = new Set<string>();
 
   constructor(private readonly deps: RunnerDeps) {
     deps.identity.onCleared(() => {
@@ -202,13 +212,41 @@ export class CloudSyncRunner {
         // Read again at click time: a deal on this computer is never deleted from here.
         const here = store.readEligibleDealIds(db, userId);
         for (const [localId, on] of deals) {
-          if (recorded.has(on.cloudId) || here.has(localId)) continue;
+          // BACKLOG-4263 PR-4b: a deal removed online (kept 30 days, restorable) is not an orphan.
+          if (on.removed || recorded.has(on.cloudId) || here.has(localId)) continue;
           this.guard(pinned);
           const res = await this.deps.client.deleteDeal(userId, on.cloudId);
           this.stopOn(res);
           if (!(res.kind === "ok" || (res.kind === "refused" && res.code === "not_found"))) return { ok: false, code: res.code };
         }
         store.setOrphanCount(db, this.deps.projectRef, userId, 0);
+        return { ok: true, code: "" };
+      } catch (error) {
+        if (error instanceof StopPass) return { ok: false, code: error.outcome };
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * BACKLOG-4263 PR-4b (D2): the user's "save this computer's deals again" after its online copy was removed
+   * elsewhere. Removes this owner's register row (cloud_reclaim_install; other owners untouched), then, in one
+   * local transaction, forgets this user's sync records and todo state, owes a full pull and marks this user's
+   * deals; the next pass uploads them again under the same install id (the server un-removes them). Pinned to
+   * the user, under the pass lock. Other local users are not touched.
+   */
+  reclaimInstall(userId: string, installId: string): Promise<{ ok: boolean; code: string }> {
+    return this.exclusive(async () => {
+      const session = await this.deps.identity.current();
+      if (!session || session.userId !== userId || this.deps.getAuthUserId() !== userId) return { ok: false, code: "signed_out" };
+      const pinned: SessionUser = { userId, epoch: session.epoch };
+      try {
+        this.guard(pinned);
+        const res = await this.deps.client.reclaimInstall(userId, installId);
+        if (res.kind === "refused" && res.code === "wrong_account") throw new StopPass("wrong_account");
+        if (res.kind !== "ok") return { ok: false, code: res.code };
+        store.reclaimInstallForUser(this.deps.db(), this.deps.projectRef, userId, this.now());
+        this.installStatusChecked.delete(userId);
         return { ok: true, code: "" };
       } catch (error) {
         if (error instanceof StopPass) return { ok: false, code: error.outcome };
@@ -269,6 +307,16 @@ export class CloudSyncRunner {
       return this.finish({ outcome: "needs_confirmation", done: 0, failed: 0 });
     }
 
+    // BACKLOG-4263 PR-4b (R8, D2): a user stopped by install_removed makes no server call, except one
+    // read-only status check per launch (the copy may have been restored elsewhere).
+    if (todoStore.installRemovedAt(db, deps.projectRef, session.userId)) {
+      if (this.installStatusChecked.has(session.userId)) return this.finish({ outcome: "install_removed", done: 0, failed: 0 });
+      this.installStatusChecked.add(session.userId);
+      const st = await deps.client.installStatus(session.userId, installId);
+      if (!(st.kind === "ok" && st.body.removed === false)) return this.finish({ outcome: "install_removed", done: 0, failed: 0 });
+      todoStore.clearInstallRemoved(db, deps.projectRef, session.userId);
+    }
+
     const read = parseState(await deps.client.getState());
     if (read.kind !== "state") return this.finish({ outcome: "unknown_state", done: 0, failed: 0 });
     const state = read.state;
@@ -302,6 +350,9 @@ export class CloudSyncRunner {
     let done = 0;
     let failed = 0;
     let todoSummary: TodoSendSummary | undefined;
+    let pullSummary: TodoPullSummary | undefined;
+    let afterPull: TodoSendSummary | undefined;
+    this.passUser = pinned.userId;
     try {
       if (this.reconcileDue(db, pinned.userId)) await this.reconcile(db, pinned, installId);
       const due = store.selectDueDirty(db, pinned.userId, this.now(), DEALS_PER_PASS);
@@ -312,7 +363,7 @@ export class CloudSyncRunner {
         else if (r === "failed") failed++;
       }
       // BACKLOG-4263 PR-4a: todo changes, after the deals (an op names its deal by cloud id).
-      todoSummary = await sendTodos({
+      const todoDeps = {
         db,
         client: deps.client,
         projectRef: deps.projectRef,
@@ -320,18 +371,30 @@ export class CloudSyncRunner {
         installId,
         now: () => this.now(),
         guard: () => this.guard(pinned),
-        stopOn: (res) => this.stopOn(res),
+        stopOn: (res: CallResult) => this.stopOn(res),
         log: this.log,
-      });
+      };
+      todoSummary = await sendTodos(todoDeps);
       if (todoSummary.confirmed > 0) this.sentThisPass++;
+      // BACKLOG-4263 PR-4b: push, then pull (plan W26). After a full pull its last page scanned (cloudSyncTodoPullDb):
+      // what the scan queued goes in this same pass.
+      if (todoSummary.outcome === "done" || todoSummary.outcome === "idle") {
+        pullSummary = await pullTodos(todoDeps);
+        if (pullSummary.scanned > 0 || pullSummary.held > 0) {
+          afterPull = await sendTodos(todoDeps);
+          if (afterPull.confirmed > 0) this.sentThisPass++;
+        }
+      }
     } catch (error) {
       if (error instanceof StopPass) {
         if (error.outcome === "wrong_account") return this.wrongAccount(state, done, failed);
-        return this.finish({ outcome: error.outcome, done, failed, state });
+        return this.finish({ outcome: error.outcome, done, failed, state, todos: todoSummary, pull: pullSummary });
       }
       throw error;
+    } finally {
+      this.passUser = null;
     }
-    return this.finish({ outcome: "done", done, failed, state, todos: todoSummary });
+    return this.finish({ outcome: "done", done, failed, state, todos: todoSummary, pull: pullSummary, todosAfterPull: afterPull });
   }
 
   private wrongAccount(state: ServerState, done = 0, failed = 0): PassSummary {
@@ -389,6 +452,13 @@ export class CloudSyncRunner {
     if (res.kind !== "refused") return;
     if (res.code === "wrong_account") throw new StopPass("wrong_account");
     if (res.code === "not_entitled" || res.code === "not_authorized") throw new StopPass("paused");
+    if (res.code === "install_removed") {
+      // BACKLOG-4263 PR-4b (R8, D2): persisted per user, beside wrong_account; nothing else is sent this pass,
+      // and later passes make no call until the status check or the user's reclaim clears it.
+      if (this.passUser) todoStore.recordInstallRemoved(this.deps.db(), this.deps.projectRef, this.passUser, this.now());
+      this.log.warn("[CloudSync] Pass stopped: this computer's online copy was removed", { code: res.code });
+      throw new StopPass("install_removed");
+    }
   }
 
   private recordFailure(db: SqlDb, row: store.DirtyRow, res: CallResult): DealResult {
@@ -608,7 +678,12 @@ export class CloudSyncRunner {
       if (st.cloud_id) recordedDealCloudIds.add(st.cloud_id);
       const on = onlineDeals.get(st.local_id);
       if (eligible.has(st.local_id)) {
-        if (!on || on.cloudId !== st.cloud_id) {
+        if (on && on.cloudId === st.cloud_id && on.removed) {
+          // BACKLOG-4263 PR-4b: removed online but eligible here: uploaded again, which un-removes it under the
+          // same id with its todos (restore by becoming eligible again, plan §2.6).
+          nullHashes.push({ entity: "deal", localId: st.local_id });
+          mark.add(st.local_id);
+        } else if (!on || on.cloudId !== st.cloud_id) {
           // Gone online: forget the deal and every child record of it, then send it all again.
           todoResetDeals.push(st.local_id);
           nullHashes.push({ entity: "deal", localId: st.local_id });
@@ -657,6 +732,9 @@ export class CloudSyncRunner {
     // - otherwise: counted for Settings, never deleted here.
     const adopt: Array<{ localId: string; cloudId: string }> = [];
     for (const [localId, on] of onlineDeals) {
+      // BACKLOG-4263 PR-4b: a deal removed online (kept 30 days, restorable) is neither adopted nor counted as
+      // "saved online but not on this computer".
+      if (on.removed) continue;
       if (recordedDealCloudIds.has(on.cloudId)) continue;
       if (eligible.has(localId)) {
         if (!dealsWithState.has(localId)) {

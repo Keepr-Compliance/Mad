@@ -138,6 +138,13 @@ export function normOpId(opId: unknown): string {
  */
 export const SCAN_EPOCH = -1;
 
+/**
+ * PR-4b: the marker the puller writes into an outbox row's value_json when it keeps this computer's value on a
+ * locked deal instead of applying another side's change (plan §2.4 `held_locked`). A user edit of that part
+ * replaces value_json (capture trigger), which drops the marker.
+ */
+export const HELD_LOCKED_KEY = "_held_locked";
+
 export interface EncodeContext {
   cloudDealId: string;
   /** The counter's epoch now; an op from an earlier epoch is sent with clock_stepped = true (E2). */
@@ -218,6 +225,8 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
       value: partValue(row.part, v),
       base_rev: row.base_rev === null || row.base_rev === undefined ? null : toInt(row.base_rev),
       edit_seq: editSeq,
+      // PR-4b: the puller kept this computer's value on a locked deal (plan §2.4); the server records it as held_locked.
+      ...(v[HELD_LOCKED_KEY] === true || v[HELD_LOCKED_KEY] === 1 ? { held_locked: true } : {}),
     };
   }
   return null;

@@ -26,6 +26,7 @@ import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
 import { badTodoFields, FakeServer, jsonType, refusedFields, TODO_FIELD_TYPES, WIRE_EXAMPLES } from "./helpers/fakeServer";
 import { disableForUser, enableForUser, ensureInstall, preparePass } from "../../db/cloudSyncDbService";
 import * as todos from "../../db/cloudSyncTodoDbService";
+import { applyTodoPage } from "../../db/cloudSyncTodoPullDb";
 import { prepareRestoredFile, markAllEligibleAfterMigration } from "../../db/cloudSyncTriggers";
 import { encodeOp, compareForSend, SCAN_EPOCH, normOpId, wireOpId, type OutboxRow } from "../todos/wire";
 import { actionFor, ANSWER_TABLE } from "../todos/answers";
@@ -114,8 +115,11 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
   describe("W-wire: every outbox shape PR-3's triggers and the scan write encodes to the contract's types", () => {
     it("trigger-made rows (one of every kind of change) and scan-made rows: no field outside its contract type list; done is an object; booleans are JSON booleans", () => {
       const { db, deal } = profile();
-      // the initial scan's rows
+      // the scan's rows (PR-4b: the turn-on writes none; the scan runs after the first full pull)
+      expect(outbox(db)).toEqual([]);
+      todos.scanTodos(db, PROJECT, USER_A, new Date());
       const shapes: OutboxRow[] = [...outbox(db)];
+      expect(shapes.length).toBe(4);
       db.exec("DELETE FROM cloud_sync_todo_outbox");
       // one of every trigger-made shape
       db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 9), deal, "tpl-2", "Two", 2);
@@ -223,18 +227,24 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ send and confirm
   describe("S / R4: send and confirm", () => {
-    it("S: turn-on queues every existing todo (unknowable time), one pass sends them, the outbox empties, the shadow holds the server's revs, the cursor still owes a full pull", async () => {
+    it("S (PR-4b order): turn-on queues nothing and owes a full pull; one pass pulls, scans every existing todo (unknowable time) and sends them; the outbox empties, the shadow holds the server's revs, no full pull is owed", async () => {
       const { db } = profile();
-      expect(keys(outbox(db))).toEqual([`checklist:${CL}:create`, `checklist:${MY}:create`, `item:${I1}:create`, `item:${I2}:create`]);
-      expect(outbox(db).every((r) => r.clock_epoch === SCAN_EPOCH)).toBe(true);
+      expect(outbox(db)).toEqual([]);
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ last_seq: 0, full_pull_owed: 1 });
       const e = engine(db);
       await startAndPass(e);
+      // the order of the pass: the full pull before any todo push
+      const fns = e.server.calls.map((c) => c.fn).filter((f) => f === "cloud_todo_pull" || f === "cloud_todo_push");
+      expect(fns[0]).toBe("cloud_todo_pull");
       expect(pushes(e)).toHaveLength(1);
+      expect(keys(opsOf(e).map((o) => ({ entity: o.kind === "create_checklist" ? "checklist" : "item", local_id: o.local_id, part: "create" }) as unknown as OutboxRow))).toEqual(
+        [`checklist:${CL}:create`, `checklist:${MY}:create`, `item:${I1}:create`, `item:${I2}:create`],
+      );
       expect(opsOf(e).every((o) => o.clock_stepped === true)).toBe(true);
       expect(outbox(db)).toEqual([]);
       expect(e.server.todos.map((t) => `${t.entity}:${t.localId}`).sort()).toEqual([`checklist:${CL}`, `checklist:${MY}`, `item:${I1}`, `item:${I2}`]);
       expect(shadow(db, I1)).toMatchObject({ cloud_id: onlineItem(e, I1)!.id, done_rev: 1, note_rev: 1, title_json: JSON.stringify("Inspection") });
-      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toEqual({ last_seq: 0, full_pull_owed: 1 });
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ full_pull_owed: 0, horizon: 0 });
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
     });
 
@@ -330,8 +340,8 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     });
 
     it("R4: a replayed answer naming an older rev moves neither the shadow nor the local row back", () => {
-      const { db } = profile();
-      const row = outbox(db).find((r) => r.local_id === I1)!;
+      const { db, deal } = profile();
+      const row = { transaction_id: deal };
       db.prepare("INSERT INTO cloud_sync_todo_state (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, note_rev, note_json, updated_at) VALUES (?, ?, 'item', ?, ?, 'c-1', 5, ?, 'x')").run(
         PROJECT,
         USER_A,
@@ -600,7 +610,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("older op", I2);
       expect(prepareRestoredFile(db)).toBe(true);
       expect(outbox(db)).toEqual([]);
-      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toEqual({ last_seq: 0, full_pull_owed: 1 });
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ last_seq: 0, full_pull_owed: 1, horizon: null, full_pull_kind: "restore" });
       expect(markAllEligibleAfterMigration(db)).toBe(true);
       preparePass(db, PROJECT, USER_A, "2026-11-01T00:00:00.000Z", undefined, new Date());
       db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
@@ -609,6 +619,10 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(outbox(db)).toEqual([]);
       expect(pushes(e)).toHaveLength(before);
       expect(onlineItem(e, I1)!.parts.note.value).toBe("newer");
+      // PR-4b: the restore pull wrote the cloud's value over the backup's, so the scan after it finds nothing.
+      expect(item(db, I1).note).toBe("newer");
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter WHERE rewound_at IS NOT NULL")).toBe(0);
       expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
     });
 
@@ -638,6 +652,8 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("missed", I1);
       db.exec("DELETE FROM cloud_sync_applying");
+      // PR-4b: the first pass finished the full pull; owe one again to show the gate
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1").run();
       expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
       db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 0").run();
       expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(1);
@@ -661,7 +677,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
   // ================================================================ D6 / N3 / W30
   describe("D6 / N3 / W30: turn-off, turn-on and rebind clear the todo tables", () => {
-    it("edit offline, turn off, turn on: no op from before the turn-off is sent; the turn-on's own scan is; the first pull is owed", async () => {
+    it("edit offline, turn off, turn on: no op from before the turn-off is sent; the full pull and the scan after it run in the next pass", async () => {
       const { db, e } = await sentOnce();
       e.online.value = false;
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("offline", I1);
@@ -678,7 +694,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       await pass(e);
       const sent = allOps(e).map((o) => normOpId(o.op_id));
       for (const id of [...old, "ffffffffffffffffffffffffffffffff"]) expect(sent).not.toContain(id);
-      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toEqual({ last_seq: 0, full_pull_owed: 1 });
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ full_pull_owed: 0 });
       expect(outbox(db)).toEqual([]);
     });
 
@@ -708,14 +724,15 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       return db;
     }
 
-    it("runs once: the outbox, trash and old one-way item records go, stale counter rows go, the counter is seeded, the todos are queued; the next pass does not redo it", () => {
+    it("runs once: the outbox, trash and old one-way item records go, stale counter rows go, the counter is seeded, a full pull is owed (PR-4b: the scan waits for it); the next pass does not redo it", () => {
       const db = pr3Profile();
       const pr3Ops = outbox(db).map((r) => r.op_id);
       expect(todos.prepareTodoPass(db, PROJECT, USER_A, new Date())).toEqual({ oneShot: true });
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash")).toBe(0);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_state WHERE entity = 'checklist_item'")).toBe(0);
-      expect(db.prepare("SELECT install_id, edit_seq FROM cloud_sync_todo_counter").all()).toEqual([{ install_id: INSTALL, edit_seq: 3 }]);
-      expect(keys(outbox(db))).toEqual([`checklist:${CL}:create`, `checklist:${MY}:create`, `item:${I1}:create`]);
+      expect(db.prepare("SELECT install_id, edit_seq FROM cloud_sync_todo_counter").all()).toEqual([{ install_id: INSTALL, edit_seq: 0 }]);
+      expect(outbox(db)).toEqual([]);
+      expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ last_seq: 0, full_pull_owed: 1 });
       for (const id of pr3Ops) expect(outbox(db).map((r) => r.op_id)).not.toContain(id);
       // a new edit after the step, then the next pass's prepare: nothing is cleared again
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after", I1);
@@ -790,15 +807,22 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(shadow(db, I1)!.note_rev).toBe(t.parts.note.rev);
     });
 
-    it("two local users: one user's turn-on queues only that user's todos", () => {
+    it("two local users (PR-4b order): one user's turn-on owes only that user's full pull; the scan that pull ends with queues only that user's todos", () => {
       const { db } = profile();
       const deal = dealId();
       insertDeal(db, deal, USER_B);
       db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 80), deal, "tpl-b", "B list", 0);
+      todos.scanTodos(db, PROJECT, USER_A, new Date());
+      const aRows = outbox(db).map((r) => `${r.op_id}#${r.generation}`);
       expect(outbox(db, USER_B)).toEqual([]);
       turnOn(db, USER_B);
+      expect(outbox(db, USER_B)).toEqual([]);
+      expect(todos.getTodoCursor(db, PROJECT, USER_B)).toMatchObject({ full_pull_owed: 1 });
+      // B's (empty) full pull, through the real page applier
+      const counts = applyTodoPage(db, { projectRef: PROJECT, userId: USER_B, installId: INSTALL, now: new Date() }, { rows: [], next_after: 0, horizon: 0, install_max_edit_seq: null }, 500);
+      expect(counts).toMatchObject({ complete: true, fullPullDone: true, scanned: 1 });
       expect(keys(outbox(db, USER_B))).toEqual([`checklist:${fid(3, 80)}:create`]);
-      expect(outbox(db).every((r) => r.owner_user_id === USER_A)).toBe(true);
+      expect(outbox(db).map((r) => `${r.op_id}#${r.generation}`)).toEqual(aRows);
     });
   });
 

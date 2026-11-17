@@ -92,14 +92,18 @@ export function clearApplyGuard(db: SqlDb): void {
 export interface TodoCursor {
   last_seq: number;
   full_pull_owed: number;
+  /** PR-4b (v82): the horizon stored with last_seq; null before the first applied page. */
+  horizon?: number | null;
+  /** PR-4b (v82): 'restore' while the full pull owed after a backup restore has not finished. */
+  full_pull_kind?: string | null;
 }
 
 export function getTodoCursor(db: SqlDb, projectRef: string, userId: string): TodoCursor | null {
-  return (
-    (db.prepare("SELECT last_seq, full_pull_owed FROM cloud_sync_todo_cursor WHERE project_ref = ? AND owner_user_id = ?").get(projectRef, userId) as
-      | TodoCursor
-      | undefined) ?? null
-  );
+  const r = db.prepare("SELECT * FROM cloud_sync_todo_cursor WHERE project_ref = ? AND owner_user_id = ?").get(projectRef, userId) as
+    | (TodoCursor & Record<string, unknown>)
+    | undefined;
+  if (!r) return null;
+  return { last_seq: r.last_seq, full_pull_owed: r.full_pull_owed, horizon: r.horizon ?? null, full_pull_kind: r.full_pull_kind ?? null };
 }
 
 /**
@@ -113,7 +117,20 @@ export function todoScanAllowed(db: SqlDb, projectRef: string, userId: string): 
   return c !== null && c.full_pull_owed === 0;
 }
 
-function writeCursorOwed(db: SqlDb, projectRef: string, userId: string, now: Date): void {
+/**
+ * A full pull from 0 is owed (contract `pull.cursor`: it starts with no horizon). `kind` 'restore' (after a
+ * backup restore) makes the cloud's values win in that pull; otherwise a part this computer wrote last keeps
+ * the local value (PR-4b, see cloudSyncTodoPullDb.ts).
+ */
+export function writeCursorOwed(db: SqlDb, projectRef: string, userId: string, now: Date, kind: "restore" | null = null): void {
+  if (hasColumn(db, "cloud_sync_todo_cursor", "horizon")) {
+    db.prepare(
+      `INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at, horizon, full_pull_kind) VALUES (?, ?, 0, 1, ?, NULL, ?)
+       ON CONFLICT (project_ref, owner_user_id) DO UPDATE SET last_seq = 0, full_pull_owed = 1, updated_at = excluded.updated_at,
+         horizon = NULL, full_pull_kind = CASE WHEN cloud_sync_todo_cursor.full_pull_kind = 'restore' THEN 'restore' ELSE excluded.full_pull_kind END`,
+    ).run(projectRef, userId, now.toISOString(), kind);
+    return;
+  }
   db.prepare(
     `INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at) VALUES (?, ?, 0, 1, ?)
      ON CONFLICT (project_ref, owner_user_id) DO UPDATE SET last_seq = 0, full_pull_owed = 1, updated_at = excluded.updated_at`,
@@ -160,7 +177,7 @@ export function stepTodoEpoch(db: SqlDb, projectRef: string, now: Date): number 
  * computer stored online for a NEWER value before the restore, and win through the same-install arm: while
  * the counter is rewound, scan ops carry no edit_seq (with their unknowable time they then never win).
  */
-function nextEditSeq(db: SqlDb, projectRef: string): number | null {
+export function nextEditSeq(db: SqlDb, projectRef: string): number | null {
   const install = currentInstallId(db, projectRef);
   if (!install) return null;
   const k = db.prepare("SELECT rewound_at FROM cloud_sync_todo_counter WHERE project_ref = ? AND install_id = ?").get(projectRef, install) as
@@ -231,6 +248,16 @@ export function scanTodos(db: SqlDb, projectRef: string, userId: string, now: Da
       part: string;
     }>).map((r) => `${r.entity}|${r.local_id}|${r.part}`),
   );
+  // PR-4b: a create the server answered with a kept refusal (a notice records it) is not queued again by a
+  // later scan: an exact resend would be refused the same way every day.
+  const refused = new Set(
+    (db
+      .prepare(
+        `SELECT entity, local_id FROM cloud_sync_todo_notices WHERE project_ref = ? AND owner_user_id = ? AND part = 'create'
+            AND kind IN ('rejected', 'not_allowed', 'not_restorable') AND dismissed_at IS NULL`,
+      )
+      .all(projectRef, userId) as Array<{ entity: string; local_id: string }>).map((r) => `${r.entity}|${r.local_id}`),
+  );
   const at = now.toISOString();
   const insert = db.prepare(
     `INSERT INTO cloud_sync_todo_outbox
@@ -242,6 +269,7 @@ export function scanTodos(db: SqlDb, projectRef: string, userId: string, now: Da
   const add = (entity: string, localId: string, part: string, tx: string, value: string, baseRev: number | null) => {
     const key = `${entity}|${localId}|${part}`;
     if (pending.has(key)) return;
+    if (part === "create" && refused.has(`${entity}|${localId}`)) return;
     // A part never goes out while its entity's create is still waiting: the create carries it.
     if (part !== "create" && pending.has(`${entity}|${localId}|create`)) return;
     insert.run(projectRef, userId, entity, localId, part, tx, value, baseRev, nextEditSeq(db, projectRef), at, SCAN_EPOCH);
@@ -319,21 +347,43 @@ export function scanTodosAllEnabled(db: SqlDb, now: Date): number {
 
 /**
  * A fresh start for this user's todos, in the caller's transaction: clear every per-user todo row and the
- * old one-way records of checklists and items (N3), seed this computer's counter (N1b), record that a full
- * pull is owed (D6), and run the initial scan against the now-empty shadow (coordinator ruling on E4,
- * 2026-11-17: the only scan a 4a build runs; every op it writes is sent with an unknowable time).
+ * old one-way records of checklists and items (N3), seed this computer's counter (N1b) and record that a full
+ * pull is owed (D6). PR-4b order (PR-4a review C): no scan here. The pass pushes what is waiting, runs the full
+ * pull (which records what the cloud already holds in the shadow), raises the counter, and only then scans
+ * (cloudSyncTodoPullDb.applyTodoPage, last page). Returns 0 (no op is written here).
  */
 export function startTodoTracking(db: SqlDb, projectRef: string, userId: string, now: Date): number {
   if (!hasTable(db, "cloud_sync_todo_outbox")) return 0;
   return db.transaction(() => {
     clearTodoStateForUser(db, projectRef, userId);
+    // PR-4b: an old one-way record of a checklist or item saved online whose local row is gone (deleted here,
+    // the one-way removal never sent) becomes a removal op before the record goes, so the full pull does not
+    // bring that todo back (the op waits for the pull, which records the todo's cloud id in the shadow).
+    const at = now.toISOString();
+    const gone = db
+      .prepare(
+        `SELECT s.entity, s.local_id, s.transaction_id FROM cloud_sync_state s
+          WHERE s.project_ref = ? AND s.owner_user_id = ? AND s.entity IN ('checklist', 'checklist_item') AND s.cloud_id IS NOT NULL
+            AND coalesce(s.removed, 0) = 0
+            AND NOT EXISTS (SELECT 1 FROM transaction_checklists c WHERE s.entity = 'checklist' AND c.id = s.local_id)
+            AND NOT EXISTS (SELECT 1 FROM transaction_checklist_items i WHERE s.entity = 'checklist_item' AND i.id = s.local_id)
+            AND EXISTS (SELECT 1 FROM transactions t WHERE t.id = s.transaction_id AND t.user_id = s.owner_user_id)`,
+      )
+      .all(projectRef, userId) as Array<{ entity: string; local_id: string; transaction_id: string }>;
+    const removal = db.prepare(
+      `INSERT INTO cloud_sync_todo_outbox
+         (project_ref, owner_user_id, entity, local_id, part, transaction_id, value_json, base_rev, edit_seq, edited_at, clock_epoch, op_id, generation)
+       VALUES (?, ?, ?, ?, 'removed', ?, '{"removed":1}', NULL, NULL, ?, NULL, lower(hex(randomblob(16))), 1)
+       ON CONFLICT (project_ref, owner_user_id, entity, local_id, part) DO NOTHING`,
+    );
+    for (const g of gone) removal.run(projectRef, userId, g.entity === "checklist" ? "checklist" : "item", g.local_id, g.transaction_id, at);
     db.prepare("DELETE FROM cloud_sync_state WHERE project_ref = ? AND owner_user_id = ? AND entity IN ('checklist', 'checklist_item')").run(
       projectRef,
       userId,
     );
     seedTodoCounter(db, projectRef);
     writeCursorOwed(db, projectRef, userId, now);
-    return scanTodos(db, projectRef, userId, now);
+    return 0;
   })();
 }
 
@@ -399,13 +449,16 @@ export function resetTodosAfterRestore(db: SqlDb, now: Date): boolean {
     for (const s of db.prepare("SELECT project_ref, user_id FROM cloud_sync_settings WHERE enabled = 1").all() as Array<{ project_ref: string; user_id: string }>) {
       if (getTodoCursor(db, s.project_ref, s.user_id)) continue;
       for (const t of TODO_USER_TABLES) db.prepare(`DELETE FROM ${t} WHERE project_ref = ? AND owner_user_id = ?`).run(s.project_ref, s.user_id);
-      writeCursorOwed(db, s.project_ref, s.user_id, now);
+      writeCursorOwed(db, s.project_ref, s.user_id, now, "restore");
     }
     db.exec(`DELETE FROM cloud_sync_todo_outbox WHERE EXISTS (
       SELECT 1 FROM cloud_sync_todo_state st WHERE st.project_ref = cloud_sync_todo_outbox.project_ref
          AND st.owner_user_id = cloud_sync_todo_outbox.owner_user_id AND st.entity = cloud_sync_todo_outbox.entity
          AND st.local_id = cloud_sync_todo_outbox.local_id AND st.cloud_id IS NOT NULL)`);
     db.prepare("UPDATE cloud_sync_todo_cursor SET last_seq = 0, full_pull_owed = 1, updated_at = ?").run(at);
+    // PR-4b: the full pull this owes is a restore pull (the cloud's values win), per user; the horizon goes with
+    // the cursor (a full pull starts with none).
+    if (hasColumn(db, "cloud_sync_todo_cursor", "horizon")) db.exec("UPDATE cloud_sync_todo_cursor SET horizon = NULL, full_pull_kind = 'restore'");
     db.prepare("UPDATE cloud_sync_todo_counter SET rewound_at = ?").run(at);
   })();
   return true;
@@ -441,9 +494,45 @@ export function readTodoOutbox(db: SqlDb, projectRef: string, userId: string): {
     const del = db.prepare(
       "DELETE FROM cloud_sync_todo_outbox WHERE project_ref = ? AND owner_user_id = ? AND entity = ? AND local_id = ? AND part = ? AND generation = ?",
     );
+    // PR-4b (PR-4a review B, "loop"): an op that can never be applied online. A part or removal op of a todo
+    // the cloud has no record of (no cloud id in the shadow) and whose create is not waiting either (it was
+    // answered with a kept refusal and dropped), and an item create whose checklist is in the same position:
+    // the server answers not_found / parent_missing to these on every pass forever. They are dropped with a
+    // notice instead. While a full pull is owed such ops wait instead.
+    const online = new Set(
+      (db
+        .prepare("SELECT entity, local_id FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND cloud_id IS NOT NULL")
+        .all(projectRef, userId) as Array<{ entity: string; local_id: string }>).map((x) => `${x.entity}|${x.local_id}`),
+    );
+    const creates = new Set(rows.filter((r) => r.part === "create").map((r) => `${r.entity}|${r.local_id}`));
+    const owed = getTodoCursor(db, projectRef, userId)?.full_pull_owed === 1;
+    const known = (entity: string, localId: string) => online.has(`${entity}|${localId}`) || creates.has(`${entity}|${localId}`);
+    const note = db.prepare(
+      `INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, transaction_id, other_json, actor_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, 'dropped_not_online', ?, ?, 'desktop', ?)`,
+    );
+    const at = new Date().toISOString();
     for (const r of rows) {
+      let checklistOf: string | null = null;
+      if (r.part === "create" && r.entity === "item") {
+        try {
+          const v = JSON.parse(r.value_json ?? "{}") as { checklist_id?: unknown };
+          checklistOf = typeof v.checklist_id === "string" ? v.checklist_id : null;
+        } catch {
+          checklistOf = null;
+        }
+      }
+      const unreachable = r.part === "create" ? checklistOf !== null && !known("checklist", checklistOf) : !known(r.entity, r.local_id);
       if (!r.cloud_deal_id && !r.deal_here) {
         del.run(r.project_ref, r.owner_user_id, r.entity, r.local_id, r.part, r.generation);
+        dropped++;
+      } else if (unreachable && owed) {
+        // Before the full pull the shadow is not filled yet: the op waits for it (after the pull the todo is
+        // known, or the scan queues its create).
+        waiting++;
+      } else if (unreachable) {
+        del.run(r.project_ref, r.owner_user_id, r.entity, r.local_id, r.part, r.generation);
+        note.run(r.project_ref, r.owner_user_id, r.entity, r.local_id, r.part, r.transaction_id, JSON.stringify({ reason: r.part === "create" ? "checklist_not_online" : "todo_not_online" }), at);
         dropped++;
       } else if (!r.cloud_deal_id) waiting++;
       else ready.push(r);
@@ -467,6 +556,12 @@ export function recordInstallRemoved(db: SqlDb, projectRef: string, userId: stri
     projectRef,
     userId,
   );
+}
+
+/** PR-4b (D2): the once-per-launch status check found the copy restored elsewhere: the stop is lifted. */
+export function clearInstallRemoved(db: SqlDb, projectRef: string, userId: string): void {
+  if (!hasColumn(db, "cloud_sync_settings", "install_removed_at")) return;
+  db.prepare("UPDATE cloud_sync_settings SET install_removed_at = NULL WHERE project_ref = ? AND user_id = ?").run(projectRef, userId);
 }
 
 // ---------------------------------------------------------------- confirm (R4)

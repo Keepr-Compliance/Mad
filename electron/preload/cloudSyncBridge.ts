@@ -16,4 +16,5 @@ export const cloudSyncBridge: WindowApiCloudSync = {
   openAiApps: () => ipcRenderer.invoke("cloud-sync:open-ai-apps"),
   deleteOnlineNotHere: () => ipcRenderer.invoke("cloud-sync:delete-online-not-here"),
   deleteOldInstalls: () => ipcRenderer.invoke("cloud-sync:delete-old-installs"),
+  reclaimInstall: () => ipcRenderer.invoke("cloud-sync:reclaim-install"),
 };

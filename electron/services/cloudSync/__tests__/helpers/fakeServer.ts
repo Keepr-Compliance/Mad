@@ -45,6 +45,38 @@
  *     {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "…", "by": "desktop:<uuid>", "rev": 1,
  *      "value": null, "edit_seq": null}, …}, …}]} and {"op_id": "<uuid>", "entity": "item", "status": "locked", …}
  * The answers to RE-CHECK against the applied functions are listed in the PR-4a handoff.
+ *
+ * BACKLOG-4263 PR-4b — the change feed and the calls around it, transcribed from the same migration (this tree)
+ * and checked against the real functions by supabase/tests/backlog-4263-pr4b/harness-4b.sql (keepr-test, rolled
+ * back; observed shapes in that file's handback):
+ *   cloud_todo_pull :1018-1075   {ok, head, rows, horizon, next_after, install_max_edit_seq, resync_required};
+ *                                horizon_required when p_after_seq > 0 without p_horizon; rows of this owner's
+ *                                deals of this install only, in change_seq order, (after, head], at most p_limit;
+ *                                next_after = the last number of a full page, else greatest(head, after);
+ *                                resync_required = after > head OR (after > 0 AND forgotten_at > horizon AND
+ *                                forgotten_through_seq > after); install_max_edit_seq = the highest edit_seq of a
+ *                                part this install wrote (null when none). Row shapes: _cloud_todo_item_json
+ *                                :331-350, _cloud_todo_checklist_json :352-366 (a purged row: ids and purged:true
+ *                                only), deal {entity, cloud_id, local_id, change_seq, removed_at, removed_kind,
+ *                                restorable_until}, event {entity:'event', change_seq, cloud_deal_id, about,
+ *                                cloud_id, part, outcome, loser_value, winner_value, by, label, other_by,
+ *                                effective_at, received_at}.
+ *   numbering (_cloud_todo_take_seq, _cloud_todo_write_part :419-457): every write of a part, a create, a removal,
+ *                                a restore and a conflict event takes a new number; an equal value takes none for
+ *                                the row (observed O3: this install's own change comes back with the answer's rev).
+ *   conflict events (:860-869): applied with conflict -> loser = the stored value, winner = the incoming one;
+ *                                lost -> loser = the incoming value, winner = the stored one; by = the incoming actor.
+ *   _cloud_todo_unremove_deal :487-514 (F4): the deal and its live checklists and items take new numbers.
+ *   cloud_todo_restore of a checklist does NOT renumber its items (observed O5f: 0 item rows in the next pull).
+ *   cloud_delete_deal / cloud_delete_install: soft removal (removed_kind deal / install) with a new deal number;
+ *                                cloud_list_install_rows lists a soft-removed deal with removed:true (observed O9c);
+ *                                a removed install's pull still answers (observed O10b), its writes answer
+ *                                install_removed.
+ *   cloud_install_status :1210-1224 {ok, removed}; cloud_reclaim_install :1193-1208 {ok, removed_entry}, the delete
+ *                                keyed on the caller (observed O10c: B's register row stays).
+ *   _cloud_todo_purge :1261-  an item or checklist removed > 30 days: purged (no content) with a new number; the
+ *                                owner's forgotten_through_seq rises to the deleted numbers and forgotten_at takes
+ *                                a new number (observed O8b-d).
  */
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
@@ -167,6 +199,26 @@ export interface FakeTodo {
   parts: Record<string, FakeTodoPart>;
   /** Contract my_items (@ 00bd934db): other local ids a `mapped` answer recorded for this list. */
   aliases?: string[];
+  /** PR-4b: the row's feed number (change_seq). */
+  changeSeq?: number;
+  purged?: boolean;
+  /** PR-4b: set-once fields the pull returns (item: description, is_required, expected_document_type; checklist: template_name, is_private). */
+  fields?: Record<string, JsonValue>;
+}
+
+export interface FakeEvent {
+  owner: string;
+  dealId: string;
+  seq: number;
+  about: string;
+  cloudId: string;
+  part: string;
+  outcome: string;
+  loser: JsonValue;
+  winner: JsonValue;
+  by: string;
+  otherBy: string;
+  at: number;
 }
 
 export interface FakeDeal {
@@ -178,6 +230,9 @@ export interface FakeDeal {
   version: number;
   fullSyncAt: string | null;
   lastSyncedAt?: string;
+  /** PR-4b: feed number and soft removal. */
+  changeSeq?: number;
+  removedKind?: "deal" | "install" | null;
 }
 
 export type FakeKind = "party" | "checklist" | "checklist_item";
@@ -196,7 +251,7 @@ export interface FakeChild {
 }
 
 export const DROPPED_FUNCTIONS = ["cloud_upsert_checklists", "cloud_upsert_checklist_items"];
-export const READ_FUNCTIONS = ["get_my_cloud_autosave_state", "cloud_list_install_rows", "cloud_list_installs"];
+export const READ_FUNCTIONS = ["get_my_cloud_autosave_state", "cloud_list_install_rows", "cloud_list_installs", "cloud_todo_pull", "cloud_install_status"];
 
 export type Override = (fn: string, args: Record<string, JsonValue>) => RpcResponse | Error | undefined;
 
@@ -224,6 +279,17 @@ export class FakeServer {
   softRemovedDeals: FakeDeal[] = [];
   /** The server's clock for receive times (ms). */
   serverNow = () => Date.parse("2026-11-14T12:00:05.000Z");
+  /** PR-4b: the owner's feed head (cloud_todo_feed_head: last_seq, forgotten_through_seq, forgotten_at). */
+  feed = new Map<string, { last: number; forgotThrough: number; forgotAt: number }>();
+  events: FakeEvent[] = [];
+
+  /** _cloud_todo_take_seq: the owner's next number. */
+  nextSeq(owner: string): number {
+    const h = this.feed.get(owner) ?? { last: 0, forgotThrough: 0, forgotAt: 0 };
+    h.last += 1;
+    this.feed.set(owner, h);
+    return h.last;
+  }
 
   constructor(user: string) {
     this.tokenUser = user;
@@ -298,6 +364,8 @@ export class FakeServer {
         for (const k of [...this.todoLedger.keys()]) if (k.startsWith(`${uid}|`)) this.todoLedger.delete(k);
         for (const k of [...this.removedInstalls]) if (k.startsWith(`${uid}|`)) this.removedInstalls.delete(k);
         this.softRemovedDeals = this.softRemovedDeals.filter((d) => d.owner !== uid);
+        this.feed.delete(uid);
+        this.events = this.events.filter((e) => e.owner !== uid);
         const n = this.deals.filter((d) => d.owner === uid).length;
         this.deals = this.deals.filter((d) => d.owner !== uid);
         this.children = this.children.filter((c) => c.owner !== uid);
@@ -306,6 +374,7 @@ export class FakeServer {
       case "cloud_upsert_deal": {
         if (!this.entitled()) return { ok: false, error: "not_entitled" };
         const p = a.p_deal as Record<string, JsonValue>;
+        if (this.removedInstalls.has(`${uid}|${p.source_install_id}`)) return { ok: false, error: "install_removed" };
         const key = (d: FakeDeal) => d.owner === uid && d.install === p.source_install_id && d.localId === p.local_id;
         let d = this.deals.find(key);
         let status = "applied";
@@ -316,9 +385,13 @@ export class FakeServer {
           this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== soft);
           this.deals.push(soft);
           d = soft;
+          // F4: the deal and its live checklists and items take new numbers
+          soft.removedKind = null;
+          soft.changeSeq = this.nextSeq(uid);
+          for (const t of this.todos) if (t.dealId === soft.id && !t.removed && !t.purged) t.changeSeq = this.nextSeq(uid);
         }
         if (!d) {
-          d = { id: cloudId(), owner: uid, install: p.source_install_id as string, localId: p.local_id as string, hash: "", version: 0, fullSyncAt: null };
+          d = { id: cloudId(), owner: uid, install: p.source_install_id as string, localId: p.local_id as string, hash: "", version: 0, fullSyncAt: null, changeSeq: this.nextSeq(uid) };
           this.deals.push(d);
         }
         if (d.version > 0 && d.hash === p.content_hash) status = "unchanged";
@@ -333,6 +406,8 @@ export class FakeServer {
         if (i < 0) return { ok: false, error: "not_found" };
         const gone = this.deals.splice(i, 1)[0];
         this.children = this.children.filter((c) => c.dealId !== gone.id);
+        gone.removedKind = "deal";
+        gone.changeSeq = this.nextSeq(uid);
         this.softRemovedDeals.push(gone);
         return { ok: true, deleted: { parties: 0, checklists: 0, checklist_items: 0, messages: 0, files: 0 }, blobs_fenced: 0 };
       }
@@ -420,6 +495,10 @@ export class FakeServer {
             ? this.deals
                 .filter((d) => d.owner === uid && d.install === a.p_source_install_id)
                 .map((d) => ({ cloud_id: d.id, cloud_deal_id: d.id, local_id: d.localId, content_hash: d.hash, removed: false }))
+                // PR-4b (observed O9c): a soft-removed deal is listed with removed: true
+                .concat(this.softRemovedDeals
+                  .filter((d) => d.owner === uid && d.install === a.p_source_install_id)
+                  .map((d) => ({ cloud_id: d.id, cloud_deal_id: d.id, local_id: d.localId, content_hash: d.hash, removed: true })))
             : this.children
                 .filter((c) => c.owner === uid && c.kind === kind && this.deals.some((d) => d.id === c.dealId && d.install === a.p_source_install_id))
                 .map((c) => ({ cloud_id: c.id, cloud_deal_id: c.dealId, local_id: c.localId, content_hash: c.hash, removed: c.removed }));
@@ -442,8 +521,26 @@ export class FakeServer {
         const gone = this.deals.filter((d) => d.owner === uid && d.install === a.p_source_install_id);
         this.deals = this.deals.filter((d) => !gone.includes(d));
         this.children = this.children.filter((c) => !gone.some((d) => d.id === c.dealId));
-        return { success: true, deleted_deals: gone.length, blobs_fenced: 0 };
+        // PR-2: soft removal (kind install), restorable 30 days
+        for (const d of gone) {
+          d.removedKind = "install";
+          d.changeSeq = this.nextSeq(uid);
+          this.softRemovedDeals.push(d);
+        }
+        return { success: true, deleted_deals: gone.length, blobs_fenced: 0, restorable: true };
       }
+      case "cloud_install_status":
+        if (!a.p_source_install_id) return { ok: false, error: "invalid_input" };
+        return { ok: true, removed: this.removedInstalls.has(`${uid}|${a.p_source_install_id}`) };
+      case "cloud_reclaim_install": {
+        if (!a.p_source_install_id) return { ok: false, error: "invalid_input" };
+        // the DELETE is keyed on the caller (auth.uid()), never the argument
+        const k = `${uid}|${a.p_source_install_id}`;
+        const had = this.removedInstalls.delete(k);
+        return { ok: true, removed_entry: had };
+      }
+      case "cloud_todo_pull":
+        return this.todoPull(uid, a);
       default:
         throw new Error(`unexpected rpc ${fn}`);
     }
@@ -482,17 +579,25 @@ export class FakeServer {
     const es = typeof op.edit_seq === "number" ? op.edit_seq : null;
     const write = () => {
       t.parts[part] = { rev: cur.rev + 1, value, at: Math.max(cur.at, eff), by, edit_seq: es };
+      t.changeSeq = this.nextSeq(t.owner);
     };
+    // PR-4b: a conflict event with its own number (migration :860-869)
+    const event = (outcome: string, loser: JsonValue, winner: JsonValue) =>
+      this.events.push({ owner: t.owner, dealId: t.dealId, seq: this.nextSeq(t.owner), about: t.entity, cloudId: t.id, part, outcome, loser, winner, by, otherBy: cur.by, at: eff });
     if (base === cur.rev || (cur.by === by && es !== null && es > (cur.edit_seq ?? -1))) {
       write();
       return { status: onRemoved ? "applied_to_removed" : "applied", conflict: false };
     }
     const curKind = cur.by.split(":")[0];
-    const wins = eff > cur.at || (eff === cur.at && "desktop" > curKind);
+    const kind = by.split(":")[0];
+    const wins = eff > cur.at || (eff === cur.at && kind > curKind);
     if (wins) {
+      const old = cur.value;
       write();
+      event(onRemoved ? "applied_to_removed" : "applied", old, value);
       return { status: onRemoved ? "applied_to_removed" : "applied", conflict: true };
     }
+    event("lost", value, cur.value);
     return { status: "lost", conflict: true };
   }
 
@@ -563,7 +668,8 @@ export class FakeServer {
         }
         const t: FakeTodo = {
           id: cloudId(), owner: uid, dealId: deal.id, entity: "checklist", localId: op.local_id as string, checklistId: null,
-          templateId: op.template_id as string, removed: false,
+          templateId: op.template_id as string, removed: false, changeSeq: this.nextSeq(uid),
+          fields: { template_name: (op.template_name ?? null) as JsonValue, is_private: op.is_private === true },
           parts: {
             order: { rev: 1, value: (op.sort_order ?? null) as JsonValue, at: eff, by, edit_seq: es },
             removed: { rev: 1, value: { removed_at: null, kind: null }, at: eff, by, edit_seq: null },
@@ -598,6 +704,8 @@ export class FakeServer {
       }
       const t: FakeTodo = {
         id: cloudId(), owner: uid, dealId: deal.id, entity: "item", localId: op.local_id as string, checklistId: cl.id, templateId: null, removed: false,
+        changeSeq: this.nextSeq(uid),
+        fields: { description: (op.description ?? null) as JsonValue, is_required: op.is_required === true, expected_document_type: (op.expected_document_type ?? null) as JsonValue, local_created_at: (op.local_created_at ?? null) as JsonValue },
         parts: {
           ...Object.fromEntries(["done", "title", "note", "due", "order"].map((p) => [p, { rev: 1, value: values[p], at: eff, by, edit_seq: es }])),
           removed: { rev: 1, value: { removed_at: null, kind: null }, at: eff, by, edit_seq: null },
@@ -612,6 +720,7 @@ export class FakeServer {
       ? this.todos.find((x) => x.entity === ent && x.dealId === dl.deal.id && (x.localId === op.local_id || (x.aliases ?? []).includes(op.local_id as string)))
       : undefined;
     if (!dl || !t) return { op_id: opId, status: "not_found" };
+    if (t.purged) return { op_id: opId, status: "not_restorable", entity: ent, cloud_id: t.id };
     const parent = t.checklistId ? this.todos.find((x) => x.id === t.checklistId) : undefined;
     const onRemoved = t.removed || dl.removed || !!parent?.removed;
     if (kind === "remove") {
@@ -621,6 +730,7 @@ export class FakeServer {
       const cur = t.parts.removed;
       t.parts.removed = { rev: cur.rev + 1, value: { removed_at: new Date(recv).toISOString(), kind: ent }, at: Math.max(cur.at, eff), by, edit_seq: es };
       t.removed = true;
+      t.changeSeq = this.nextSeq(uid);
       return this.todoAnswer(opId, "removed", t);
     }
     if (kind !== "set") return { op_id: opId, status: "rejected", reason: "invalid_value", field: "kind" };
@@ -628,5 +738,123 @@ export class FakeServer {
     if (!(part in t.parts) || part === "removed") return { op_id: opId, status: "rejected", reason: "invalid_value", field: "part" };
     const r = this.mergePart(t, part, (op.value ?? null) as JsonValue, op, by, eff, onRemoved);
     return this.todoAnswer(opId, r.status, t, r.conflict);
+  }
+
+  // ------------------------------------------------------------ cloud_todo_pull (BACKLOG-4263 PR-4b, see header)
+
+  private feedRow(t: FakeTodo): Record<string, JsonValue> {
+    const base: Record<string, JsonValue> =
+      t.entity === "item"
+        ? { entity: "item", cloud_id: t.id, cloud_deal_id: t.dealId, cloud_checklist_id: t.checklistId, local_id: t.localId, change_seq: t.changeSeq ?? 0, purged: !!t.purged }
+        : { entity: "checklist", cloud_id: t.id, cloud_deal_id: t.dealId, local_id: t.localId, change_seq: t.changeSeq ?? 0, purged: !!t.purged, template_id: t.templateId };
+    if (t.purged) return base;
+    const f = t.fields ?? {};
+    const extra: Record<string, JsonValue> =
+      t.entity === "item"
+        ? { description: f.description ?? null, is_required: f.is_required ?? false, expected_document_type: f.expected_document_type ?? null, local_created_at: f.local_created_at ?? null, created_by: "desktop:", created_at: "2026-11-14T10:00:00.000Z" }
+        : { template_name: f.template_name ?? null, is_private: f.is_private ?? false, created_by: "desktop:" };
+    return { ...base, ...extra, parts: this.todoJson(t) };
+  }
+
+  private todoPull(uid: string, a: Record<string, JsonValue>): unknown {
+    if (!this.entitled()) return { ok: false, error: "not_entitled" };
+    const install = a.p_source_install_id as string;
+    if (!install) return { ok: false, error: "invalid_input" };
+    const after = Math.max(typeof a.p_after_seq === "number" ? a.p_after_seq : 0, 0);
+    const horizon = typeof a.p_horizon === "number" ? a.p_horizon : null;
+    if (after > 0 && horizon === null) return { ok: false, error: "horizon_required" };
+    const lim = Math.min(Math.max(typeof a.p_limit === "number" ? a.p_limit : 500, 1), 500);
+    const h = this.feed.get(uid) ?? { last: 0, forgotThrough: 0, forgotAt: 0 };
+    const deals = [...this.deals, ...this.softRemovedDeals].filter((d) => d.owner === uid && d.install === install);
+    const dealIds = new Set(deals.map((d) => d.id));
+    const all: Array<{ seq: number; j: JsonValue }> = [];
+    for (const d of deals) {
+      const removed = this.softRemovedDeals.includes(d);
+      all.push({ seq: d.changeSeq ?? 0, j: { entity: "deal", cloud_id: d.id, local_id: d.localId, change_seq: d.changeSeq ?? 0,
+        removed_at: removed ? "2026-11-14T11:00:00.000Z" : null, removed_kind: removed ? (d.removedKind ?? "deal") : null,
+        restorable_until: removed ? "2026-12-14T11:00:00.000Z" : null } });
+    }
+    for (const t of this.todos) if (t.owner === uid && dealIds.has(t.dealId)) all.push({ seq: t.changeSeq ?? 0, j: this.feedRow(t) });
+    for (const e of this.events) {
+      if (e.owner !== uid || !dealIds.has(e.dealId)) continue;
+      all.push({ seq: e.seq, j: { entity: "event", change_seq: e.seq, cloud_deal_id: e.dealId, about: e.about, cloud_id: e.cloudId, part: e.part,
+        outcome: e.outcome, loser_value: e.loser, winner_value: e.winner, by: e.by, label: e.by.startsWith("ai_app") ? "Claude" : "Keepr desktop",
+        other_by: e.otherBy, effective_at: Number.isFinite(e.at) ? new Date(e.at).toISOString() : "-infinity", received_at: new Date(this.serverNow()).toISOString() } });
+    }
+    const page = all.filter((x) => x.seq > after && x.seq <= h.last).sort((x, y) => x.seq - y.seq).slice(0, lim);
+    const by = `desktop:${install}`;
+    let max: number | null = null;
+    for (const t of this.todos) {
+      if (t.owner !== uid || t.purged) continue;
+      for (const p of Object.values(t.parts)) if (p.by === by && p.edit_seq !== null) max = Math.max(max ?? p.edit_seq, p.edit_seq);
+    }
+    return {
+      ok: true,
+      head: h.last,
+      rows: page.map((x) => x.j),
+      horizon: h.forgotAt,
+      next_after: page.length === lim ? page[page.length - 1].seq : Math.max(h.last, after),
+      install_max_edit_seq: max,
+      resync_required: after > h.last || (after > 0 && h.forgotAt > (horizon as number) && h.forgotThrough > after),
+    };
+  }
+
+  // ------------------------------------------------------------ test helpers: another side's change through the core
+
+  /** An AI-app `set` (the core fills the base from the current row, so it is causal): the merge of :793-858. */
+  aiSet(t: FakeTodo, part: string, value: JsonValue, atMs: number = this.serverNow(), ref = "conn-1"): string {
+    if (t.removed) return "refused_removed";
+    const cur = t.parts[part];
+    if ((part === "done" ? !!(cur.value as Record<string, JsonValue>)?.is_checked === !!(value as Record<string, JsonValue>)?.is_checked : JSON.stringify(cur.value) === JSON.stringify(value))) return "unchanged";
+    t.parts[part] = { rev: cur.rev + 1, value, at: Math.max(cur.at, atMs), by: `ai_app:${ref}`, edit_seq: null };
+    t.changeSeq = this.nextSeq(t.owner);
+    return "applied";
+  }
+
+  /** An AI-app add to a checklist (local_item_id = the new id, :690-720). */
+  aiAdd(checklist: FakeTodo, title: string, atMs: number = this.serverNow()): FakeTodo {
+    const id = cloudId();
+    const by = "ai_app:conn-1";
+    const t: FakeTodo = {
+      id, owner: checklist.owner, dealId: checklist.dealId, entity: "item", localId: id, checklistId: checklist.id, templateId: null, removed: false,
+      changeSeq: this.nextSeq(checklist.owner),
+      fields: { description: null, is_required: false, expected_document_type: null, local_created_at: null },
+      parts: {
+        done: { rev: 1, value: { is_checked: false, checked_at: null }, at: atMs, by, edit_seq: null },
+        title: { rev: 1, value: title, at: atMs, by, edit_seq: null },
+        note: { rev: 1, value: null, at: atMs, by, edit_seq: null },
+        due: { rev: 1, value: null, at: atMs, by, edit_seq: null },
+        order: { rev: 1, value: 99, at: atMs, by, edit_seq: null },
+        removed: { rev: 1, value: { removed_at: null, kind: null }, at: atMs, by, edit_seq: null },
+      },
+    };
+    this.todos.push(t);
+    return t;
+  }
+
+  /** A removal by another side (AI app or the owner online). */
+  removeOnline(t: FakeTodo, by = "ai_app:conn-1"): void {
+    const cur = t.parts.removed;
+    t.parts.removed = { rev: cur.rev + 1, value: { removed_at: new Date(this.serverNow()).toISOString(), kind: t.entity }, at: this.serverNow(), by, edit_seq: null };
+    t.removed = true;
+    t.changeSeq = this.nextSeq(t.owner);
+  }
+
+  /** cloud_todo_restore of an item or checklist (a checklist's items are NOT renumbered: observed O5f). */
+  restoreOnline(t: FakeTodo, by = "cloud_user:owner"): void {
+    const cur = t.parts.removed;
+    t.parts.removed = { rev: cur.rev + 1, value: { removed_at: null, kind: null }, at: this.serverNow(), by, edit_seq: null };
+    t.removed = false;
+    t.changeSeq = this.nextSeq(t.owner);
+  }
+
+  /** The daily purge of one removed todo (observed O8): no content, a new number, the forgotten markers move. */
+  purgeOnline(t: FakeTodo): void {
+    const h = this.feed.get(t.owner) ?? { last: 0, forgotThrough: 0, forgotAt: 0 };
+    h.forgotThrough = Math.max(h.forgotThrough, t.changeSeq ?? 0);
+    this.feed.set(t.owner, h);
+    t.purged = true;
+    t.changeSeq = this.nextSeq(t.owner);
+    this.feed.get(t.owner)!.forgotAt = this.nextSeq(t.owner);
   }
 }

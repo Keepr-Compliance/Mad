@@ -99,6 +99,8 @@ import {
   V81_SETTINGS_TABLE_INFO_SQL,
   V81_TODO_TABLES_DDL,
 } from "./db/migrationV81Sql";
+// BACKLOG-4263 PR-4b: migration v82 (the todo pull cursor's horizon and full-pull kind).
+import { V82_ADD_FULL_PULL_KIND_SQL, V82_ADD_HORIZON_SQL, V82_CURSOR_TABLE_INFO_SQL } from "./db/migrationV82Sql";
 import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
@@ -2360,6 +2362,21 @@ class DatabaseService implements IDatabaseService {
         const settings = d.prepare(V81_SETTINGS_TABLE_INFO_SQL).all() as Array<{ name: string }>;
         if (settings.length > 0 && !settings.some((c) => c.name === "install_removed_at")) d.exec(V81_ADD_INSTALL_REMOVED_AT_SQL);
         d.exec(V81_TODO_TABLES_DDL);
+      },
+    },
+    {
+      version: 82,
+      description:
+        "BACKLOG-4263 two-way todos (local pull): cloud_sync_todo_cursor gains horizon and full_pull_kind",
+      // Guarded like v81: schema.sql (run before the chain on every open) already creates the cursor
+      // table with both columns on a fresh install and on any profile that had no cursor table, so
+      // the ALTERs run only on a v81 profile whose table predates them. Both columns are NULL on every
+      // existing row; no row is written. Re-runnable.
+      migrate: (d) => {
+        const cols = d.prepare(V82_CURSOR_TABLE_INFO_SQL).all() as Array<{ name: string }>;
+        if (cols.length === 0) return;
+        if (!cols.some((c) => c.name === "horizon")) d.exec(V82_ADD_HORIZON_SQL);
+        if (!cols.some((c) => c.name === "full_pull_kind")) d.exec(V82_ADD_FULL_PULL_KIND_SQL);
       },
     },
   ];
