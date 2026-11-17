@@ -27,7 +27,7 @@ import { badTodoFields, FakeServer, jsonType, refusedFields, TODO_FIELD_TYPES, W
 import { disableForUser, enableForUser, ensureInstall, preparePass } from "../../db/cloudSyncDbService";
 import * as todos from "../../db/cloudSyncTodoDbService";
 import { prepareRestoredFile, markAllEligibleAfterMigration } from "../../db/cloudSyncTriggers";
-import { encodeOp, compareForSend, SCAN_EPOCH, normOpId, type OutboxRow } from "../todos/wire";
+import { encodeOp, compareForSend, SCAN_EPOCH, normOpId, wireOpId, type OutboxRow } from "../todos/wire";
 import { actionFor, ANSWER_TABLE } from "../todos/answers";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
 import {
@@ -249,6 +249,47 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(shadow(db, I1)!.note_json).toBe(JSON.stringify("second"));
     });
 
+    it("SR R1: a DIFFERENT part edited while another part's op is in flight survives that op's confirm and is sent next pass", async () => {
+      const { db, e } = await sentOnce();
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I1);
+      expect(keys(outbox(db))).toEqual([`item:${I1}:done`]);
+      const real = e.server.transport;
+      setTransport(e, async (f, a, sig) => {
+        const r = await real(f, a, sig);
+        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("typed during the tick", I1);
+        return r;
+      });
+      await pass(e);
+      expect(keys(outbox(db))).toEqual([`item:${I1}:note`]);
+      setTransport(e, real);
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+      expect(onlineItem(e, I1)!.parts.note.value).toBe("typed during the tick");
+      expect((onlineItem(e, I1)!.parts.done.value as Record<string, unknown>).is_checked).toBe(true);
+    });
+
+    it("SR R4 (W18): a re-edit made while its op was in flight and LOST keeps its old base, so it is compared with the winner by time, not applied over it", async () => {
+      const { db, e } = await sentOnce();
+      const baseBefore = (shadow(db, I1)!.note_rev as number);
+      const t = onlineItem(e, I1)!;
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "later, elsewhere", at: Date.now() + 600_000, by: "ai_app:conn-1", edit_seq: null };
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk 1", I1);
+      const real = e.server.transport;
+      setTransport(e, async (f, a, sig) => {
+        const r = await real(f, a, sig);
+        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk 2", I1);
+        return r;
+      });
+      await pass(e);
+      setTransport(e, real);
+      const row = outbox(db).find((r) => r.part === "note")!;
+      expect(row.base_rev).toBe(baseBefore);
+      expect(row.base_rev).not.toBe(t.parts.note.rev);
+      await pass(e);
+      expect(onlineItem(e, I1)!.parts.note.value).toBe("later, elsewhere");
+      expect(item(db, I1).note).toBe("later, elsewhere");
+    });
+
     it("R4: a lost answer writes the winner to the local row and the shadow (under the guard: no new op), and the outbox row goes", async () => {
       const { db, e } = await sentOnce();
       // another side changed the note later (as an AI app will from PR-5): later effective time, another actor
@@ -380,6 +421,77 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(outbox(db)).toEqual([]);
       expect(opsOf(e).map((o) => normOpId(o.op_id))).toEqual([left]);
       expect(onlineItem(e, I2)!.parts.note.value).toBe("two");
+    });
+
+    it("SR R2: a failure inside a confirm rolls the whole confirm back: no guard row, shadow, local row and outbox as they were", async () => {
+      const { db, e } = await sentOnce();
+      const t = onlineItem(e, I1)!;
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "winner", at: Date.now() + 600_000, by: "ai_app:conn-1", edit_seq: null };
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      const before = { sh: JSON.stringify(shadow(db, I1)), it: JSON.stringify(item(db, I1)), ob: JSON.stringify(outbox(db)) };
+      const realPrepare = db.prepare.bind(db);
+      let confirming = false;
+      const real = e.server.transport;
+      setTransport(e, async (f, a, sig) => {
+        const r = await real(f, a, sig);
+        if (f === "cloud_todo_push") confirming = true;
+        return r;
+      });
+      (db as { prepare: TestDb["prepare"] }).prepare = (sql: string) => {
+        // the last write of the confirm, after the guard, the shadow and the winner's write-back
+        if (confirming && sql.startsWith("DELETE FROM cloud_sync_todo_outbox WHERE project_ref = ? AND owner_user_id = ? AND entity = ? AND local_id = ? AND part = ? AND generation = ?")) {
+          throw Object.assign(new Error("disk"), { code: "SQLITE_IOERR" });
+        }
+        return realPrepare(sql);
+      };
+      await expect(pass(e)).rejects.toThrow("disk");
+      (db as { prepare: TestDb["prepare"] }).prepare = realPrepare;
+      setTransport(e, real);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
+      expect(JSON.stringify(shadow(db, I1))).toBe(before.sh);
+      expect(JSON.stringify(item(db, I1))).toBe(before.it);
+      expect(JSON.stringify(outbox(db))).toBe(before.ob);
+      // the next pass resends the same op_id and the replay confirms it
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+      expect(item(db, I1).note).toBe("winner");
+    });
+
+    it("SR R3: answers are matched by op_id: a missing, reordered, duplicated and an unknown answer confirm only the rows they name", async () => {
+      const { db, e } = await sentOnce();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("one", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("two", I2);
+      db.prepare("UPDATE transaction_checklists SET sort_order = 9 WHERE id = ?").run(CL);
+      const rows = outbox(db);
+      const idOf = (local: string) => rows.find((r) => r.local_id === local)!.op_id;
+      const real = e.server.transport;
+      setTransport(e, async (f, a, sig) => {
+        const r = await real(f, a, sig);
+        if (f !== "cloud_todo_push") return r;
+        const body = r.data as { ok: boolean; results: Array<Record<string, unknown>> };
+        const by = (local: string) => body.results.find((x) => normOpId(x.op_id) === idOf(local))!;
+        // reordered, I2's answer missing, CL's answer twice, and an answer for an op_id nobody sent
+        body.results = [by(CL), { op_id: wireOpId("ab".repeat(16)), status: "applied", parts: {} }, by(I1), by(CL)];
+        return r;
+      });
+      await pass(e);
+      setTransport(e, real);
+      expect(outbox(db).map((r) => r.local_id)).toEqual([I2]);
+      expect(outbox(db)[0].op_id).toBe(idOf(I2));
+      expect(shadow(db, I1)!.note_json).toBe(JSON.stringify("one"));
+      expect(shadow(db, CL)!.order_json).toBe("9");
+      expect(shadow(db, I2)!.note_json).not.toBe(JSON.stringify("two"));
+    });
+
+    it("a malformed online deal id answers a final rejected/invalid_value: the op is dropped with a notice, never resent", async () => {
+      const { db, deal, e } = await sentOnce();
+      db.prepare("UPDATE cloud_sync_state SET cloud_id = 'not-a-uuid' WHERE entity = 'deal' AND local_id = ?").run(deal);
+      db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = '9999-12-31T00:00:00.000Z#99'").run();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
+      await pass(e);
+      expect(opsOf(e)[0]).toMatchObject({ deal_id: "not-a-uuid" });
+      expect(outbox(db)).toEqual([]);
+      expect(db.prepare("SELECT kind FROM cloud_sync_todo_notices").all()).toEqual([{ kind: "rejected" }]);
     });
 
     it("the apply guard is cleared at open and empty at rest", () => {

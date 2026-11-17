@@ -528,6 +528,9 @@ export class FakeServer {
 
   private todoApplyOp(uid: string, install: string, by: string, op: Record<string, JsonValue>, opId: string, sent: number, recv: number): Record<string, JsonValue> {
     const bad = refusedFields(op);
+    // @ 0c6edef8f: ids are compared as uuids; a malformed id answers rejected/invalid_value (kept, final)
+    const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+    for (const k of ["id", "deal_id", "checklist_id"]) if (typeof op[k] === "string" && !UUID.test(op[k] as string)) bad.push(k);
     if (bad.length > 0) return { op_id: opId, status: "rejected", reason: "invalid_value", field: bad.join(",") };
     const edited = typeof op.edited_at === "string" ? Date.parse(op.edited_at) : NaN;
     const age = sent - edited;
