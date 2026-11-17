@@ -667,3 +667,63 @@ BEGIN
     pg_temp.pass(pg_temp.st(r3) = 'applied', 'parties ' || r3::text),
     pg_temp.pass(r4 ->> 'ok' = 'true', 'mark ' || r4::text));
 END $p$;
+
+-- install-scoped writers of the one-way path: install_removed for a removed install, not_found for a
+-- soft-removed deal; cloud_tombstone refuses a removed install and still records removals on a removed deal
+CREATE FUNCTION pg_temp.p_gates() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); I2 uuid := pg_temp.id('I2'); D2 uuid := pg_temp.id('D2'); D3 uuid := pg_temp.id('D3');
+        res text[] := '{}'; c record; r jsonb; n0 bigint; n1 bigint;
+BEGIN
+  PERFORM pg_temp.delinst(A, I2);
+  PERFORM pg_temp.deldeal(A, D2);
+  n0 := (SELECT (SELECT count(*) FROM public.cloud_deal_parties WHERE owner_user_id = A) + (SELECT count(*) FROM public.cloud_deal_checklists WHERE owner_user_id = A)
+              + (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE owner_user_id = A) + (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = A)
+              + (SELECT count(*) FROM public.cloud_deal_files WHERE owner_user_id = A));
+  FOR c IN SELECT * FROM (VALUES
+      ('cloud_upsert_parties', jsonb_build_array(pg_temp.rw('gp', '{}'))),
+      ('cloud_upsert_checklists', jsonb_build_array(pg_temp.rw('gc', '{"template_id":"t"}'))),
+      ('cloud_upsert_checklist_items', jsonb_build_array(pg_temp.rw('gi', '{"local_checklist_id":"cl2","title":"g"}'))),
+      ('cloud_upsert_messages', jsonb_build_array(pg_temp.rw('gm', '{"channel_kind":"email","hidden_from_export":false}'))),
+      ('cloud_upsert_files', jsonb_build_array(pg_temp.rw('gf', '{"filename":"g.pdf"}')))) v(fn, rows) LOOP
+    r := pg_temp.up(A, c.fn, I2, D3, c.rows);
+    res := res || pg_temp.pass(r ->> 'error' = 'install_removed', c.fn || ' removed install: ' || r::text);
+    r := pg_temp.up(A, c.fn, I1, D2, c.rows);
+    res := res || pg_temp.pass(r ->> 'error' = 'not_found', c.fn || ' removed deal: ' || r::text);
+  END LOOP;
+  r := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I2, D3)));
+  res := res || pg_temp.pass(r ->> 'error' = 'install_removed', 'mark removed install: ' || r::text);
+  r := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I1, D2)));
+  res := res || pg_temp.pass(r ->> 'error' = 'not_found', 'mark removed deal: ' || r::text);
+  r := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_tombstone(%L::uuid, %L::uuid, %L, %L::uuid[])', A, I2, 'checklist_item', ARRAY[pg_temp.id('i4')])));
+  res := res || pg_temp.pass(r ->> 'error' = 'install_removed' AND (pg_temp.it(pg_temp.id('i4'))).removed_at IS NULL, 'tombstone removed install: ' || r::text);
+  n1 := (SELECT (SELECT count(*) FROM public.cloud_deal_parties WHERE owner_user_id = A) + (SELECT count(*) FROM public.cloud_deal_checklists WHERE owner_user_id = A)
+              + (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE owner_user_id = A) + (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = A)
+              + (SELECT count(*) FROM public.cloud_deal_files WHERE owner_user_id = A));
+  res := res || pg_temp.pass(n1 = n0 AND (SELECT removed_at IS NOT NULL FROM public.cloud_deals WHERE id = D2) AND (SELECT removed_at IS NOT NULL FROM public.cloud_deals WHERE id = D3),
+                             'rows ' || n0 || '->' || n1);
+  r := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_tombstone(%L::uuid, %L::uuid, %L, %L::uuid[])', A, I1, 'checklist_item', ARRAY[pg_temp.id('i3')])));
+  res := res || pg_temp.pass(pg_temp.st(r) = 'removed', 'tombstone on a removed deal records the removal: ' || r::text);
+  r := pg_temp.up(A, 'cloud_upsert_parties', I1, pg_temp.id('D1'), jsonb_build_array(pg_temp.rw('gp', '{}')));
+  res := res || pg_temp.pass(pg_temp.st(r) = 'applied', 'live deal still written: ' || r::text);
+  RETURN pg_temp.all_of(VARIADIC res);
+END $p$;
+
+-- catalogue: every install-scoped or deal-scoped writer carries the gates; the register helper is not reachable
+CREATE FUNCTION pg_temp.p_gate_catalog() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE bad text; bad2 text;
+BEGIN
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.provolatile = 'v'
+     AND ('p_source_install_id' = ANY (p.proargnames) OR 'p_cloud_deal_id' = ANY (p.proargnames) OR p.proname = 'cloud_upsert_deal')
+     AND p.proname NOT IN ('cloud_delete_install', 'cloud_reclaim_install', 'cloud_delete_deal', 'cloud_purge_deal_now')
+     AND p.prosrc !~ '_cloud_install_removed\(';
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad2 FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.provolatile = 'v' AND 'p_cloud_deal_id' = ANY (p.proargnames)
+     AND p.proname NOT IN ('cloud_delete_deal', 'cloud_purge_deal_now')
+     AND p.prosrc !~ 'd\.removed_at IS NULL';
+  RETURN pg_temp.all_of(
+    pg_temp.pass(bad IS NULL, 'writers without the install gate: ' || coalesce(bad, '')),
+    pg_temp.pass(bad2 IS NULL, 'deal writers without the live-deal gate: ' || coalesce(bad2, '')),
+    pg_temp.pass(NOT has_function_privilege('authenticated', 'public._cloud_install_removed(uuid,uuid)', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public._cloud_install_removed(uuid,uuid)', 'EXECUTE'), 'helper reachable'));
+END $p$;

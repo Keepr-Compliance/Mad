@@ -44,7 +44,8 @@ BEGIN
 END
 $rb4263$;
 ''']
-for n in ['cloud_upsert_deal','cloud_delete_deal','cloud_delete_install','cloud_list_installs','set_my_cloud_autosave']:
+for n in ['cloud_upsert_deal','cloud_delete_deal','cloud_delete_install','cloud_list_installs','set_my_cloud_autosave',
+          'cloud_upsert_parties','cloud_upsert_checklists','cloud_upsert_checklist_items','cloud_upsert_messages','cloud_upsert_files','cloud_mark_deal_synced','cloud_tombstone']:
     out.append(unit(S,n,'$f$'))
 out.append(unit(L,'cloud_list_install_rows','$f$'))
 out.append('GRANT CREATE ON SCHEMA public TO mcp_reader;\nSET ROLE mcp_reader;\n')
@@ -58,7 +59,7 @@ fns=['cloud_purge_deal_now(uuid, uuid)','_cloud_todo_purge()','_cloud_todo_purge
  '_cloud_todo_unremove_deal(uuid, uuid, jsonb)','_cloud_todo_soft_remove_deal(uuid, uuid, text, jsonb)','_cloud_todo_deal_locked(uuid, uuid)',
  '_cloud_todo_write_part(uuid, text, uuid, text, jsonb, timestamptz, text, bigint)','_cloud_todo_norm(text, text, jsonb, boolean, timestamptz)',
  '_cloud_todo_same(text, jsonb, jsonb)','_cloud_todo_checklist_json(public.cloud_deal_checklists)','_cloud_todo_item_json(public.cloud_deal_checklist_items)',
- '_cloud_todo_hist(uuid, uuid, text, uuid, text, text, jsonb, jsonb, text, jsonb, text, timestamptz, timestamptz, uuid)','_cloud_todo_take_seq(uuid, integer)']
+ '_cloud_todo_hist(uuid, uuid, text, uuid, text, text, jsonb, jsonb, text, jsonb, text, timestamptz, timestamptz, uuid)','_cloud_todo_take_seq(uuid, integer)','_cloud_install_removed(uuid, uuid)']
 for f in fns: out.append('DROP FUNCTION IF EXISTS public.%s;\n'%f)
 out.append('''DROP TABLE IF EXISTS public.cloud_todo_history;
 DROP TABLE IF EXISTS public.cloud_todo_ops;

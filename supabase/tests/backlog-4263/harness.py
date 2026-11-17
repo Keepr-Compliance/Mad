@@ -123,7 +123,7 @@ def unit_decls():
 CONTROLS = ['p_parts', 'p_later_wins', 'p_equal', 'p_replay', 'p_edit_seq', 'p_parents', 'p_removal_wins', 'p_ai_rules', 'p_strip',
             "p_lock('reason')", "p_lock('sub')", 'p_cross_owner', 'p_e2', 'p_a1', 'p_f4', 'p_feed', 'p_install', 'p_install_restore',
             'p_soft_delete', 'p_reader_counts', 'p_purge', 'p_purge_now', 'p_claims', 'p_turnoff', 'p_idem', 'p_create',
-            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path']
+            'p_my_items_unique', 'p_pull', 'p_grants', 'p_seq_catalog', 'p_lock_order', 'p_old_path', 'p_gates', 'p_gate_catalog']
 
 AO = '_cloud_todo_apply_op'
 
@@ -176,8 +176,8 @@ def mutants():
     m.append(fn_mutant('CL_purge_deal_trusts_empty_claims', '_cloud_todo_purge_deal', [("AND auth.role() IS DISTINCT FROM 'service_role')", "AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')", 1)], P('p_claims')))
     m.append(fn_mutant('CL_core_owner_check', '_cloud_todo_apply', [("IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN", "IF p_owner IS NULL THEN", 1)], P('p_claims')))
     m.append(fn_mutant('C5_replay_dropped', '_cloud_todo_apply', [("WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;", "WHERE false;", 1)], P('p_replay')))
-    m.append(fn_mutant('C30_upsert_ignores_register', 'cloud_upsert_deal', [("IF EXISTS (SELECT 1 FROM public.cloud_removed_installs ri", "IF false AND EXISTS (SELECT 1 FROM public.cloud_removed_installs ri", 1)], P('p_install')))
-    m.append(fn_mutant('C30_push_ignores_register', 'cloud_todo_push', [("IF EXISTS (SELECT 1 FROM public.cloud_removed_installs ri", "IF false AND EXISTS (SELECT 1 FROM public.cloud_removed_installs ri", 1)], P('p_install')))
+    m.append(fn_mutant('C30_upsert_ignores_register', 'cloud_upsert_deal', [("IF public._cloud_install_removed(", "IF false AND public._cloud_install_removed(", 1)], P('p_install')))
+    m.append(fn_mutant('C30_push_ignores_register', 'cloud_todo_push', [("IF public._cloud_install_removed(", "IF false AND public._cloud_install_removed(", 1)], P('p_install')))
     m.append(fn_mutant('D2_reclaim_keys_on_argument', 'cloud_reclaim_install', [("WHERE ri.owner_user_id = auth.uid()", "WHERE true", 1)], P('p_install')))
     m.append(fn_mutant('R6_delete_is_hard', 'cloud_delete_deal', [("PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',\n            jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));", "DELETE FROM public.cloud_deals WHERE id = v_deal;", 1)], P('p_soft_delete')))
     m.append(fn_mutant('W23_lir_deal_not_removed', 'cloud_list_install_rows', [("'t.id',            't.removed_at IS NOT NULL'),", "'t.id', 'false'),", 1)], P('p_soft_delete')))
@@ -204,6 +204,17 @@ def mutants():
                         "has_function_privilege('anon', 'public.cloud_purge_deal_now(uuid,uuid)'::regprocedure, 'EXECUTE')", P('p_purge_now')))
     m.append(ddl_mutant('R10_table_select', 'GRANT SELECT ON public.cloud_todo_history TO authenticated',
                         "has_table_privilege('authenticated', 'public.cloud_todo_history', 'SELECT')", P('p_grants')))
+    for fn, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items'),
+                    ('cloud_upsert_messages', 'messages'), ('cloud_upsert_files', 'files'), ('cloud_mark_deal_synced', 'mark_synced'), ('cloud_tombstone', 'tombstone')]:
+        u = unit(MIG, fn)[0]
+        g = [l for l in u.split('\n') if '/*GATE:install:%s*/' % tag in l]
+        assert len(g) == 1, fn
+        m.append(fn_mutant('G_install_gate_' + tag, fn, [(g[0].strip(), 'IF false THEN', 1)], P('p_gates')))
+        if tag != 'tombstone':
+            m.append(fn_mutant('G_live_gate_' + tag, fn, [('AND d.removed_at IS NULL                                                             /*GATE:live:%s*/' % tag, '', 1)], P('p_gates')))
+    m.append(ddl_mutant('G_new_writer_without_gate',
+                        "CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$",
+                        "to_regprocedure('public._p4263_writer(uuid)') IS NOT NULL", P('p_gate_catalog')))
     return m
 
 
@@ -291,6 +302,14 @@ if __name__ == '__main__':
     if not a or a[0] not in ('run', 'check', 'list'):
         print(__doc__); sys.exit(2)
     if a[0] in ('check', 'list'):
+        C = json.loads(rd('supabase/contracts/cloud-todo-change-v1.json'))
+        words = C['statuses'] + C['op_kinds'] + C['push']['errors'] + C['history_outcomes'] + C['pull']['row_entities'] + C['refusals_from_install_scoped_writers']
+        missing = [w for w in words if "'%s'" % w not in MIG]
+        if missing:
+            raise SystemExit('contract names not in the migration: %s' % missing)
+        for k in C['pull']['fields'] + C['result'] + C['part_shape']:
+            assert "'%s'" % k in MIG, k
+        print('contract cloud-todo-change-v1: %d names found in the migration' % (len(words) + len(C['pull']['fields']) + len(C['result']) + len(C['part_shape'])))
         ms = mutants()
         print('%d mutants, every fragment matched its count' % len(ms))
         sys.exit(0)

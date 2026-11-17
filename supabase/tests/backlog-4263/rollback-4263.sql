@@ -225,6 +225,480 @@ END $f$;
 REVOKE ALL ON FUNCTION public.set_my_cloud_autosave(uuid, boolean, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.set_my_cloud_autosave(uuid, boolean, integer) TO authenticated;
 
+CREATE OR REPLACE FUNCTION public.cloud_upsert_parties(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
+        cur record; v_status text; v_bad text; v_withheld boolean;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:parties*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:parties*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:parties*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:parties*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:parties*/
+  IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:parties*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    IF jsonb_typeof(r) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(r -> 'local_id') IS DISTINCT FROM 'string' OR (length(r ->> 'local_id') BETWEEN 1 AND 200) IS NOT TRUE
+       OR ((r ->> 'content_hash') ~ '^[0-9a-f]{64}$') IS NOT TRUE
+       OR (r ? 'base_version' AND jsonb_typeof(r -> 'base_version') <> 'null'
+           AND (jsonb_typeof(r -> 'base_version') <> 'number' OR NOT pg_input_is_valid(r ->> 'base_version', 'bigint'))) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'invalid_input', 'detail', jsonb_build_object('index', i));
+    END IF;
+    i := i + 1;
+  END LOOP;
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    v_bad := public._cloud_bad_field(r, ARRAY['source_updated_at'], ARRAY[]::text[], ARRAY[]::text[], ARRAY['is_primary', 'contact_deleted', 'details_withheld']);
+    IF v_bad IS NULL AND jsonb_typeof(r -> 'emails') NOT IN ('null', 'array') THEN v_bad := 'emails'; END IF;
+    IF v_bad IS NULL AND jsonb_typeof(r -> 'phones') NOT IN ('null', 'array') THEN v_bad := 'phones'; END IF;
+    IF v_bad IS NOT NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
+      CONTINUE;
+    END IF;
+    v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);                         /*PTY:withheld*/
+    INSERT INTO public.cloud_deal_parties (owner_user_id, cloud_deal_id, local_party_id, content_hash, version)
+    VALUES (v_uid, v_deal, r ->> 'local_id', r ->> 'content_hash', 0)
+    ON CONFLICT (cloud_deal_id, local_party_id) DO NOTHING;
+    SELECT * INTO cur FROM public.cloud_deal_parties WHERE cloud_deal_id = v_deal AND local_party_id = r ->> 'local_id' FOR UPDATE;
+    v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;   /*PTY:flip*/
+    IF v_status = 'applied' THEN
+      UPDATE public.cloud_deal_parties SET
+        local_contact_id = r ->> 'local_contact_id', role = r ->> 'role', role_category = r ->> 'role_category',
+        specific_role = r ->> 'specific_role', is_primary = (r ->> 'is_primary')::boolean, notes = r ->> 'notes',
+        -- a withheld person is stored with name, company, emails and phones NULL, whatever the row sent
+        display_name = CASE WHEN v_withheld THEN NULL ELSE r ->> 'display_name' END,                           /*PTY:name*/
+        company = CASE WHEN v_withheld THEN NULL ELSE r ->> 'company' END,                                     /*PTY:company*/
+        emails = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'emails') = 'array' THEN r -> 'emails' END,   /*PTY:emails*/
+        phones = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'phones') = 'array' THEN r -> 'phones' END,   /*PTY:phones*/
+        details_withheld = v_withheld,
+        contact_source = r ->> 'contact_source', contact_deleted = coalesce((r ->> 'contact_deleted')::boolean, false),
+        removed_reason = r ->> 'removed_reason', source_updated_at = (r ->> 'source_updated_at')::timestamptz,
+        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
+       WHERE id = cur.id RETURNING * INTO cur;
+    END IF;
+    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
+                                     'content_hash', cur.content_hash, 'status', v_status);
+  END LOOP;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_upsert_checklists(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
+        cur record; v_status text; v_bad text; v_private boolean;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:checklists*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:checklists*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:checklists*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:checklists*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:checklists*/
+  IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:checklists*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    IF jsonb_typeof(r) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(r -> 'local_id') IS DISTINCT FROM 'string' OR (length(r ->> 'local_id') BETWEEN 1 AND 200) IS NOT TRUE
+       OR ((r ->> 'content_hash') ~ '^[0-9a-f]{64}$') IS NOT TRUE
+       OR jsonb_typeof(r -> 'template_id') IS DISTINCT FROM 'string'
+       OR (r ? 'base_version' AND jsonb_typeof(r -> 'base_version') <> 'null'
+           AND (jsonb_typeof(r -> 'base_version') <> 'number' OR NOT pg_input_is_valid(r ->> 'base_version', 'bigint'))) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'invalid_input', 'detail', jsonb_build_object('index', i));
+    END IF;
+    i := i + 1;
+  END LOOP;
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    v_bad := public._cloud_bad_field(r, ARRAY['selected_at', 'source_updated_at'], ARRAY[]::text[], ARRAY['sort_order'], ARRAY['is_private']);
+    IF v_bad IS NOT NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
+      CONTINUE;
+    END IF;
+    v_private := (r ->> 'template_id') = 'keepr:my-items' OR coalesce((r ->> 'is_private')::boolean, false);   /*CHK:private*/
+    INSERT INTO public.cloud_deal_checklists (owner_user_id, cloud_deal_id, local_checklist_id, template_id, content_hash, version)
+    VALUES (v_uid, v_deal, r ->> 'local_id', r ->> 'template_id', r ->> 'content_hash', 0)
+    ON CONFLICT (cloud_deal_id, local_checklist_id) DO NOTHING;
+    SELECT * INTO cur FROM public.cloud_deal_checklists WHERE cloud_deal_id = v_deal AND local_checklist_id = r ->> 'local_id' FOR UPDATE;
+    v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'applied' THEN
+      UPDATE public.cloud_deal_checklists SET
+        template_id = r ->> 'template_id', template_name = r ->> 'template_name',
+        sort_order = (r ->> 'sort_order')::integer, selected_at = (r ->> 'selected_at')::timestamptz,
+        is_private = v_private, source_updated_at = (r ->> 'source_updated_at')::timestamptz,
+        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
+       WHERE id = cur.id RETURNING * INTO cur;
+      UPDATE public.cloud_deal_checklist_items SET is_private = v_private
+       WHERE cloud_checklist_id = cur.id AND cloud_deal_id = v_deal AND is_private IS DISTINCT FROM v_private;   /*CHK:propagate*/
+    END IF;
+    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
+                                     'content_hash', cur.content_hash, 'status', v_status);
+  END LOOP;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:checklists*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_upsert_checklist_items(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
+        cur record; v_status text; v_bad text; p record;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:items*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:items*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:items*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:items*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:items*/
+  IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:items*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    IF jsonb_typeof(r) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(r -> 'local_id') IS DISTINCT FROM 'string' OR (length(r ->> 'local_id') BETWEEN 1 AND 200) IS NOT TRUE
+       OR ((r ->> 'content_hash') ~ '^[0-9a-f]{64}$') IS NOT TRUE
+       OR jsonb_typeof(r -> 'local_checklist_id') IS DISTINCT FROM 'string'
+       OR (r ? 'base_version' AND jsonb_typeof(r -> 'base_version') <> 'null'
+           AND (jsonb_typeof(r -> 'base_version') <> 'number' OR NOT pg_input_is_valid(r ->> 'base_version', 'bigint'))) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'invalid_input', 'detail', jsonb_build_object('index', i));
+    END IF;
+    i := i + 1;
+  END LOOP;
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    v_bad := public._cloud_bad_field(r, ARRAY['checked_at', 'local_created_at', 'source_updated_at'], ARRAY[]::text[],
+                                     ARRAY['sort_order'], ARRAY['is_required', 'is_checked']);
+    IF v_bad IS NULL AND jsonb_typeof(r -> 'links') NOT IN ('null', 'array') THEN v_bad := 'links'; END IF;
+    IF v_bad IS NOT NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
+      CONTINUE;
+    END IF;
+    SELECT c.id, c.is_private INTO p FROM public.cloud_deal_checklists c
+     WHERE c.cloud_deal_id = v_deal AND c.local_checklist_id = r ->> 'local_checklist_id' AND c.removed_at IS NULL;   /*ITEM:parent*/
+    IF p.id IS NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'parent_missing');
+      CONTINUE;
+    END IF;
+    INSERT INTO public.cloud_deal_checklist_items (owner_user_id, cloud_deal_id, cloud_checklist_id, local_item_id, content_hash, version)
+    VALUES (v_uid, v_deal, p.id, r ->> 'local_id', r ->> 'content_hash', 0)
+    ON CONFLICT (cloud_deal_id, local_item_id) DO NOTHING;
+    SELECT * INTO cur FROM public.cloud_deal_checklist_items WHERE cloud_deal_id = v_deal AND local_item_id = r ->> 'local_id' FOR UPDATE;
+    v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'applied' THEN
+      UPDATE public.cloud_deal_checklist_items SET
+        cloud_checklist_id = p.id, title = r ->> 'title', description = r ->> 'description',
+        is_required = (r ->> 'is_required')::boolean, expected_document_type = r ->> 'expected_document_type',
+        is_checked = (r ->> 'is_checked')::boolean, checked_at = (r ->> 'checked_at')::timestamptz, note = r ->> 'note',
+        sort_order = (r ->> 'sort_order')::integer, local_created_at = (r ->> 'local_created_at')::timestamptz,
+        links = CASE WHEN jsonb_typeof(r -> 'links') = 'array' THEN r -> 'links' END,
+        is_private = p.is_private,                                                             /*ITEM:private*/
+        source_updated_at = (r ->> 'source_updated_at')::timestamptz,
+        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
+       WHERE id = cur.id RETURNING * INTO cur;
+    END IF;
+    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
+                                     'content_hash', cur.content_hash, 'status', v_status);
+  END LOOP;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:items*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
+        cur record; v_status text; v_body text; v_trunc boolean; v_kind text; v_state text; v_bad text;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:messages*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:messages*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:messages*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:messages*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:messages*/
+  IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:messages*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    IF jsonb_typeof(r) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(r -> 'local_id') IS DISTINCT FROM 'string' OR (length(r ->> 'local_id') BETWEEN 1 AND 200) IS NOT TRUE
+       OR ((r ->> 'content_hash') ~ '^[0-9a-f]{64}$') IS NOT TRUE
+       OR (r ->> 'channel_kind') IN ('email', 'text') IS NOT TRUE
+       OR jsonb_typeof(r -> 'hidden_from_export') IS DISTINCT FROM 'boolean'
+       OR (r ? 'base_version' AND jsonb_typeof(r -> 'base_version') <> 'null'
+           AND (jsonb_typeof(r -> 'base_version') <> 'number' OR NOT pg_input_is_valid(r ->> 'base_version', 'bigint'))) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'invalid_input', 'detail', jsonb_build_object('index', i));
+    END IF;
+    i := i + 1;
+  END LOOP;
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    v_kind := r ->> 'channel_kind';
+    v_bad := public._cloud_bad_field(r, ARRAY['sent_at', 'received_at', 'linked_at', 'source_updated_at'],
+                                     ARRAY['link_confidence'], ARRAY[]::text[], ARRAY[]::text[]);
+    IF v_bad IS NULL AND r ->> 'channel' IS NOT NULL AND (r ->> 'channel') NOT IN ('email', 'sms', 'imessage') THEN v_bad := 'channel'; END IF;
+    IF v_bad IS NULL AND coalesce(r ->> 'link_origin', 'link') NOT IN ('link', 'review_queue') THEN v_bad := 'link_origin'; END IF;
+    IF v_bad IS NOT NULL THEN                                                                /*MSG:values*/
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
+      CONTINUE;
+    END IF;
+    IF v_kind = 'text' AND r ->> 'thread_key' IS NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'thread_key_required');
+      CONTINUE;
+    END IF;
+    v_body := r ->> 'body_text'; v_trunc := false;
+    IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/
+    v_state := CASE WHEN coalesce(r ->> 'link_origin', 'link') = 'review_queue' THEN 'suggested'
+                    WHEN r ->> 'match_reason' = 'address_missing' THEN 'needs_review'
+                    ELSE 'linked' END;                                                            /*MSG:linkstate*/
+    INSERT INTO public.cloud_deal_messages (owner_user_id, cloud_deal_id, channel_kind, local_message_id, thread_key, content_hash, version)
+    VALUES (v_uid, v_deal, v_kind, r ->> 'local_id', r ->> 'thread_key', r ->> 'content_hash', 0)
+    ON CONFLICT (cloud_deal_id, channel_kind, local_message_id) DO NOTHING;
+    SELECT * INTO cur FROM public.cloud_deal_messages
+     WHERE cloud_deal_id = v_deal AND channel_kind = v_kind AND local_message_id = r ->> 'local_id' FOR UPDATE;
+    v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'applied' THEN
+      UPDATE public.cloud_deal_messages SET
+        local_link_id = r ->> 'local_link_id', channel = r ->> 'channel', direction = r ->> 'direction',
+        subject = r ->> 'subject', body_text = v_body, body_truncated = v_trunc,
+        participants = CASE WHEN jsonb_typeof(r -> 'participants') = 'null' THEN NULL ELSE r -> 'participants' END,
+        thread_key = r ->> 'thread_key',
+        sent_at = (r ->> 'sent_at')::timestamptz, received_at = (r ->> 'received_at')::timestamptz,
+        link_source = r ->> 'link_source', link_confidence = (r ->> 'link_confidence')::double precision,
+        match_reason = r ->> 'match_reason', linked_at = (r ->> 'linked_at')::timestamptz,
+        link_origin = coalesce(r ->> 'link_origin', 'link'), link_state = v_state,
+        hidden_from_export = (r ->> 'hidden_from_export')::boolean,
+        source_updated_at = (r ->> 'source_updated_at')::timestamptz,
+        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
+       WHERE id = cur.id RETURNING * INTO cur;
+    END IF;
+    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
+                                     'content_hash', cur.content_hash, 'status', v_status, 'body_truncated', cur.body_truncated);
+  END LOOP;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_upsert_messages(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_messages(uuid, uuid, uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_upsert_files(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
+        cur record; v_status text; v_bad text; v_msg uuid; v_blob uuid; v_old_blob uuid; v_old_blobs uuid[] := '{}';
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:files*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:files*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:files*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:files*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:files*/
+  IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:files*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    IF jsonb_typeof(r) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(r -> 'local_id') IS DISTINCT FROM 'string' OR (length(r ->> 'local_id') BETWEEN 1 AND 200) IS NOT TRUE
+       OR ((r ->> 'content_hash') ~ '^[0-9a-f]{64}$') IS NOT TRUE
+       OR (r ? 'base_version' AND jsonb_typeof(r -> 'base_version') <> 'null'
+           AND (jsonb_typeof(r -> 'base_version') <> 'number' OR NOT pg_input_is_valid(r ->> 'base_version', 'bigint'))) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'invalid_input', 'detail', jsonb_build_object('index', i));
+    END IF;
+    i := i + 1;
+  END LOOP;
+  -- every blob this call can attach or replace, locked once, in id order
+  PERFORM 1 FROM public.cloud_blobs b
+   WHERE b.owner_user_id = v_uid
+     AND ((b.purge_requested_at IS NULL AND b.sha256 IN (SELECT e ->> 'blob_sha256' FROM jsonb_array_elements(p_rows) e))
+          OR b.id IN (SELECT f.blob_id FROM public.cloud_deal_files f
+                       WHERE f.cloud_deal_id = v_deal
+                         AND f.local_attachment_id IN (SELECT e ->> 'local_id' FROM jsonb_array_elements(p_rows) e)))
+   ORDER BY b.id FOR UPDATE;                                                                 /*FILE:lockblobs*/
+  FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
+    v_bad := public._cloud_bad_field(r, ARRAY['source_updated_at'], ARRAY[]::text[], ARRAY[]::text[], ARRAY[]::text[]);
+    IF v_bad IS NULL AND (jsonb_typeof(r -> 'filename') IS DISTINCT FROM 'string' OR length(r ->> 'filename') = 0) THEN v_bad := 'filename'; END IF;
+    IF v_bad IS NULL AND r ? 'size_bytes' AND jsonb_typeof(r -> 'size_bytes') <> 'null'
+       AND (jsonb_typeof(r -> 'size_bytes') <> 'number' OR NOT pg_input_is_valid(r ->> 'size_bytes', 'bigint')) THEN v_bad := 'size_bytes'; END IF;
+    IF v_bad IS NULL AND r ->> 'not_saved_reason' IS NOT NULL
+       AND (r ->> 'not_saved_reason') NOT IN ('too_large', 'no_local_file', 'quota_exceeded') THEN v_bad := 'not_saved_reason'; END IF;
+    IF v_bad IS NULL AND r ->> 'message_local_id' IS NOT NULL
+       AND (r ->> 'message_channel_kind') IN ('email', 'text') IS NOT TRUE THEN v_bad := 'message_channel_kind'; END IF;
+    IF v_bad IS NULL AND r ->> 'blob_sha256' IS NOT NULL AND ((r ->> 'blob_sha256') ~ '^[0-9a-f]{64}$') IS NOT TRUE THEN v_bad := 'blob_sha256'; END IF;
+    IF v_bad IS NOT NULL THEN
+      out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
+      CONTINUE;
+    END IF;
+    v_msg := NULL; v_blob := NULL;
+    IF r ->> 'message_local_id' IS NOT NULL THEN
+      SELECT m.id INTO v_msg FROM public.cloud_deal_messages m
+       WHERE m.cloud_deal_id = v_deal AND m.channel_kind = r ->> 'message_channel_kind'
+         AND m.local_message_id = r ->> 'message_local_id'
+         AND m.removed_at IS NULL;                                                            /*FILE:livemessage*/
+      IF v_msg IS NULL THEN
+        out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'parent_missing');
+        CONTINUE;
+      END IF;
+    END IF;
+    IF r ->> 'blob_sha256' IS NOT NULL THEN
+      SELECT b.id INTO v_blob FROM public.cloud_blobs b
+       WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/
+         AND b.sha256 = r ->> 'blob_sha256'
+         AND b.uploaded_at IS NOT NULL                                                        /*FILE:uploaded*/
+         AND b.purge_requested_at IS NULL;                                                    /*FILE:unfenced*/
+      IF v_blob IS NULL THEN
+        out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'blob_unavailable');
+        CONTINUE;
+      END IF;
+    END IF;
+    INSERT INTO public.cloud_deal_files (owner_user_id, cloud_deal_id, local_attachment_id, filename, content_hash, version)
+    VALUES (v_uid, v_deal, r ->> 'local_id', r ->> 'filename', r ->> 'content_hash', 0)
+    ON CONFLICT (cloud_deal_id, local_attachment_id) DO NOTHING;
+    SELECT * INTO cur FROM public.cloud_deal_files WHERE cloud_deal_id = v_deal AND local_attachment_id = r ->> 'local_id' FOR UPDATE;
+    v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'applied' THEN
+      v_old_blob := cur.blob_id;
+      UPDATE public.cloud_deal_files SET
+        cloud_message_id = v_msg, blob_id = v_blob, filename = r ->> 'filename', mime_type = r ->> 'mime_type',
+        size_bytes = (r ->> 'size_bytes')::bigint, not_saved_reason = r ->> 'not_saved_reason',
+        source_updated_at = (r ->> 'source_updated_at')::timestamptz,
+        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
+       WHERE id = cur.id RETURNING * INTO cur;
+      IF v_old_blob IS NOT NULL AND v_old_blob IS DISTINCT FROM v_blob THEN
+        v_old_blobs := v_old_blobs || v_old_blob;
+      END IF;
+    END IF;
+    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
+                                     'content_hash', cur.content_hash, 'status', v_status);
+  END LOOP;
+  PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:files*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_upsert_files(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_files(uuid, uuid, uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_mark_deal_synced(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_at timestamptz; v_deal uuid;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:mark_synced*/
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:mark_synced*/
+    RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  END IF;
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
+   WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:mark_synced*/
+     AND d.source_install_id = p_source_install_id                                           /*INSTALL:mark_synced*/
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  v_at := clock_timestamp();                                                                 /*CLOCK:mark*/
+  UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;
+  RETURN jsonb_build_object('ok', true, 'last_full_sync_at', v_at);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid, uuid) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_cloud_ids uuid[]) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_tab text; v_id uuid; out jsonb := '[]'::jsonb;
+        v_row_id uuid; v_row_deal uuid; v_row_removed timestamptz; v_row_version bigint; v_blob uuid; v_deals uuid[];
+        v_fence uuid[] := '{}'; v_now timestamptz;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:tombstone*/
+  v_tab := CASE p_kind WHEN 'party' THEN 'cloud_deal_parties' WHEN 'checklist' THEN 'cloud_deal_checklists'
+                       WHEN 'checklist_item' THEN 'cloud_deal_checklist_items' WHEN 'message' THEN 'cloud_deal_messages'
+                       WHEN 'file' THEN 'cloud_deal_files' END;
+  IF v_tab IS NULL OR p_source_install_id IS NULL OR p_cloud_ids IS NULL OR cardinality(p_cloud_ids) > 1000 THEN   /*CAP:tombstone*/
+    RETURN jsonb_build_object('ok', false, 'error', 'invalid_input');
+  END IF;
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  EXECUTE format(
+    'SELECT array_agg(x.id) FROM (SELECT d.id FROM public.cloud_deals d
+       WHERE d.owner_user_id = $1 AND d.source_install_id = $2
+         AND d.id IN (SELECT t.cloud_deal_id FROM public.%I t WHERE t.id = ANY ($3) AND t.owner_user_id = $1)
+       ORDER BY d.id FOR NO KEY UPDATE) x', v_tab)
+    INTO v_deals USING v_uid, p_source_install_id, p_cloud_ids;                              /*TOMB:lockdeals*/
+  v_now := clock_timestamp();                                                                /*CLOCK:tombstone*/
+  FOREACH v_id IN ARRAY p_cloud_ids LOOP
+    v_row_id := NULL;
+    EXECUTE format(
+      'SELECT t.id, t.cloud_deal_id, t.removed_at, t.version FROM public.%I t
+         JOIN public.cloud_deals d ON d.id = t.cloud_deal_id
+        WHERE t.id = $1 AND t.owner_user_id = $2 /*OWNER:tombstone*/
+          AND d.source_install_id = $3 /*INSTALL:tombstone*/
+        FOR UPDATE OF t', v_tab)
+      INTO v_row_id, v_row_deal, v_row_removed, v_row_version USING v_id, v_uid, p_source_install_id;
+    IF v_row_id IS NULL THEN
+      out := out || jsonb_build_object('cloud_id', v_id, 'status', 'not_found');
+      CONTINUE;
+    END IF;
+    IF v_row_removed IS NOT NULL THEN
+      out := out || jsonb_build_object('cloud_id', v_id, 'status', 'unchanged', 'version', v_row_version);
+      CONTINUE;
+    END IF;
+    IF p_kind = 'party' THEN
+      UPDATE public.cloud_deal_parties SET removed_at = now(), version = version + 1, updated_at = now(),
+             display_name = NULL, company = NULL, emails = NULL, phones = NULL, notes = NULL
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+    ELSIF p_kind = 'checklist' THEN
+      UPDATE public.cloud_deal_checklists SET removed_at = now(), version = version + 1, updated_at = now(), template_name = NULL
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+      UPDATE public.cloud_deal_checklist_items SET removed_at = now(), version = version + 1, updated_at = now(),
+             title = '[removed]', description = NULL, note = NULL, links = '[]'::jsonb
+       WHERE cloud_checklist_id = v_row_id AND cloud_deal_id = v_row_deal AND removed_at IS NULL;
+    ELSIF p_kind = 'checklist_item' THEN
+      UPDATE public.cloud_deal_checklist_items SET removed_at = now(), version = version + 1, updated_at = now(),
+             title = '[removed]', description = NULL, note = NULL, links = '[]'::jsonb
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+    ELSIF p_kind = 'message' THEN
+      UPDATE public.cloud_deal_messages SET removed_at = now(), version = version + 1, updated_at = now(),
+             subject = NULL, body_text = NULL, body_truncated = false, participants = NULL          /*TOMB:scrub*/
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+    ELSE
+      SELECT f.blob_id INTO v_blob FROM public.cloud_deal_files f WHERE f.id = v_row_id;
+      UPDATE public.cloud_deal_files f SET removed_at = now(), version = version + 1, updated_at = now(),
+             filename = NULL, blob_id = NULL
+       WHERE f.id = v_row_id RETURNING f.version INTO v_row_version;
+      v_fence := v_fence || v_blob;
+    END IF;
+    UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, v_now) WHERE id = v_row_deal;
+    out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);
+  END LOOP;
+  PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_tombstone(uuid, uuid, text, uuid[]) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_tombstone(uuid, uuid, text, uuid[]) TO authenticated;
+
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -582,6 +1056,8 @@ DROP FUNCTION IF EXISTS public._cloud_todo_item_json(public.cloud_deal_checklist
 DROP FUNCTION IF EXISTS public._cloud_todo_hist(uuid, uuid, text, uuid, text, text, jsonb, jsonb, text, jsonb, text, timestamptz, timestamptz, uuid);
 
 DROP FUNCTION IF EXISTS public._cloud_todo_take_seq(uuid, integer);
+
+DROP FUNCTION IF EXISTS public._cloud_install_removed(uuid, uuid);
 
 DROP TABLE IF EXISTS public.cloud_todo_history;
 DROP TABLE IF EXISTS public.cloud_todo_ops;

@@ -1,0 +1,34 @@
+{
+  "name": "keepr.cloud_todo_change",
+  "version": 1,
+  "about": "The todo change protocol of supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql (BACKLOG-4263): the ops cloud_todo_push and the core accept, the answers they give, and the rows cloud_todo_pull returns. Checked against the migration text by supabase/tests/backlog-4263/harness.py check.",
+  "push": {
+    "function": "cloud_todo_push(p_expected_user_id uuid, p_source_install_id uuid, p_sent_at text, p_ops jsonb)",
+    "limits": {"ops": 200, "bytes": 1048576},
+    "errors": ["not_authorized", "wrong_account", "invalid_input", "not_entitled", "install_removed", "batch_too_large"],
+    "effective_time": "receive time - (p_sent_at - op.edited_at); -infinity (unknowable) when the age is below 0, above 365 days, either reading is missing or unparseable, or op.clock_stepped is true"
+  },
+  "op_kinds": ["create_checklist", "create_item", "set", "remove", "restore"],
+  "entities": ["item", "checklist"],
+  "parts": {"item": ["done", "title", "note", "due", "order"], "checklist": ["order"]},
+  "op_fields": {
+    "all": ["op_id", "kind", "edited_at", "clock_stepped"],
+    "set": ["entity", "id | deal_id + local_id", "part", "value", "base_rev", "edit_seq", "held_locked"],
+    "remove": ["entity", "id | deal_id + local_id"],
+    "restore": ["entity", "id | deal_id + local_id"],
+    "create_checklist": ["deal_id", "local_id", "template_id", "template_name", "sort_order", "is_private"],
+    "create_item": ["deal_id", "checklist_local_id", "local_id", "title", "description", "is_required", "expected_document_type", "local_created_at", "done", "note", "due_date", "sort_order", "edit_seq"]
+  },
+  "statuses": ["applied", "unchanged", "lost", "applied_to_removed", "removed", "already_removed", "restored", "not_removed",
+               "not_restorable", "refused_removed", "locked", "not_allowed", "not_found", "rejected", "added", "exists", "mapped", "already_added"],
+  "result": ["op_id", "status", "entity", "cloud_id", "local_id", "cloud_deal_id", "parts", "conflict", "reason", "field"],
+  "part_shape": ["rev", "value", "at", "by", "edit_seq"],
+  "pull": {
+    "function": "cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer)",
+    "fields": ["head", "rows", "next_after", "install_max_edit_seq", "resync_required"],
+    "row_entities": ["deal", "checklist", "item", "event"],
+    "limit": 500
+  },
+  "history_outcomes": ["applied", "lost", "unchanged", "removed", "restored", "applied_to_removed", "held_locked"],
+  "refusals_from_install_scoped_writers": ["install_removed", "not_found"]
+}
