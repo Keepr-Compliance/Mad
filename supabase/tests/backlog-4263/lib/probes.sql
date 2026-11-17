@@ -46,10 +46,31 @@ BEGIN
     pg_temp.pass(a1 - 1 = jsonb_build_array(pg_temp.id('A1'), 'purchase', 'closed', '2026-01-05', '2026-03-15', '2026-02-01', '2026-03-14',
                    625000, 612000, 10000, 2.5, 2.75, 16830.5, 1, 'person', NULL) , 'A1 ' || a1::text),
     pg_temp.pass(a1 ->> 1 = '1847 Alder Ridge Ln Unit [number hidden by Keepr], Fernhollow, WA 98999', 'A1 address ' || (a1 ->> 1)),
-    pg_temp.pass(a2 = jsonb_build_array(pg_temp.id('A2'), '52 Cobble Wren Ct, Larchmont Bay, WA 98998', 'sale', 'active', NULL, NULL, NULL, NULL,
-                   NULL, NULL, 5000, NULL, NULL, NULL, 2, 'person', NULL), 'A2 ' || a2::text),
+    pg_temp.pass(a2 = jsonb_build_array(pg_temp.id('A2'), '52 Cobble Wren Ct, Larchmont Bay, WA 98998', 'sale-' || repeat('t', 14) || '…',
+                   'active-' || repeat('s', 12) || '…', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2, 'person',
+                   'submitted-' || repeat('l', 9) || '…'), 'A2 ' || a2::text),
+    pg_temp.pass((pg_temp.arow(t, pg_temp.id('A6')) - 0 - 0 - 0 - 0 - 0 - 0 - 0 - 0) = '[null, null, null, null, null, null, 1, "person", null]'::jsonb,
+                 'A6 ' || pg_temp.arow(t, pg_temp.id('A6'))::text),
     pg_temp.pass(a7 -> 15 = '"keepr"'::jsonb AND a7 -> 16 = '"submitted"'::jsonb, 'A7 ' || a7::text),
     pg_temp.pass((r -> 'page' -> 'returned')::int = 4 AND r -> 'page' -> 'next_cursor' = 'null'::jsonb, (r -> 'page')::text));
+END $h$;
+
+-- the largest row the reader can emit: every text at its cut in 4-byte characters, every number at
+-- 30 characters, every date set; its bytes (+2) must be under 2000 so the first row of a page always fits
+CREATE FUNCTION pg_temp.p_rowmax() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE t text; r jsonb; n int; big numeric := 123456789012345678901234567890;
+BEGIN
+  UPDATE public.cloud_deals SET property_address = repeat(chr(128512), 400), transaction_type = repeat(chr(128512), 100), status = repeat(chr(128512), 100),
+         lock_reason = repeat(chr(128512), 100), detection_source = 'hybrid', started_at = now(), closed_at = now(),
+         details = jsonb_build_object('listing_price', big, 'sale_price', big, 'earnest_money_amount', big, 'commission_offered_rate', big,
+           'commission_actual_rate', big, 'commission_gross_amount', big, 'mutual_acceptance_date', '2026-01-01', 'closing_deadline', '2026-01-01')
+   WHERE id = pg_temp.id('A7');
+  t := pg_temp.la('a1');
+  r := pg_temp.arow(t, pg_temp.id('A7'));
+  n := octet_length(r::text) + 2;
+  RETURN pg_temp.pass(n < 2000 AND (SELECT count(*) FROM jsonb_array_elements(r) x WHERE x = 'null'::jsonb) = 0
+                      AND octet_length(r ->> 1) = 299 * 4 + 3 AND r ->> 8 = '123456789012345678901234567890',
+                      'max row bytes ' || coalesce(n::text, '-') || ' ' || left(coalesce(r::text, t), 200));
 END $h$;
 
 -- address masking alone (the card number in A1's address)

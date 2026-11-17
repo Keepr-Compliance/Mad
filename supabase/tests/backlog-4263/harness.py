@@ -221,11 +221,14 @@ def mutants():
     b.append(fn_mutant('ARG_dropped_range', TOOL, [("v_from > v_to /*ARG:range*/", "false /*ARG:range*/", 1)], 'pg_temp.p_args()'))
     # values and masking
     b.append(fn_mutant('MASK_address_plain', READER, [("public._mcp_clean(c.property_address, 300)", "c.property_address", 1)], 'pg_temp.p_mask()'))
-    b.append(fn_mutant('NUM_type_not_checked', READER,
-                       [("CASE WHEN jsonb_typeof(c.details -> 'sale_price') = 'number' AND octet_length(c.details ->> 'sale_price') <= 30 THEN c.details -> 'sale_price' END",
-                         "c.details -> 'sale_price'", 1)], 'pg_temp.p_values()'))
-    b.append(fn_mutant('NUM_length_not_checked', READER,
-                       [(" AND octet_length(c.details ->> 'listing_price') <= 30", '', 1)], 'pg_temp.p_values()'))
+    for col in ('listing_price', 'sale_price', 'earnest_money_amount', 'commission_offered_rate', 'commission_actual_rate', 'commission_gross_amount'):
+        b.append(fn_mutant('NUM_type_not_checked_' + col, READER,
+                           [("jsonb_typeof(c.details -> '%s') = 'number' AND " % col, '', 1)], 'pg_temp.p_values()'))
+        b.append(fn_mutant('NUM_length_not_checked_' + col, READER,
+                           [(" AND octet_length(c.details ->> '%s') <= 30" % col, '', 1)], 'pg_temp.p_values()'))
+    for col, src in (('transaction_type', 'transaction_type'), ('status', 'status'), ('locked', 'lock_reason')):
+        b.append(fn_mutant('TXT_not_cut_' + col, READER, [("public._mcp_txt(c.%s, 20)" % src, "c.%s" % src, 1)], 'pg_temp.p_values()'))
+    b.append(fn_mutant('ROWMAX_address_not_cut', READER, [("public._mcp_clean(c.property_address, 300)", "public._mcp_strip(c.property_address)", 1)], 'pg_temp.p_rowmax()'))
     b.append(fn_mutant('DATE_rule_dropped', READER,
                        [("CASE WHEN jsonb_typeof(c.details -> 'closing_deadline') = 'string' AND c.details ->> 'closing_deadline' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN c.details -> 'closing_deadline' END",
                          "c.details -> 'closing_deadline'", 1)], 'pg_temp.p_values()'))
@@ -253,7 +256,7 @@ def mutants():
     return b
 
 
-PROBES = ['p_iso', 'p_unconfirmed', 'p_removed', 'p_values', 'p_mask', 'p_filters', 'p_args', 'p_tokens', 'p_ent', 'p_bound',
+PROBES = ['p_iso', 'p_unconfirmed', 'p_removed', 'p_values', 'p_rowmax', 'p_mask', 'p_filters', 'p_args', 'p_tokens', 'p_ent', 'p_bound',
           'p_boundary', 'p_cursor_stable', 'p_ro', 'p_grants', 'p_log', 'p_rate']
 
 FP = ("CREATE FUNCTION pg_temp.fp() RETURNS text LANGUAGE sql AS $h$\n"
@@ -290,6 +293,9 @@ def md5_control():
             ) % (lit(OFFLINE_MD5[READER]), lit(OFFLINE_MD5[TOOL]))
 
 
+SIMULATE_APPLIED = '--simulate-applied' in sys.argv
+
+
 def compose(with_mutants=True, only=None):
     head = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n"
             "CREATE TEMP TABLE p4263_out (k text, v text);\n"
@@ -299,10 +305,14 @@ def compose(with_mutants=True, only=None):
             "INSERT INTO pg_temp.p4263_out SELECT 'PRE_ledger_4263', count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '20261118100000';\n"
             "INSERT INTO pg_temp.p4263_out SELECT 'PRE_4263_objects', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('mcp_list_all_deals', '_mcp_r_list_all_deals');\n"
             "INSERT INTO pg_temp.p4263_out SELECT 'PRE_tool_check', pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.conname = 'mcp_call_log_tool_check';\n")
+    # before the apply: 9 anon mcp functions and none of this migration's; after it: 10 and both
     guard = ("DO $grd4263$ BEGIN IF (SELECT v FROM pg_temp.p4263_out WHERE k = 'PRE_ledger_4244') IS DISTINCT FROM '1'\n"
-             "  OR (SELECT v FROM pg_temp.p4263_out WHERE k = 'PRE_anon_mcp') IS DISTINCT FROM '9'\n"
-             "  OR (SELECT v FROM pg_temp.p4263_out WHERE k = 'PRE_4263_objects') IS DISTINCT FROM '0' THEN\n"
+             "  OR ((SELECT v FROM pg_temp.p4263_out WHERE k = 'PRE_anon_mcp'), (SELECT v FROM pg_temp.p4263_out WHERE k = 'PRE_4263_objects'))\n"
+             "     NOT IN (('9', '0'), ('10', '2')) THEN\n"
              "  RAISE EXCEPTION 'P4263_STOP precondition: %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263_out); END IF; END $grd4263$;\n")
+    if SIMULATE_APPLIED:
+        # the state after the real apply, inside this transaction: the migration and its ledger row first
+        head = MIG + "\nINSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20261118100000', 'backlog_4263_mcp_list_all_deals');\n" + head
     text = head + guard + RB + '\n' + MIG + '\n' + MIG + '\n' + HL + '\n' + FX + '\n' + PR + '\n' + FP + md5_control()
     text += ("INSERT INTO pg_temp.p4263_out SELECT 'fp_after_apply', pg_temp.fp();\n"
              "INSERT INTO pg_temp.p4263_out SELECT 'BASE', pg_temp.base4263()::text;\n")

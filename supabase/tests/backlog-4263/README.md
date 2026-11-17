@@ -4,7 +4,12 @@ Venue: a test project through `~/.claude/bin/kt-sql` (it refuses the production 
 transaction that ends in RAISE, so nothing persists.
 
 Precondition: the test project holds `20261114110000_backlog_4244_mcp_data_tools.sql` (ledger row) and
-exactly nine anon-callable mcp functions; the run stops before any change otherwise.
+either nine anon-callable mcp functions and none of this migration's (before the apply) or ten and both
+(after it); the run stops before any change otherwise. `--simulate-applied` prepends the migration and
+its ledger row inside the transaction to exercise the second state.
+
+`C_p_rowmax` measures the largest row the reader can emit (every text at its cut in 4-byte characters,
+every number at 30 characters) and requires it under 2000 bytes, so the first row of a page always fits.
 
 | File | What it does |
 |---|---|

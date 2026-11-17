@@ -2,8 +2,11 @@
 -- pg_temp.fx(n) gives ids random per run.
 --   users (one brokerage O, team plan with the assignable key on):
 --     1 A Cloud on: A1 closed 2026-03-15 (full details, card number in the address), A2 on install I2
---       (sale_price a string, listing_price a 40-digit number, closing_deadline 'soon'), A3 pending
---       detection, A4 rejected, A5 deleted, A6 closed 2025-12-31, A7 active found by Keepr and locked
+--       (hostile values: type, status and lock text over 20 characters with an invisible character;
+--       sale_price, earnest_money_amount, commission_actual_rate as strings; listing_price,
+--       commission_offered_rate, commission_gross_amount as 40-digit numbers; dates not dates),
+--       A3 pending detection, A4 rejected, A5 deleted, A6 closed 2025-12-31 (the other half: the
+--       string columns of A2 as 40-digit numbers and the reverse), A7 pending, found by Keepr, locked
 --     2 B Cloud on: B1
 --     4 D Cloud on, deal DD1, then settings.enabled false
 --     6 F Cloud on: 420 deals with 78-character addresses (the byte bound binds)
@@ -102,9 +105,12 @@ BEGIN
            'stage', 'closed', 'zz_extra_key', 'not returned'))));
   PERFORM pg_temp.put('A1', pg_temp.cid(t)::text); out := out || jsonb_build_object('A1', pg_temp.st(t));
   t := pg_temp.deal(A, pg_temp.dp(I2, 'a2', jsonb_build_object('property_address', '52 Cobble Wren Ct, Larchmont Bay, WA 98998',
-         'transaction_type', 'sale', 'status', 'active',
+         'transaction_type', 'sa' || chr(8203) || 'le-' || repeat('t', 60), 'status', 'act' || chr(8238) || 'ive-' || repeat('s', 60),
+         'lock_reason', 'sub' || chr(173) || 'mitted-' || repeat('l', 60),
          'details', jsonb_build_object('v', 1, 'sale_price', '4111 1111 1111 1111', 'listing_price', 1234567890123456789012345678901234567890::numeric,
-           'earnest_money_amount', 5000, 'closing_deadline', 'soon', 'mutual_acceptance_date', 20261201))));
+           'earnest_money_amount', '5000', 'commission_offered_rate', 1234567890123456789012345678901234567890::numeric,
+           'commission_actual_rate', '2.5', 'commission_gross_amount', 1234567890123456789012345678901234567890::numeric,
+           'closing_deadline', 'soon', 'mutual_acceptance_date', 20261201))));
   PERFORM pg_temp.put('A2', pg_temp.cid(t)::text); out := out || jsonb_build_object('A2', pg_temp.st(t));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a3', jsonb_build_object('property_address', '77 Heron Spit Way, Fernhollow, WA 98999',
          'detection_status', 'pending', 'detection_source', 'auto')));
@@ -115,7 +121,9 @@ BEGIN
   PERFORM pg_temp.put('A5', pg_temp.cid(t)::text);
   out := out || jsonb_build_object('A5', pg_temp.st(t), 'del_A5', pg_temp.err(pg_temp.deldeal(A, pg_temp.id('A5'))));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a6', jsonb_build_object('property_address', '9 Thistle Gap Rd, Fernhollow, WA 98999', 'status', 'closed',
-         'transaction_type', 'purchase', 'closed_at', '2025-12-31T23:30:00.000Z', 'details', jsonb_build_object('v', 1, 'sale_price', 480000, 'commission_gross_amount', 12000))));
+         'transaction_type', 'purchase', 'closed_at', '2025-12-31T23:30:00.000Z', 'details', jsonb_build_object('v', 1,
+           'sale_price', 1234567890123456789012345678901234567890::numeric, 'listing_price', '480000', 'earnest_money_amount', 1234567890123456789012345678901234567890::numeric,
+           'commission_offered_rate', '2.5', 'commission_actual_rate', 1234567890123456789012345678901234567890::numeric, 'commission_gross_amount', '12000'))));
   PERFORM pg_temp.put('A6', pg_temp.cid(t)::text); out := out || jsonb_build_object('A6', pg_temp.st(t));
   t := pg_temp.deal(A, pg_temp.dp(I1, 'a7', jsonb_build_object('property_address', '300 Quarry Bend Ave, Larchmont Bay, WA 98998', 'status', 'pending',
          'detection_source', 'auto', 'lock_reason', 'submitted')));
