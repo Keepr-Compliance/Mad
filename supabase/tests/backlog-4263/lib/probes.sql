@@ -10,8 +10,8 @@ DECLARE ta text := pg_temp.la('a1'); tb text := pg_temp.la('b1');
         wa uuid[] := (SELECT array_agg(x ORDER BY x) FROM unnest(ARRAY[pg_temp.id('A1'), pg_temp.id('A2'), pg_temp.id('A6'), pg_temp.id('A7')]) x);
 BEGIN
   RETURN pg_temp.all_of(
-    pg_temp.pass(pg_temp.err(ta) = 'OK' AND pg_temp.aids(ta) = wa, 'A got ' || left(ta, 300)),
-    pg_temp.pass(pg_temp.err(tb) = 'OK' AND pg_temp.aids(tb) = ARRAY[pg_temp.id('B1')], 'B got ' || left(tb, 300)),
+    pg_temp.pass(pg_temp.err(ta) = 'OK' AND pg_temp.aids(ta) = wa, 'A got ' || pg_temp.err(ta) || ' rows=' || cardinality(pg_temp.aids(ta))),
+    pg_temp.pass(pg_temp.err(tb) = 'OK' AND pg_temp.aids(tb) = ARRAY[pg_temp.id('B1')], 'B got ' || pg_temp.err(tb) || ' rows=' || cardinality(pg_temp.aids(tb))),
     pg_temp.pass(NOT pg_temp.id('B1') = ANY (pg_temp.aids(ta)), 'B1 in A'));
 END $h$;
 
