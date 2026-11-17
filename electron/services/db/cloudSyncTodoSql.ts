@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
   last_seq       INTEGER NOT NULL DEFAULT 0,
   full_pull_owed INTEGER NOT NULL DEFAULT 1,
   updated_at     TEXT,
+  horizon        INTEGER,
+  full_pull_kind TEXT,
   PRIMARY KEY (project_ref, owner_user_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_parked (

@@ -17,6 +17,7 @@ import { restoreEpoch } from "../db/cloudSyncTriggers";
 import type { SessionIdentity } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
+import * as todoStore from "../db/cloudSyncTodoDbService";
 import type {
   CloudSyncPausedReason,
   CloudSyncResult,
@@ -181,6 +182,7 @@ export class CloudSyncService {
     base.pendingDeals = this.pendingDeals(db, session.userId);
     base.notSavedDeals = this.notSavedDeals(db, session.userId);
     base.lastSavedAt = this.lastSavedAt(db, ref);
+    if (todoStore.installRemovedAt(db, ref, session.userId)) base.installRemoved = true;
 
     if (store.otherProjectInUse(db, ref)) return paused("other_project");
     if (owed) return { ...base, status: "turning_off" };
@@ -385,6 +387,22 @@ export class CloudSyncService {
     if (!userId || !this.runner) return { success: false, error: "signed_out" };
     const r = await this.runner.deleteOrphans(userId, this.ensureInstallId());
     return r.ok ? { success: true } : { success: false, error: r.code };
+  }
+
+  /**
+   * BACKLOG-4263 PR-4b (D2): "Save this computer's deals again" after this computer's online copy was removed
+   * from another computer. Only this user is affected; nothing is sent without this call.
+   */
+  async reclaimInstall(): Promise<CloudSyncResult> {
+    const userId = await this.actingUser();
+    if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    // SR2: only a user whose stop is recorded reclaims (otherwise this user's records would be forgotten for nothing).
+    if (!todoStore.installRemovedAt(this.deps.db(), this.deps.projectRef as string, userId)) return { success: false, error: "not_stopped" };
+    const r = await this.runner.reclaimInstall(userId, this.ensureInstallId());
+    if (!r.ok) return { success: false, error: r.code };
+    this.refreshSchedule();
+    await this.kick();
+    return { success: true };
   }
 
   /** Deletes the online copies of other installs idle for 30+ days. Main lists them again here. */

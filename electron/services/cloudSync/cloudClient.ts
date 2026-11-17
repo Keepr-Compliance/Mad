@@ -41,6 +41,7 @@ export const KNOWN_ENVELOPE_ERRORS = [
   "size_mismatch",
   "install_removed",
   "busy",
+  "horizon_required",
 ] as const;
 
 export type CallResult =
@@ -195,6 +196,31 @@ export class CloudClient {
       p_sent_at: sentAt,
       p_ops: ops,
     });
+  }
+
+  /**
+   * cloud_todo_pull (migration 20261118110000; contract `pull`): one page of this install's todo changes after
+   * `afterSeq`. `horizon` is the value stored with `afterSeq` (null only for a full pull from 0). Envelope
+   * {ok, head, rows, next_after, horizon, install_max_edit_seq, resync_required} or {ok:false, error}.
+   */
+  todoPull(expectedUserId: string, installId: string, afterSeq: number, limit: number, horizon: number | null): Promise<CallResult> {
+    return this.call("cloud_todo_pull", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_after_seq: afterSeq,
+      p_limit: limit,
+      p_horizon: horizon,
+    });
+  }
+
+  /** cloud_install_status: {ok, removed} — whether this owner's register holds this install. Writes nothing. */
+  installStatus(expectedUserId: string, installId: string): Promise<CallResult> {
+    return this.call("cloud_install_status", { p_expected_user_id: expectedUserId, p_source_install_id: installId });
+  }
+
+  /** cloud_reclaim_install: removes this owner's register row for this install. {ok, removed_entry}. */
+  reclaimInstall(expectedUserId: string, installId: string): Promise<CallResult> {
+    return this.call("cloud_reclaim_install", { p_expected_user_id: expectedUserId, p_source_install_id: installId });
   }
 
   markDealSynced(expectedUserId: string, installId: string, cloudDealId: string): Promise<CallResult> {

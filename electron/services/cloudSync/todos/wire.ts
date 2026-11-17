@@ -103,7 +103,9 @@ export function partColumns(part: TodoPart, value: JsonValue): Record<string, st
     case "due":
       return { due_date: toText(value) };
     case "order":
-      return { sort_order: toInt(value) };
+      // PR-4b (SR2 S4): the server stores NULL order (its My items list, migration :674; an AI create without one,
+      // :638); the local column is NOT NULL DEFAULT 0, so NULL is written as that default.
+      return { sort_order: toInt(value) ?? 0 };
   }
 }
 
@@ -117,6 +119,9 @@ export function samePart(part: TodoPart, a: JsonValue | undefined, b: JsonValue 
     const cb = b && typeof b === "object" && !Array.isArray(b) ? toBool((b as Record<string, JsonValue>).is_checked) === true : toBool(b) === true;
     return ca === cb;
   }
+  // PR-4b (SR2 S4): a NULL order online is the local default 0 (partColumns), so the two are the same value and
+  // neither side sends an op for it.
+  if (part === "order") return (toInt(a) ?? 0) === (toInt(b) ?? 0);
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
@@ -138,8 +143,19 @@ export function normOpId(opId: unknown): string {
  */
 export const SCAN_EPOCH = -1;
 
+/**
+ * PR-4b: the marker the puller writes into an outbox row's value_json when it keeps this computer's value on a
+ * locked deal instead of applying another side's change (plan §2.4 `held_locked`). A user edit of that part
+ * replaces value_json (capture trigger), which drops the marker.
+ */
+export const HELD_LOCKED_KEY = "_held_locked";
+
 export interface EncodeContext {
   cloudDealId: string;
+  /** PR-4b (W27): the todo's cloud id (a set / remove names it by id; the server then ignores local_id). */
+  todoCloudId?: string | null;
+  /** PR-4b (W27): an item create's checklist cloud id (the server finds the parent by it). */
+  checklistCloudId?: string | null;
   /** The counter's epoch now; an op from an earlier epoch is sent with clock_stepped = true (E2). */
   currentEpoch: number;
 }
@@ -192,6 +208,7 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
       deal_id: ctx.cloudDealId,
       checklist_local_id: toText(v.checklist_id) ?? "",
       local_id: row.local_id,
+      ...(ctx.checklistCloudId ? { checklist_id: ctx.checklistCloudId } : {}),
       title: toText(v.title) ?? "",
       description: toText(v.description),
       is_required: toBool(v.is_required),
@@ -205,7 +222,7 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
     };
   }
   if (row.part === "removed" && (row.entity === "item" || row.entity === "checklist")) {
-    return { ...base, kind: "remove", entity: row.entity, deal_id: ctx.cloudDealId, local_id: row.local_id };
+    return { ...base, kind: "remove", entity: row.entity, deal_id: ctx.cloudDealId, local_id: row.local_id, ...(ctx.todoCloudId ? { id: ctx.todoCloudId } : {}) };
   }
   if (isPart(row.entity, row.part)) {
     return {
@@ -214,10 +231,13 @@ export function encodeOp(row: OutboxRow, ctx: EncodeContext): WireOp | null {
       entity: row.entity,
       deal_id: ctx.cloudDealId,
       local_id: row.local_id,
+      ...(ctx.todoCloudId ? { id: ctx.todoCloudId } : {}),
       part: row.part,
       value: partValue(row.part, v),
       base_rev: row.base_rev === null || row.base_rev === undefined ? null : toInt(row.base_rev),
       edit_seq: editSeq,
+      // PR-4b: the puller kept this computer's value on a locked deal (plan §2.4); the server records it as held_locked.
+      ...(v[HELD_LOCKED_KEY] === true || v[HELD_LOCKED_KEY] === 1 ? { held_locked: true } : {}),
     };
   }
   return null;

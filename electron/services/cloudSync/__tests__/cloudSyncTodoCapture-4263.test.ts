@@ -204,11 +204,19 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     expect(counter(db)).toMatchObject({ clock_epoch: 0, max_wall_seen: at60 });
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(51)}:note`)!.clock_epoch).toBe(0);
     // 10 minutes behind: a step. The epoch moves, the op carries the new one, and the clock is re-anchored.
-    db.prepare("UPDATE cloud_sync_todo_counter SET max_wall_seen = ?").run(ahead(600));
+    const at600 = ahead(600);
+    db.prepare("UPDATE cloud_sync_todo_counter SET max_wall_seen = ?").run(at600);
+    const before = Date.now();
     db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("b", item(51));
+    const after = Date.now();
     const c = counter(db)!;
     expect(c.clock_epoch).toBe(1);
-    expect(Date.parse(c.max_wall_seen as string)).toBeLessThanOrEqual(Date.now());
+    // Re-anchored to the wall clock at the write (SQLite's strftime 'now' rounds to the millisecond and can read
+    // 1 ms past a JS clock read just after it, so the window has 5 ms either side), far from the old value.
+    const anchored = Date.parse(c.max_wall_seen as string);
+    expect(anchored).toBeGreaterThanOrEqual(before - 5);
+    expect(anchored).toBeLessThanOrEqual(after + 5);
+    expect(Date.parse(at600) - anchored).toBeGreaterThan(500_000);
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(51)}:note`)!.clock_epoch).toBe(1);
     // An earlier op keeps its older epoch (the runner flags it, PR-4a).
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(51)}:create`)!.clock_epoch).toBe(0);

@@ -255,6 +255,8 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_tx_insert",
   "trg_cloud_sync_tx_update",
 ];
+/** The latest local schema version this build ships (BACKLOG-4263 PR-4b: v82). */
+const LATEST_VERSION = 82;
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -749,16 +751,16 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     db.close();
   });
 
-  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at v81 with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
+  it("1a NEVER ON: a real v79 (2.48.0) profile opened by this build ends at the latest version (v82) with every cloud table empty, no cloud trigger, no mark, and every pre-existing row unchanged", async () => {
     const { before } = buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "table", "cloud_sync_%")).toEqual([...CLOUD_SYNC_TABLES].sort());
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
     for (const t of CLOUD_SYNC_TABLES) expect([t, count(db, t)]).toEqual([t, 0]);
     // Row for row, every column the table had before, every table the file had before.
     expect(changedTables(db, before)).toEqual(["schema_version"]);
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     // v81's columns exist and are NULL on every row (BACKLOG-4263).
     expect(columns(db, "transaction_checklist_items")).toContain("due_date");
     expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE due_date IS NOT NULL").get()).toEqual({ n: 0 });
@@ -774,14 +776,14 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80 and v81 (79 -> 81); the next open changes nothing", async () => {
+  it("1c SAME OPEN: one open of the v79 profile both creates the cloud tables (absent before) and runs v80, v81 and v82 (79 -> 82); the next open changes nothing", async () => {
     const { before } = buildV79Profile(dir);
     expect(before.has("cloud_sync_dirty")).toBe(false);
     expect(before.has("cloud_sync_todo_outbox")).toBe(false);
     expect(before.get("transaction_checklist_items")!.cols).not.toContain("due_date");
     expect(before.get("schema_version")!.rows[0]).toContain("79");
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
     // The tables are exactly the declared shape (schema.sql, mirrored by CLOUD_SYNC_TABLES_DDL).
     const shape = new RealDatabase(":memory:");
@@ -821,7 +823,9 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       ["marks", (sql) => sql === MARK_ALL_ELIGIBLE_FOR_USER_SQL],
       ["todo clear", (sql) => sql.startsWith("DELETE FROM cloud_sync_todo_trash WHERE project_ref = ? AND owner_user_id = ?")],
       ["todo cursor", (sql) => sql.startsWith("INSERT INTO cloud_sync_todo_cursor")],
-      ["initial scan", (sql) => sql.includes("INSERT INTO cloud_sync_todo_outbox") && sql.includes("DO NOTHING")],
+      // BACKLOG-4263 PR-4b: the turn-on no longer scans (the scan runs after the first full pull); its last todo
+      // write is the counter seed.
+      ["counter seed", (sql) => sql.startsWith("INSERT INTO cloud_sync_todo_counter")],
     ];
     // Every step is checked, then compared in one assertion, so a red names every step that leaked.
     const outcomes: Array<{ step: string; threw: boolean; hit: boolean; triggers: string[]; changed: string[] }> = [];
@@ -855,23 +859,27 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     expect(eligibleDeals(db, U_ON)).toEqual([D1, D4]);
     expect(dirtyIds(db)).toEqual([D1, D4]);
     expect(db.prepare("SELECT user_id, enabled FROM cloud_sync_settings").all()).toEqual([{ user_id: U_ON, enabled: 1 }]);
-    // What enabling writes is cloud_sync_settings and cloud_sync_dirty, and (BACKLOG-4263) the todo cursor and
-    // the initial scan's outbox rows; every other row is as the open left it.
-    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty", "cloud_sync_todo_cursor", "cloud_sync_todo_outbox"])).toEqual([]);
+    // What enabling writes is cloud_sync_settings and cloud_sync_dirty, and (BACKLOG-4263) the todo cursor; every
+    // other row is as the open left it. PR-4b: no outbox row yet (the scan runs after the first full pull).
+    expect(changedTables(db, afterOpen, ["cloud_sync_settings", "cloud_sync_dirty", "cloud_sync_todo_cursor"])).toEqual([]);
     expect(db.prepare("SELECT owner_user_id, last_seq, full_pull_owed FROM cloud_sync_todo_cursor").all()).toEqual([{ owner_user_id: U_ON, last_seq: 0, full_pull_owed: 1 }]);
-    // The initial scan: one create per checklist and item of the user's deals, every one with the scan epoch.
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    // The pass: deals, then the full pull (empty online), then the scan queues one create per checklist and item
+    // of the user's deals (every one with the scan epoch), sent in the same pass.
     const userTodos =
       (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists c JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n +
       (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ?").get(U_ON) as { n: number }).n;
     expect(userTodos).toBeGreaterThan(0);
-    expect(db.prepare("SELECT part, clock_epoch, owner_user_id FROM cloud_sync_todo_outbox GROUP BY part, clock_epoch, owner_user_id").all()).toEqual([
-      { part: "create", clock_epoch: -1, owner_user_id: U_ON },
-    ]);
-    expect(count(db, "cloud_sync_todo_outbox")).toBe(userTodos);
 
     const e = makeEngineOn(db);
     e.service.refreshSchedule();
     await e.service.runner!.whenIdle();
+    const created = e.server.callsTo("cloud_todo_push").flatMap((c) => c.args.p_ops as Array<Record<string, unknown>>);
+    expect(created).toHaveLength(userTodos);
+    expect(new Set(created.map((o) => `${o.kind}:${o.clock_stepped}`))).toEqual(new Set(["create_checklist:true", "create_item:true"]));
+    expect(e.server.callsTo("cloud_todo_pull").length).toBeGreaterThan(0);
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    expect(db.prepare("SELECT full_pull_owed FROM cloud_sync_todo_cursor").all()).toEqual([{ full_pull_owed: 0 }]);
     expect(e.server.callsTo("cloud_upsert_deal")).toHaveLength(2);
     expect(e.server.deals).toHaveLength(2);
     expect(dirtyIds(db)).toEqual([]);
@@ -904,7 +912,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     pre.close();
 
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(columns(db, "cloud_sync_settings")).toEqual([...before.get("cloud_sync_settings")!.cols, "install_removed_at"]);
     expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
     expect(db.prepare("SELECT install_removed_at FROM cloud_sync_settings").all()).toEqual([{ install_removed_at: null }]);
@@ -925,12 +933,195 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await again.svc.close();
   });
 
+  // BACKLOG-4263 PR-4b, release rule (coordinator 2026-11-17): a Keepr Cloud profile last synced by the old one-way
+  // engine (release-2.49 @ b869f3911) opens in this build and ends coherent. Built, not invented:
+  // - the file: 1d's v80 file (b869f3911's five cloud tables, vendored in fixtures/v80-cloud, extracted from that
+  //   commit's schema.sql) with the old engine's own records, written with b869f3911's statements
+  //   (electron/services/db/cloudSyncSql.ts @ b869f3911: UPSERT_DEAL_STATE_SQL :309-316, last_status 'synced';
+  //   UPSERT_CHILD_STATE_SQL :365-372, entities 'checklist' / 'checklist_item', last_status 'saved');
+  // - the online copy: what the one-way upserts left after PR-2's backfill and PR-4a's numbering
+  //   (supabase/migrations/20261118110000 :255-307: every part rev 1, by 'desktop:<install>', edit_seq NULL;
+  //   20261118120000 numbers unnumbered rows): the fake server seeded with those rows.
+  // After the last sync, on this computer: one note edited (the old engine would have sent it on its next pass),
+  // and one item deleted whose one-way tombstone was never sent.
+  it("1e OLD ENGINE PROFILE (release-2.49 @ b869f3911, last synced): this build opens it, the full pull records the online todos (no create, nothing duplicated), the local edit and the local delete reach the cloud, nothing local is lost, and the next pass sends nothing", async () => {
+    const { file } = buildV79Profile(dir);
+    const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+    const pre = openKeyed(file);
+    pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+    svcClass.MIGRATIONS.find((m) => m.version === 80)!.migrate(pre);
+    pre.prepare("UPDATE schema_version SET version = 80 WHERE id = 1").run();
+    const INSTALL = id(98, 1);
+    const at = "2026-11-10T09:00:00.000Z";
+    pre.prepare(
+      "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at, last_state_at) VALUES (?, ?, 1, ?, 1, '2026-11-01T00:00:00.000Z', ?)",
+    ).run(PROJECT, U_ON, at, at);
+    pre.prepare("INSERT INTO cloud_sync_install (project_ref, install_id, machine_hash, created_at) VALUES (?, ?, NULL, ?)").run(PROJECT, INSTALL, at);
+    // b869f3911's statements, verbatim (cloudSyncSql.ts :309-316 and :365-372)
+    const UPSERT_DEAL_STATE_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, cloud_deal_id, content_hash,
+   hash_version, cloud_version, removed, last_status, last_error_code, updated_at)
+VALUES (?, ?, 'deal', ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
+  cloud_id = excluded.cloud_id, cloud_deal_id = excluded.cloud_deal_id, content_hash = excluded.content_hash,
+  hash_version = excluded.hash_version, cloud_version = excluded.cloud_version, removed = 0,
+  last_status = excluded.last_status, last_error_code = NULL, updated_at = excluded.updated_at`;
+    const UPSERT_CHILD_STATE_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, cloud_deal_id, content_hash,
+   hash_version, cloud_version, removed, last_status, last_error_code, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'saved', NULL, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
+  transaction_id = excluded.transaction_id, cloud_id = excluded.cloud_id, cloud_deal_id = excluded.cloud_deal_id,
+  content_hash = excluded.content_hash, hash_version = excluded.hash_version, cloud_version = excluded.cloud_version,
+  removed = 0, last_status = 'saved', last_error_code = NULL, updated_at = excluded.updated_at`;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { FakeServer } = require("../cloudSync/__tests__/helpers/fakeServer") as typeof import("../cloudSync/__tests__/helpers/fakeServer");
+    const server = new FakeServer(U_ON);
+    const cloud = new Map<string, string>();
+    let n = 0;
+    const cid = (local: string) => {
+      if (!cloud.has(local)) cloud.set(local, id(97, ++n));
+      return cloud.get(local) as string;
+    };
+    const by = `desktop:${INSTALL}`;
+    const p = (value: unknown) => ({ rev: 1, value: value as never, at: Date.parse(at), by, edit_seq: null });
+    for (const d of eligibleDeals(pre, U_ON)) {
+      pre.prepare(UPSERT_DEAL_STATE_SQL).run(PROJECT, U_ON, d, d, cid(d), cid(d), `hash-${d}`, 2, 1, "synced", at);
+      server.deals.push({ id: cid(d), owner: U_ON, install: INSTALL, localId: d, hash: `hash-${d}`, version: 1, fullSyncAt: at, changeSeq: server.nextSeq(U_ON) });
+    }
+    const lists = pre.prepare(`SELECT c.* FROM transaction_checklists c JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ? ORDER BY c.id`).all(U_ON) as Row[];
+    for (const c of lists) {
+      pre.prepare(UPSERT_CHILD_STATE_SQL).run(PROJECT, U_ON, "checklist", c.id, c.transaction_id, cid(c.id as string), cid(c.transaction_id as string), `h-${c.id}`, 2, 1, at);
+      server.todos.push({
+        id: cid(c.id as string), owner: U_ON, dealId: cid(c.transaction_id as string), entity: "checklist", localId: c.id as string, checklistId: null,
+        templateId: c.template_id as string, removed: false, changeSeq: server.nextSeq(U_ON),
+        fields: { template_name: c.template_name as string, is_private: c.template_id === "keepr:my-items" },
+        parts: { order: p(c.sort_order), removed: { ...p({ removed_at: null, kind: null }), edit_seq: null } },
+      });
+    }
+    const items = pre.prepare(
+      `SELECT i.*, c.transaction_id FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id JOIN transactions t ON t.id = c.transaction_id WHERE t.user_id = ? ORDER BY i.id`,
+    ).all(U_ON) as Row[];
+    for (const i of items) {
+      pre.prepare(UPSERT_CHILD_STATE_SQL).run(PROJECT, U_ON, "checklist_item", i.id, i.transaction_id, cid(i.id as string), cid(i.transaction_id as string), `h-${i.id}`, 2, 1, at);
+      server.todos.push({
+        id: cid(i.id as string), owner: U_ON, dealId: cid(i.transaction_id as string), entity: "item", localId: i.id as string, checklistId: cid(i.checklist_id as string),
+        templateId: null, removed: false, changeSeq: server.nextSeq(U_ON),
+        fields: { description: (i.description ?? null) as never, is_required: i.is_required === 1, expected_document_type: (i.expected_document_type ?? null) as never, local_created_at: null },
+        parts: {
+          done: p({ is_checked: i.is_checked === 1, checked_at: i.checked_at ?? null }),
+          title: p(i.title),
+          note: p(i.note ?? null),
+          due: p(null),
+          order: p(i.sort_order),
+          removed: p({ removed_at: null, kind: null }),
+        },
+      });
+    }
+    expect([lists.length, items.length]).toEqual([3, 4]);
+    // after the last sync, on this computer (no trigger existed in the b869f3911 file at rest)
+    pre.prepare("UPDATE transaction_checklist_items SET note = 'after last sync' WHERE id = ?").run(I2);
+    pre.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at, attempts) VALUES (?, 1, ?, 0)").run(D1, at);
+    pre.prepare("DELETE FROM transaction_checklist_items WHERE id = ?").run(I3);
+    // evidence linked to an item (an email the v79 fixture holds), so links and members are compared too
+    pre.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES (?, ?, 'email', 'Report', 0)").run(id(96, 1), I1);
+    pre.prepare("INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)").run(id(96, 2), id(96, 1), id(9, 1));
+    const todoTables = ["transaction_checklists", "transaction_checklist_items", "transaction_checklist_links", "transaction_checklist_link_members"];
+    // every column of every row (the v80 file's columns; v81 adds due_date, NULL, compared below)
+    const fullRows = (d: DatabaseType, cols?: Record<string, string[]>) =>
+      Object.fromEntries(todoTables.map((t) => [t, d.prepare(`SELECT ${(cols?.[t] ?? ["*"]).join(", ")} FROM ${t} ORDER BY id`).all()]));
+    const localBefore = fullRows(pre);
+    const colsBefore = Object.fromEntries(todoTables.map((t) => [t, columns(pre, t)]));
+    expect(localBefore.transaction_checklist_link_members).toHaveLength(1);
+    pre.close();
+
+    const { svc, db } = await openWithThisBuild();
+    expect(versionOf(db)).toBe(LATEST_VERSION);
+    const e = makeEngineOn(db, server);
+    e.service.refreshSchedule();
+    await e.service.runner!.whenIdle();
+    const ops = () => e.server.callsTo("cloud_todo_push").flatMap((c) => c.args.p_ops as Array<Record<string, unknown>>);
+    // nothing is created again online: the full pull recorded every online todo in the shadow first
+    expect(ops().filter((o) => String(o.kind).startsWith("create_"))).toEqual([]);
+    expect(e.server.todos.filter((t) => t.owner === U_ON)).toHaveLength(7);
+    // the local edit reached the cloud (this computer wrote the online value last, so its newer value applies)
+    expect(e.server.todos.find((t) => t.localId === I2)!.parts.note.value).toBe("after last sync");
+    // the local delete reached the cloud as a removal (it is not brought back by the pull)
+    expect(e.server.todos.find((t) => t.localId === I3)!.removed).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE id = ?").get(I3)).toEqual({ n: 0 });
+    // nothing local was lost or changed by the pull: full rows of checklists, items, links and members
+    expect(fullRows(db, colsBefore)).toEqual(localBefore);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE due_date IS NOT NULL").get()).toEqual({ n: 0 });
+    // the old one-way records of todos are gone; the cursor is a normal one; nothing waits
+    expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_state WHERE entity IN ('checklist', 'checklist_item')").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT full_pull_owed, full_pull_kind FROM cloud_sync_todo_cursor").all()).toEqual([{ full_pull_owed: 0, full_pull_kind: null }]);
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    expect(count(db, "cloud_sync_todo_parked")).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_state WHERE cloud_id IS NOT NULL").get()).toEqual({ n: 7 });
+    // no op loop: the next two passes send no todo change and pull nothing new
+    const sent = ops().length;
+    await e.service.runner!.runPass();
+    await e.service.runner!.runPass();
+    expect(ops()).toHaveLength(sent);
+    expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
+    await svc.close();
+  });
+
+  it("1f v81 PROFILE (PR-4a build, Keepr Cloud on): this build runs v82 (the todo cursor gains horizon and full_pull_kind, NULL), the cursor row is kept, nothing else changes; the next open changes nothing", async () => {
+    // A v81 file as the lane branch at ed727cee4 leaves it: 1d's v80 file, v81 applied, and the todo cursor in that
+    // commit's shape (electron/services/db/cloudSyncTodoSql.ts @ ed727cee4 :94-101, no horizon / full_pull_kind).
+    const { file } = buildV79Profile(dir);
+    const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+    const pre = openKeyed(file);
+    pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+    svcClass.MIGRATIONS.find((m) => m.version === 80)!.migrate(pre);
+    svcClass.MIGRATIONS.find((m) => m.version === 81)!.migrate(pre);
+    pre.exec(`DROP TABLE cloud_sync_todo_cursor;
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  last_seq       INTEGER NOT NULL DEFAULT 0,
+  full_pull_owed INTEGER NOT NULL DEFAULT 1,
+  updated_at     TEXT,
+  PRIMARY KEY (project_ref, owner_user_id)
+);`);
+    pre.prepare("UPDATE schema_version SET version = 81 WHERE id = 1").run();
+    pre.prepare(
+      "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    pre.prepare("INSERT INTO cloud_sync_install (project_ref, install_id, machine_hash, created_at) VALUES (?, ?, NULL, '2026-11-01T00:00:00.000Z')").run(PROJECT, id(98, 1));
+    pre.prepare("INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at) VALUES (?, ?, 0, 1, 'x')").run(PROJECT, U_ON);
+    expect(columns(pre, "cloud_sync_todo_cursor")).toEqual(["project_ref", "owner_user_id", "last_seq", "full_pull_owed", "updated_at"]);
+    const before = snapshot(pre);
+    pre.close();
+
+    const { svc, db } = await openWithThisBuild();
+    expect(versionOf(db)).toBe(LATEST_VERSION);
+    expect(columns(db, "cloud_sync_todo_cursor")).toEqual(["project_ref", "owner_user_id", "last_seq", "full_pull_owed", "updated_at", "horizon", "full_pull_kind"]);
+    expect(db.prepare("SELECT * FROM cloud_sync_todo_cursor").all()).toEqual([
+      { project_ref: PROJECT, owner_user_id: U_ON, last_seq: 0, full_pull_owed: 1, updated_at: "x", horizon: null, full_pull_kind: null },
+    ]);
+    // Row for row (on the columns each table had before): only the version and the after-migration marks.
+    expect(changedTables(db, before)).toEqual(["cloud_sync_dirty", "schema_version"]);
+    const cookie = db.pragma("schema_version", { simple: true });
+    const after = snapshot(db);
+    await svc.close();
+    const again = await openWithThisBuild();
+    expect(again.db.pragma("schema_version", { simple: true })).toBe(cookie);
+    expect(changedTables(again.db, after)).toEqual([]);
+    await again.svc.close();
+    // going back: 2.48.0's open of this v82 file succeeds and leaves the columns alone
+    const old = openAs248(path.join(dir, "mad.db"));
+    expect(columns(old, "cloud_sync_todo_cursor")).toContain("horizon");
+    old.close();
+  });
+
   it("2a GOING BACK, never on: on a profile this build upgraded, 2.48.0's own open and common writes all succeed, no cloud trigger exists, and the cloud tables stay empty", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
     await first.svc.close();
     const db = openAs248(path.join(dir, "mad.db"));
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
     const results = runWrites248(db);
     expect(results.every((r) => r.added.length === 0 && r.bumped === 0 && r.ops.length === 0 && r.trash.length === 0)).toBe(true);
@@ -954,8 +1145,9 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
       enable(first.db);
       first.db.exec("DELETE FROM cloud_sync_dirty");
       // BACKLOG-4263 PR-4a: the turn-on's initial scan queued the existing todos; 2.48.0's writes come after.
+      // BACKLOG-4263 PR-4b: the turn-on writes no op (the scan runs after the first full pull).
       const scanned = count(first.db, "cloud_sync_todo_outbox");
-      expect(scanned).toBeGreaterThan(0);
+      expect(scanned).toBe(0);
       first.db.exec("DELETE FROM cloud_sync_todo_outbox");
       expect(count(first.db, "cloud_sync_todo_counter")).toBe(withCounter ? 1 : 0);
       await first.svc.close();
@@ -1105,7 +1297,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     old.close();
 
     const { svc, db } = await openWithThisBuild();
-    expect(versionOf(db)).toBe(81);
+    expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(ALL_TRIGGERS);
     expect(dirtyIds(db)).toEqual([D1, D4, NEW_DEAL].sort());
 

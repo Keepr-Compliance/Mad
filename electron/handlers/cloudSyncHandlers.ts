@@ -43,6 +43,7 @@ export const CLOUD_SYNC_CHANNELS = [
   "cloud-sync:open-ai-apps",
   "cloud-sync:delete-online-not-here",
   "cloud-sync:delete-old-installs",
+  "cloud-sync:reclaim-install",
 ] as const;
 
 /** Registers the channels against one service. */
@@ -60,6 +61,7 @@ export function registerCloudSyncHandlers(service: CloudSyncService): void {
   ipcMain.handle("cloud-sync:open-ai-apps", () => service.openAiApps());
   ipcMain.handle("cloud-sync:delete-online-not-here", () => service.deleteOnlineNotHere());
   ipcMain.handle("cloud-sync:delete-old-installs", () => service.deleteOldInstalls());
+  ipcMain.handle("cloud-sync:reclaim-install", () => service.reclaimInstall());
 }
 
 const supabaseTransport: RpcTransport = async (fn, args, signal) => {
