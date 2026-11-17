@@ -370,7 +370,11 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
       expect(e.audits).toEqual([expect.objectContaining({ transactionId: DEAL, via: "online" })]);
       expect(db.prepare("SELECT title FROM transaction_checklist_items WHERE id = ?").get(fx.item)).toEqual({ title: "Inspection (moved)" });
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
+      // the pulled title came in under the page's guard: no op echoes it back
+      expect(outbox(db)).toEqual([]);
+      const pushesBefore = e.server.callsTo("cloud_todo_push").length;
       await pass(e);
+      expect(e.server.callsTo("cloud_todo_push").slice(pushesBefore).flatMap((c) => c.args.p_ops as Row[])).toEqual([]);
       expect(outbox(db)).toEqual([]);
       expect(e.server.deals.map((d) => d.id)).toEqual([soft.id]);
       expect(e.server.todos.filter((t) => t.dealId === soft.id)).toHaveLength(2);
