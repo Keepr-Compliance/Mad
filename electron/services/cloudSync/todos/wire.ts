@@ -103,7 +103,9 @@ export function partColumns(part: TodoPart, value: JsonValue): Record<string, st
     case "due":
       return { due_date: toText(value) };
     case "order":
-      return { sort_order: toInt(value) };
+      // PR-4b (SR2 S4): the server stores NULL order (its My items list, migration :674; an AI create without one,
+      // :638); the local column is NOT NULL DEFAULT 0, so NULL is written as that default.
+      return { sort_order: toInt(value) ?? 0 };
   }
 }
 
@@ -117,6 +119,9 @@ export function samePart(part: TodoPart, a: JsonValue | undefined, b: JsonValue 
     const cb = b && typeof b === "object" && !Array.isArray(b) ? toBool((b as Record<string, JsonValue>).is_checked) === true : toBool(b) === true;
     return ca === cb;
   }
+  // PR-4b (SR2 S4): a NULL order online is the local default 0 (partColumns), so the two are the same value and
+  // neither side sends an op for it.
+  if (part === "order") return (toInt(a) ?? 0) === (toInt(b) ?? 0);
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 

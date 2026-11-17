@@ -396,6 +396,8 @@ export class CloudSyncService {
   async reclaimInstall(): Promise<CloudSyncResult> {
     const userId = await this.actingUser();
     if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    // SR2: only a user whose stop is recorded reclaims (otherwise this user's records would be forgotten for nothing).
+    if (!todoStore.installRemovedAt(this.deps.db(), this.deps.projectRef as string, userId)) return { success: false, error: "not_stopped" };
     const r = await this.runner.reclaimInstall(userId, this.ensureInstallId());
     if (!r.ok) return { success: false, error: r.code };
     this.refreshSchedule();

@@ -197,8 +197,10 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       e.server.aiSet(t, "note", "changed while removed");
       await pass(e);
       expect(item(db, I1)).toMatchObject({ checklist_id: CL, title: "Inspection", note: "changed while removed", is_required: 1 });
-      expect(db.prepare("SELECT id FROM transaction_checklist_links WHERE item_id = ? ORDER BY id").all(I1)).toEqual([{ id: fid(10, 1) }, { id: fid(10, 2) }]);
+      // SR2 S2: the text link's only evidence is gone, so it does not come back empty; a notice counts it
+      expect(db.prepare("SELECT id FROM transaction_checklist_links WHERE item_id = ? ORDER BY id").all(I1)).toEqual([{ id: fid(10, 1) }]);
       expect(db.prepare("SELECT id FROM transaction_checklist_link_members ORDER BY id").all()).toEqual([{ id: fid(11, 1) }]);
+      expect(db.prepare("SELECT other_json FROM cloud_sync_todo_notices WHERE kind = 'links_not_restored' AND local_id = ?").all(I1)).toEqual([{ other_json: JSON.stringify({ count: 1 }) }]);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash WHERE local_id = ?", I1)).toBe(0);
       expect(outbox(db)).toEqual([]);
       await pass(e);
@@ -266,7 +268,8 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
         templateId: "tpl-new",
         fields: { template_name: "Closing", is_private: false },
         changeSeq: e.server.nextSeq(USER_A),
-        parts: { ...onlineList(e, MY).parts, order: { rev: 1, value: 5, at: Date.now(), by: "ai_app:conn-1", edit_seq: null } },
+        // migration :674: the server's My items list is created with sort_order NULL
+        parts: { ...onlineList(e, MY).parts, order: { rev: 1, value: null, at: Date.now(), by: "ai_app:conn-1", edit_seq: null } },
       };
       e.server.todos.push(list);
       const child = e.server.aiAdd(list, "Final walk-through");
@@ -588,6 +591,14 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(eb);
       expect(serverB.todos.find((t) => t.localId === fid(3, 80))!.parts.order.value).toBe(4);
       const bState = JSON.stringify(db.prepare("SELECT * FROM cloud_sync_todo_state WHERE owner_user_id = ? ORDER BY local_id").all(USER_B));
+      // I3: B's deal records and marks are untouched by A's reclaim
+      const bDeals = JSON.stringify([
+        db.prepare("SELECT * FROM cloud_sync_state WHERE owner_user_id = ? ORDER BY entity, local_id").all(USER_B),
+        db.prepare("SELECT d.* FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id WHERE t.user_id = ? ORDER BY d.transaction_id").all(USER_B),
+      ]);
+      expect(JSON.parse(bDeals)[0].length).toBeGreaterThan(0);
+      // B is not stopped: B's reclaim is refused and forgets nothing
+      expect(await eb.service.reclaimInstall()).toEqual({ success: false, error: "not_stopped" });
       // A's reclaim: only A's register row, only A's local state; same install id
       const res = await e.service.reclaimInstall();
       expect(res).toEqual({ success: true });
@@ -598,6 +609,10 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(e.server.deals[0].install).toBe(INSTALL);
       expect(e.server.todos.filter((t) => t.entity === "item")).toHaveLength(2);
       expect(JSON.stringify(db.prepare("SELECT * FROM cloud_sync_todo_state WHERE owner_user_id = ? ORDER BY local_id").all(USER_B))).toBe(bState);
+      expect(JSON.stringify([
+        db.prepare("SELECT * FROM cloud_sync_state WHERE owner_user_id = ? ORDER BY entity, local_id").all(USER_B),
+        db.prepare("SELECT d.* FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id WHERE t.user_id = ? ORDER BY d.transaction_id").all(USER_B),
+      ])).toBe(bDeals);
       expect(db.prepare("SELECT install_id FROM cloud_sync_install").all()).toEqual([{ install_id: INSTALL }]);
     });
 
@@ -790,6 +805,164 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "restore" });
       reclaimInstallForUser(db, PROJECT, USER_A, new Date());
       expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: "restore" });
+    });
+  });
+
+  // ================================================================ SR2 (second review of #3594: S1-S5)
+  describe("SR2: other sides' changes", () => {
+    const lock = (db: TestDb, deal: string, status = "approved") => db.prepare("UPDATE transactions SET submission_status = ? WHERE id = ?").run(status, deal);
+
+    it("S1: a local edit of one part pushed while another side changed a different part: the other part reaches the local row, and a later scan does not revert it online", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "ai note, other part");
+      db.prepare("UPDATE transaction_checklist_items SET title = ? WHERE id = ?").run("Inspection (edited here)", I1);
+      await pass(e);
+      expect(onlineItem(e, I1).parts.title.value).toBe("Inspection (edited here)");
+      expect(item(db, I1)).toMatchObject({ title: "Inspection (edited here)", note: "ai note, other part" });
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+      await pass(e);
+      expect(onlineItem(e, I1).parts.note).toMatchObject({ value: "ai note, other part", by: "ai_app:conn-1" });
+    });
+
+    it("S3: on a locked deal (approved) an online removal, an add, a restore and a purge are parked with deal_locked; nothing is written or sent; after the unlock each applies", async () => {
+      const { db, deal, e } = await synced();
+      const removed = onlineItem(e, I1);
+      const restored = onlineItem(e, I2);
+      e.server.removeOnline(restored);
+      await pass(e);
+      expect(item(db, I2)).toBeUndefined();
+      lock(db, deal);
+      e.server.removeOnline(removed);
+      const added = e.server.aiAdd(onlineList(e, CL), "Added while approved");
+      e.server.restoreOnline(restored);
+      const c0 = cursor(db)!;
+      const sent = allOps(e).length;
+      await pass(e);
+      expect(item(db, I1)).toBeDefined();
+      expect(item(db, added.id)).toBeUndefined();
+      expect(item(db, I2)).toBeUndefined();
+      expect(db.prepare("SELECT DISTINCT error_code FROM cloud_sync_todo_parked").all()).toEqual([{ error_code: "deal_locked" }]);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(3);
+      expect(cursor(db)!.last_seq).toBeGreaterThan(c0.last_seq);
+      expect(shadow(db, I1)!.removed_json).toBe(JSON.stringify({ removed_at: null, kind: null }));
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+      await pass(e);
+      expect(allOps(e)).toHaveLength(sent);
+      // a purge waits too (the local row is the only copy left while locked)
+      e.server.purgeOnline(removed);
+      await pass(e);
+      expect(item(db, I1)).toBeDefined();
+      // unlocked: every parked change applies
+      lock(db, deal, "not_submitted");
+      await pass(e);
+      expect(item(db, I1)).toBeUndefined();
+      expect(shadow(db, I1)).toBeUndefined();
+      expect(item(db, added.id)).toMatchObject({ title: "Added while approved" });
+      expect(item(db, I2)).toMatchObject({ title: "Call lender" });
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(0);
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("S4: a todo created online with sort_order NULL (an AI add, the server's My items list) is created here with 0 and sends no op, neither after a full pull nor after a daily scan; nothing parks", async () => {
+      const { db, e } = await synced();
+      const added = e.server.aiAdd(onlineList(e, MY), "null order");
+      expect(added.parts.order.value).toBeNull();
+      const list: FakeTodo = { ...onlineList(e, CL), id: fid(96, 1), localId: fid(96, 1), templateId: "tpl-null", aliases: [], fields: { template_name: "Online list", is_private: false },
+        changeSeq: e.server.nextSeq(USER_A), parts: { ...onlineList(e, CL).parts, order: { rev: 1, value: null, at: Date.now(), by: "ai_app:conn-1", edit_seq: null } } };
+      e.server.todos.push(list);
+      const sent = allOps(e).length;
+      await pass(e);
+      expect(item(db, added.id)!.sort_order).toBe(0);
+      expect(db.prepare("SELECT sort_order FROM transaction_checklists WHERE id = ?").get(list.id)).toEqual({ sort_order: 0 });
+      e.server.aiSet(added, "note", "ai note");
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
+      const r = await pass(e);
+      expect(r.pull).toMatchObject({ fullPullDone: true, parked: 0 });
+      expect(item(db, added.id)!.note).toBe("ai note");
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+      await pass(e);
+      expect(allOps(e)).toHaveLength(sent);
+      expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_parked")).toBe(0);
+    });
+
+    it("H1/H3: a held op wins causally (base_rev = the pulled rev) even when the other side's change is timed after it; approved locks like submitted", async () => {
+      const { db, deal, e } = await synced();
+      lock(db, deal, "approved");
+      e.server.aiSet(onlineItem(e, I1), "note", "ai, timed later", Date.now() + 3_600_000);
+      await pass(e);
+      const held = allOps(e).filter((o) => o.held_locked === true);
+      expect(held).toHaveLength(1);
+      expect(typeof held[0].base_rev).toBe("number");
+      expect(onlineItem(e, I1).parts.note.value).toBeNull();
+      expect(item(db, I1)!.note).toBeNull();
+    });
+
+    it("PD: a pulled row whose local_id names a local todo of another checklist and cloud id is parked (local_id_conflict); that todo and its shadow are untouched", async () => {
+      const { db, e } = await synced();
+      const before = { item: item(db, I1), shadow: shadow(db, I1) };
+      const cur = cursor(db)!;
+      const other = onlineItem(e, I2);
+      const r = applyTodoPage(db, { projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: new Date() }, {
+        rows: [{ entity: "item", cloud_id: fid(77, 1), cloud_deal_id: other.dealId, cloud_checklist_id: other.checklistId, local_id: I1, change_seq: cur.last_seq + 1, purged: false,
+          parts: Object.fromEntries(Object.entries(other.parts).map(([k, v]) => [k, { ...v, rev: v.rev + 5, by: "ai_app:x", value: k === "title" ? "INTRUDER" : v.value }])) as unknown as JsonValue }],
+        next_after: cur.last_seq + 1, horizon: cur.horizon ?? 0, install_max_edit_seq: null,
+      }, 500);
+      expect(r.parked).toBeGreaterThan(0);
+      expect(item(db, I1)).toEqual(before.item);
+      expect(shadow(db, I1)).toEqual(before.shadow);
+      expect(db.prepare("SELECT error_code FROM cloud_sync_todo_parked").all()).toEqual([{ error_code: "local_id_conflict" }]);
+    });
+
+    it("D1: a pulled row whose local_id is another local user's todo writes nothing to it", async () => {
+      const { db, e } = await synced();
+      const dealB = dealId();
+      insertDeal(db, dealB, USER_B);
+      db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 70), dealB, "tpl-b", "B list", 0);
+      db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 70), fid(3, 70), "B's item", null, 0, null, 0);
+      const before = item(db, fid(4, 70));
+      const cur = cursor(db)!;
+      const t = onlineItem(e, I1);
+      applyTodoPage(db, { projectRef: PROJECT, userId: USER_A, installId: INSTALL, now: new Date() }, {
+        rows: [{ entity: "item", cloud_id: fid(77, 2), cloud_deal_id: t.dealId, cloud_checklist_id: t.checklistId, local_id: fid(4, 70), change_seq: cur.last_seq + 1, purged: false,
+          parts: Object.fromEntries(Object.entries(t.parts).map(([k, v]) => [k, { ...v, rev: v.rev + 5, value: k === "title" ? "INTRUDER" : v.value }])) as unknown as JsonValue }],
+        next_after: cur.last_seq + 1, horizon: cur.horizon ?? 0, install_max_edit_seq: null,
+      }, 500);
+      expect(item(db, fid(4, 70))).toEqual(before);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_state WHERE local_id = ?").get(fid(4, 70))).toEqual({ n: 0 });
+    });
+
+    it("D4 (W27): a pulled checklist of a template whose local list is already bound to another cloud id is skipped; the local list keeps its binding", async () => {
+      const { db, e } = await synced();
+      const mine = onlineList(e, MY);
+      const other: FakeTodo = { ...mine, id: fid(97, 9), localId: fid(97, 9), aliases: [], changeSeq: e.server.nextSeq(USER_A) };
+      e.server.todos.push(other);
+      await pass(e);
+      expect(shadow(db, MY)).toMatchObject({ cloud_id: mine.id });
+      expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists WHERE id = ?").get(fid(97, 9))).toEqual({ n: 0 });
+    });
+
+    it("E1: conflict notices are deduplicated per user: two local users with an event of the same number each get theirs", async () => {
+      const { db, e } = await synced();
+      enableForUser(db, PROJECT, USER_B, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" }, new Date());
+      const t = onlineItem(e, I1);
+      const ev = { entity: "event", change_seq: 4242, cloud_deal_id: t.dealId, about: "item", cloud_id: t.id, part: "note", outcome: "lost", loser_value: "a", winner_value: "b", by: `desktop:${INSTALL}`, label: "Keepr desktop", other_by: "ai_app:conn-1", effective_at: null, received_at: null };
+      for (const user of [USER_A, USER_B]) {
+        applyTodoPage(db, { projectRef: PROJECT, userId: user, installId: INSTALL, now: new Date() }, { rows: [ev], next_after: 4242, horizon: 0, install_max_edit_seq: null }, 500);
+      }
+      expect(db.prepare("SELECT owner_user_id FROM cloud_sync_todo_notices WHERE kind = 'conflict' AND change_seq = 4242 ORDER BY owner_user_id").all()).toEqual([
+        { owner_user_id: USER_A },
+        { owner_user_id: USER_B },
+      ]);
+    });
+
+    it("I2: an ok status answer without removed:false keeps the user stopped", async () => {
+      const { db, e } = await synced();
+      e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      expect((await pass(e)).outcome).toBe("install_removed");
+      e.server.override = (fn) => (fn === "cloud_install_status" ? { data: { ok: true }, error: null, status: 200 } : undefined);
+      expect((await pass(e)).outcome).toBe("install_removed");
+      expect(todos.installRemovedAt(db, PROJECT, USER_A)).not.toBeNull();
     });
   });
 

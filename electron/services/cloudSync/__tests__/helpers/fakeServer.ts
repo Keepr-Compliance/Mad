@@ -827,7 +827,8 @@ export class FakeServer {
         title: { rev: 1, value: title, at: atMs, by, edit_seq: null },
         note: { rev: 1, value: null, at: atMs, by, edit_seq: null },
         due: { rev: 1, value: null, at: atMs, by, edit_seq: null },
-        order: { rev: 1, value: 99, at: atMs, by, edit_seq: null },
+        // migration :638 / _cloud_todo_norm :407: an AI create without sort_order stores NULL
+        order: { rev: 1, value: null, at: atMs, by, edit_seq: null },
         removed: { rev: 1, value: { removed_at: null, kind: null }, at: atMs, by, edit_seq: null },
       },
     };

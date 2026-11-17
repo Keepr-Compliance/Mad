@@ -453,6 +453,8 @@ class Page {
       const outcome = this.applyTodo(entity, row);
       if (outcome === "park_parent") throw new ParkError("parent_not_here");
       if (outcome === "park_deal") throw new ParkError("deal_unknown");
+      if (outcome === "park_locked") throw new ParkError("deal_locked");
+      if (outcome === "park_conflict") throw new ParkError("local_id_conflict");
       this.unpark(entity, str(row.cloud_id) ?? "", num(row.change_seq));
     } catch (error) {
       const code =
@@ -521,11 +523,8 @@ class Page {
   }
 
   /** One todo row, in its own savepoint (a failure rolls back this row alone; the caller parks it). */
-  private applyTodo(
-    entity: "item" | "checklist",
-    row: Row,
-  ): "ok" | "park_parent" | "park_deal" {
-    return this.db.transaction((): "ok" | "park_parent" | "park_deal" => {
+  private applyTodo(entity: "item" | "checklist", row: Row): Outcome {
+    return this.db.transaction((): Outcome => {
       const cloudId = str(row.cloud_id);
       if (!cloudId) return "ok";
       const byCloud = this.shadowByCloud(entity, cloudId);
@@ -549,8 +548,25 @@ class Page {
         this.counts.skipped++;
         return "ok";
       }
+      // SR2 PD: a pulled row whose local_id names a local row of ANOTHER deal, or whose local row is already bound to
+      // another cloud id, is not this todo (a well-behaved server cannot emit it): parked, nothing written.
+      if (!byCloud && local) {
+        const rowDeal = this.dealOf(str(row.cloud_deal_id));
+        if (
+          (rowDeal && rowDeal !== tx) ||
+          (shadow?.cloud_id && shadow.cloud_id !== cloudId)
+        )
+          return "park_conflict";
+      }
+      // SR2 S3 (plan §2.4): a locked deal takes no other side's change. A removal, a purge, an add and a restore of
+      // a todo of a locked deal are parked with deal_locked and applied by the parked retry once the deal unlocks;
+      // nothing is written meanwhile (no shadow move, so nothing echoes and nothing is lost), the cursor advances.
+      const locked = dealLockedHere(this.db, tx);
 
       if (row.purged === true) {
+        // A purge waits too: the server no longer holds the content, so the local row is its only copy while the
+        // deal is locked; once unlocked the purge applies like any other.
+        if (local && locked) return "park_locked";
         if (local) this.deleteLocal(entity, localId);
         this.db
           .prepare(
@@ -584,6 +600,7 @@ class Page {
       const cloudDealId = str(row.cloud_deal_id);
 
       if (removedOnline) {
+        if (local && locked && !pending.has("removed")) return "park_locked";
         this.writeShadow(
           entity,
           localId,
@@ -628,6 +645,7 @@ class Page {
           return "ok";
         }
         // Restored online (the shadow knew it removed), or new from another side (no shadow): create it here.
+        if (locked) return "park_locked";
         const made =
           entity === "item"
             ? this.createItem(localId, row, parts, cloudId, tx)
@@ -637,8 +655,7 @@ class Page {
         return "ok";
       }
 
-      // The local row exists: per part.
-      const locked = dealLockedHere(this.db, tx);
+      // The local row exists: per part (sets on a locked deal are held, below).
       const names: readonly TodoPart[] =
         entity === "item" ? ITEM_PARTS : (["order"] as const);
       const writes: Array<{ part: TodoPart; value: JsonValue }> = [];
@@ -767,11 +784,15 @@ class Page {
     const links = Array.isArray(trash?.links)
       ? (trash!.links as unknown[])
       : [];
+    // SR2 S2 (plan W35): a link comes back only with at least one member whose evidence still exists (the app never
+    // holds an empty link: schema.sql's trg_checklist_link_members_drop_empty_link); the rest are counted.
+    let dropped = 0;
     for (const l of links) {
       const link = obj(l);
       if (!link || typeof link.id !== "string") continue;
       try {
         this.db.transaction(() => {
+          let members = 0;
           this.db
             .prepare(
               `INSERT OR IGNORE INTO transaction_checklist_links (id, item_id, kind, label, sort_order, created_at, include_outside_dates)
@@ -806,24 +827,45 @@ class Page {
                         .get(mem.message_id)
                     : undefined;
             if (!exists) continue;
-            this.db
-              .prepare(
-                "INSERT OR IGNORE INTO transaction_checklist_link_members (id, link_id, kind, attachment_id, email_id, message_id) VALUES (?, ?, ?, ?, ?, ?)",
-              )
-              .run(
-                mem.id,
-                link.id,
-                mem.kind as string,
-                str(mem.attachment_id),
-                str(mem.email_id),
-                str(mem.message_id),
-              );
+            members += this.changes(
+              this.db
+                .prepare(
+                  "INSERT OR IGNORE INTO transaction_checklist_link_members (id, link_id, kind, attachment_id, email_id, message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .run(
+                  mem.id,
+                  link.id,
+                  mem.kind as string,
+                  str(mem.attachment_id),
+                  str(mem.email_id),
+                  str(mem.message_id),
+                ),
+            );
           }
+          if (members === 0) throw new ParkError("link_without_evidence");
         })();
       } catch {
-        /* that link stays out; the item is restored */
+        dropped++; /* that link stays out; the item is restored */
       }
     }
+    if (dropped > 0) {
+      this.db
+        .prepare(
+          `INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, other_json, actor_kind, created_at)
+           VALUES (?, ?, 'item', ?, NULL, 'links_not_restored', ?, 'desktop', ?)`,
+        )
+        .run(
+          this.ctx.projectRef,
+          this.ctx.userId,
+          itemId,
+          JSON.stringify({ count: dropped }),
+          this.at,
+        );
+    }
+  }
+
+  private changes(r: unknown): number {
+    return Number((r as { changes?: number } | undefined)?.changes ?? 0);
   }
 
   private createChecklist(
@@ -994,6 +1036,9 @@ class Page {
   }
 }
 
+type Outcome =
+  "ok" | "park_parent" | "park_deal" | "park_locked" | "park_conflict";
+
 class ParkError extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -1016,7 +1061,9 @@ export function applyTodoPage(
     // The full pull's kind (cloudSyncTodoDbService.writeCursorOwed / resetTodoCursorForFullPull): 'restore' and
     // 'resync' let the cloud's value win everywhere; NULL (turn-on, the one-time step, an account reset) keeps a
     // part this computer wrote last.
-    const cloudWins = full && (cur?.full_pull_kind === "restore" || cur?.full_pull_kind === "resync");
+    const cloudWins =
+      full &&
+      (cur?.full_pull_kind === "restore" || cur?.full_pull_kind === "resync");
     db.prepare(
       "INSERT OR REPLACE INTO cloud_sync_applying (id, started_at) VALUES (1, ?)",
     ).run(ctx.now.toISOString());

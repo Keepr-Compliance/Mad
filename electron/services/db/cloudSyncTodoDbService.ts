@@ -671,7 +671,13 @@ export function confirmTodoAnswer(
         (db.prepare("SELECT * FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND entity = ? AND local_id = ?").get(...key) as
           | (ShadowRow & Record<string, unknown>)
           | undefined) ?? null;
-      // the shadow: one row, every returned part at a rev not below the stored one
+      // the shadow: one row. PR-4b (SR2 S1): only the part(s) this answer decides locally move — the op's own part
+      // (a set), the removed part (a removal), every part (a create, which also writes them all locally). Another
+      // part the answer carries (another side changed it) keeps its shadow rev, so the pull applies it locally;
+      // moving its shadow here without writing the local row would make the pull skip it and the next scan send
+      // the stale local value back. A rev is still never lowered.
+      const own = (p: StatePart): boolean =>
+        action.scope === "create" ? true : action.scope === "remove" ? p === "removed" : p === row.part;
       const next: Record<string, unknown> = {
         cloud_id: typeof answer.cloud_id === "string" ? answer.cloud_id : before?.cloud_id ?? null,
         cloud_deal_id: typeof answer.cloud_deal_id === "string" ? answer.cloud_deal_id : before?.cloud_deal_id ?? null,
@@ -679,7 +685,7 @@ export function confirmTodoAnswer(
       for (const p of STATE_PARTS) {
         const a = parts[p];
         const oldRev = before ? (before[`${p}_rev`] as number | null) : null;
-        if (a && (oldRev === null || oldRev === undefined || a.rev >= oldRev)) {
+        if (a && own(p) && (oldRev === null || oldRev === undefined || a.rev >= oldRev)) {
           next[`${p}_rev`] = a.rev;
           next[`${p}_json`] = JSON.stringify(a.value);
         } else {
