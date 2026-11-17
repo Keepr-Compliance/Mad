@@ -1057,6 +1057,55 @@ ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
     await svc.close();
   });
 
+  it("1f v81 PROFILE (PR-4a build, Keepr Cloud on): this build runs v82 (the todo cursor gains horizon and full_pull_kind, NULL), the cursor row is kept, nothing else changes; the next open changes nothing", async () => {
+    // A v81 file as the lane branch at ed727cee4 leaves it: 1d's v80 file, v81 applied, and the todo cursor in that
+    // commit's shape (electron/services/db/cloudSyncTodoSql.ts @ ed727cee4 :94-101, no horizon / full_pull_kind).
+    const { file } = buildV79Profile(dir);
+    const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+    const pre = openKeyed(file);
+    pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+    svcClass.MIGRATIONS.find((m) => m.version === 80)!.migrate(pre);
+    svcClass.MIGRATIONS.find((m) => m.version === 81)!.migrate(pre);
+    pre.exec(`DROP TABLE cloud_sync_todo_cursor;
+CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
+  project_ref    TEXT NOT NULL,
+  owner_user_id  TEXT NOT NULL,
+  last_seq       INTEGER NOT NULL DEFAULT 0,
+  full_pull_owed INTEGER NOT NULL DEFAULT 1,
+  updated_at     TEXT,
+  PRIMARY KEY (project_ref, owner_user_id)
+);`);
+    pre.prepare("UPDATE schema_version SET version = 81 WHERE id = 1").run();
+    pre.prepare(
+      "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    pre.prepare("INSERT INTO cloud_sync_install (project_ref, install_id, machine_hash, created_at) VALUES (?, ?, NULL, '2026-11-01T00:00:00.000Z')").run(PROJECT, id(98, 1));
+    pre.prepare("INSERT INTO cloud_sync_todo_cursor (project_ref, owner_user_id, last_seq, full_pull_owed, updated_at) VALUES (?, ?, 0, 1, 'x')").run(PROJECT, U_ON);
+    expect(columns(pre, "cloud_sync_todo_cursor")).toEqual(["project_ref", "owner_user_id", "last_seq", "full_pull_owed", "updated_at"]);
+    const before = snapshot(pre);
+    pre.close();
+
+    const { svc, db } = await openWithThisBuild();
+    expect(versionOf(db)).toBe(LATEST_VERSION);
+    expect(columns(db, "cloud_sync_todo_cursor")).toEqual(["project_ref", "owner_user_id", "last_seq", "full_pull_owed", "updated_at", "horizon", "full_pull_kind"]);
+    expect(db.prepare("SELECT * FROM cloud_sync_todo_cursor").all()).toEqual([
+      { project_ref: PROJECT, owner_user_id: U_ON, last_seq: 0, full_pull_owed: 1, updated_at: "x", horizon: null, full_pull_kind: null },
+    ]);
+    // Row for row (on the columns each table had before): only the version and the after-migration marks.
+    expect(changedTables(db, before)).toEqual(["cloud_sync_dirty", "schema_version"]);
+    const cookie = db.pragma("schema_version", { simple: true });
+    const after = snapshot(db);
+    await svc.close();
+    const again = await openWithThisBuild();
+    expect(again.db.pragma("schema_version", { simple: true })).toBe(cookie);
+    expect(changedTables(again.db, after)).toEqual([]);
+    await again.svc.close();
+    // going back: 2.48.0's open of this v82 file succeeds and leaves the columns alone
+    const old = openAs248(path.join(dir, "mad.db"));
+    expect(columns(old, "cloud_sync_todo_cursor")).toContain("horizon");
+    old.close();
+  });
+
   it("2a GOING BACK, never on: on a profile this build upgraded, 2.48.0's own open and common writes all succeed, no cloud trigger exists, and the cloud tables stay empty", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
