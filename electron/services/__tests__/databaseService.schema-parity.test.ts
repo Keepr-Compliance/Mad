@@ -934,6 +934,93 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-4212: produced by the id PRIMARY KEY; not declared separately.",
     ref: "BACKLOG-4212",
   },
+  // BACKLOG-4263 PR-3: two-way todos, local side. transaction_checklist_items.due_date and
+  // cloud_sync_settings.install_removed_at produce no key (both tables are already new against
+  // the frozen transcript); migration v81 adds them and databaseService.migration-v81.test.ts guards it.
+  {
+    key: "TABLE:cloud_sync_todo_outbox",
+    what: "New table: each checklist/item part change waiting to be sent (value, base rev, edit_seq, wall time, clock epoch, op id, generation).",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_outbox_1",
+    what: "SQLite's automatic index for cloud_sync_todo_outbox' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_counter",
+    what: "New table: this computer's todo edit counter (edit_seq) and wall-clock epoch.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_counter_1",
+    what: "SQLite's automatic index for cloud_sync_todo_counter' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_state",
+    what: "New table: the last values and revs the cloud confirmed per todo part (the shadow).",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_state_1",
+    what: "SQLite's automatic index for cloud_sync_todo_state' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_cursor",
+    what: "New table: the per-user todo feed cursor and whether a full pull is owed.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_cursor_1",
+    what: "SQLite's automatic index for cloud_sync_todo_cursor' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_parked",
+    what: "New table: pulled todo rows that failed to apply, retried later.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_parked_1",
+    what: "SQLite's automatic index for cloud_sync_todo_parked' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_notices",
+    what: "New table: conflict and changed-elsewhere notices for the UI.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_todo_trash",
+    what: "New table: removed todos and checklists with their links and members, kept for restore.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_todo_trash_1",
+    what: "SQLite's automatic index for cloud_sync_todo_trash' primary key.",
+    why: "BACKLOG-4263: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4263",
+  },
+  {
+    key: "TABLE:cloud_sync_applying",
+    what: "New table: the apply guard row that stops pulled changes being captured as new ops.",
+    why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4263",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

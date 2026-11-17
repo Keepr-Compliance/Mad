@@ -91,6 +91,14 @@ import {
   V80_SET_SENDER_KEY_SQL,
 } from "./db/learnModeSql";
 import { fromAddress } from "../utils/senderFilter/senderFilter";
+// BACKLOG-4263 PR-3: migration v81 (todo due date, install_removed_at, todo tables).
+import {
+  V81_ADD_DUE_DATE_SQL,
+  V81_ADD_INSTALL_REMOVED_AT_SQL,
+  V81_ITEMS_TABLE_INFO_SQL,
+  V81_SETTINGS_TABLE_INFO_SQL,
+  V81_TODO_TABLES_DDL,
+} from "./db/migrationV81Sql";
 import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
@@ -2333,6 +2341,25 @@ class DatabaseService implements IDatabaseService {
           if (key !== null) filled += setKey.run(key, r.id).changes;
         }
         hostLogger.info(`[v80] sender_key backfilled on ${filled} of ${rows.length} answered row(s)`);
+      },
+    },
+    {
+      version: 81,
+      description:
+        "BACKLOG-4263 two-way todos (local): transaction_checklist_items gains due_date, " +
+        "cloud_sync_settings gains install_removed_at; the todo outbox, counter, shadow, cursor, " +
+        "parked, notices, trash and apply-guard tables",
+      // Guarded like v79/v80: a FRESH install already has both columns from schema.sql
+      // (schema_version seeds at BASELINE 70, then this migration still runs), so the
+      // ALTERs are skipped there and the migration is re-runnable. Both columns are NULL
+      // on every existing row; no existing row is written. The capture triggers are not
+      // created here: they follow the Keepr Cloud trigger rule after the chain.
+      migrate: (d) => {
+        const has = (sql: string, col: string) => (d.prepare(sql).all() as Array<{ name: string }>).some((c) => c.name === col);
+        if (!has(V81_ITEMS_TABLE_INFO_SQL, "due_date")) d.exec(V81_ADD_DUE_DATE_SQL);
+        const settings = d.prepare(V81_SETTINGS_TABLE_INFO_SQL).all() as Array<{ name: string }>;
+        if (settings.length > 0 && !settings.some((c) => c.name === "install_removed_at")) d.exec(V81_ADD_INSTALL_REMOVED_AT_SQL);
+        d.exec(V81_TODO_TABLES_DDL);
       },
     },
   ];

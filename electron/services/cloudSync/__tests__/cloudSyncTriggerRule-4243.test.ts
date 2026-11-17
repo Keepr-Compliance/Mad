@@ -42,8 +42,8 @@ const turnOn = (db: TestDb, user = USER_A, project = PROJECT) =>
   enableForUser(db, project, user, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" });
 
 describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
-  it("there are 22 triggers", () => {
-    expect(CLOUD_SYNC_TRIGGERS).toHaveLength(22);
+  it("there are 28 triggers (22 dirty-mark, 6 todo capture: BACKLOG-4263)", () => {
+    expect(CLOUD_SYNC_TRIGGERS).toHaveLength(28);
   });
 
   it("C-a / REGULAR PROFILE: Keepr Cloud never on — no trigger, no mark, no DDL on the next open, bulk writes mark nothing, get-view hidden", async () => {
@@ -68,7 +68,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     expect(e.server.calls).toHaveLength(0);
   });
 
-  it("C-b: turn-on creates all 22 triggers before the deals are marked, in one transaction; a deal added right after the mark is marked", () => {
+  it("C-b: turn-on creates all 28 triggers before the deals are marked, in one transaction; a deal added right after the mark is marked", () => {
     const db = realProfile();
     insertDeal(db, "d-before");
     // A deal added between the mark-all step and the end of the turn-on transaction.
@@ -119,7 +119,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     expect(triggers(db)).toEqual([]);
   });
 
-  it("C-c: with a second user still on, one user's turn-off keeps all 22; that user's deals stay unmarked", async () => {
+  it("C-c: with a second user still on, one user's turn-off keeps all 28; that user's deals stay unmarked", async () => {
     const db = realProfile();
     turnOn(db, USER_A);
     turnOn(db, USER_B);
@@ -160,7 +160,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     const db = freshDb({ triggers: false });
     ensureCloudSyncTriggers(db); // what an earlier build did on every open
     expect(triggers(db)).toEqual(ALL);
-    expect(applyCloudSyncTriggerRule(db)).toMatchObject({ wanted: false, dropped: 22 });
+    expect(applyCloudSyncTriggerRule(db)).toMatchObject({ wanted: false, dropped: 28 });
     expect(triggers(db)).toEqual([]);
   });
 
