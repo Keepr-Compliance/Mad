@@ -39,6 +39,7 @@
 import type { SqlDb } from "./cloudSyncSqlDb";
 import type { JsonValue } from "../cloudSync/jcs";
 import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
+import { MY_ITEMS_TEMPLATE_ID } from "./checklistPrivacy";
 import { dealLockReason } from "../transactionEligibility";
 import {
   currentInstallId,
@@ -859,7 +860,7 @@ class Page {
     const name =
       str(row.template_name) ??
       str(old.template_name) ??
-      (templateId === "keepr:my-items" ? "My items" : null);
+      (templateId === MY_ITEMS_TEMPLATE_ID ? "My items" : null);
     if (!name) throw new ParkError("no_name");
     const order = parts.order
       ? partColumns("order", parts.order.value).sort_order

@@ -187,7 +187,9 @@ describe("v81 todo due date, install_removed_at and todo tables", () => {
     const cls = svcClass();
     const versions = cls.MIGRATIONS.map((m) => m.version);
     expect(versions.indexOf(81)).toBe(versions.indexOf(80) + 1);
-    expect(Math.max(...versions)).toBe(81);
+    // BACKLOG-4263 PR-4b: v82 (the todo cursor's horizon and full-pull kind) follows v81.
+    expect(versions.indexOf(82)).toBe(versions.indexOf(81) + 1);
+    expect(Math.max(...versions)).toBe(82);
     expect(() => cls.validateNoVersionGaps(cls.MIGRATIONS)).not.toThrow();
   });
 });
