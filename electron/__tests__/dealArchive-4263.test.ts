@@ -159,23 +159,22 @@ describe("A1-A2 the archive is written in the delete's own transaction", () => {
 });
 
 describe("A3 never-on users: the delete is exactly today's (Q7, W34)", () => {
-  test("the database after the handler's delete equals the database after a delete with no archive step", async () => {
+  test("the database after the handler's delete equals the database after today's delete statements, from the same file", async () => {
     seedFullDeal(db as unknown as SqlDb, USER, D1);
+    // The same bytes for both sides (seed defaults such as created_at would otherwise differ by the clock).
+    const copy = new (db.constructor as unknown as new (b: Buffer) => DatabaseType)(db.serialize());
+    copy.exec("PRAGMA foreign_keys = ON");
     expect((await invoke("transactions:delete", D1)).success).toBe(true);
     expect(archived()).toEqual([]);
-    const viaHandler = dump(db);
-    await settle();
-    db.close();
-    fresh();
-    seedFullDeal(db as unknown as SqlDb, USER, D1);
     // Today's delete (4ab45f396 transactionDbService.ts deleteTransactionSync), statement for statement, with no
     // archive step: the texts naming the deal, the DELETE, each text re-pointed.
-    db.transaction(() => {
-      const named = db.prepare("SELECT id FROM messages WHERE transaction_id = ?").all(D1) as Array<{ id: string }>;
-      db.prepare("DELETE FROM transactions WHERE id = ?").run(D1);
-      for (const { id } of named) db.prepare(REPOINT_MESSAGE_TRANSACTION_SQL as unknown as string).run(id);
+    copy.transaction(() => {
+      const named = copy.prepare("SELECT id FROM messages WHERE transaction_id = ?").all(D1) as Array<{ id: string }>;
+      copy.prepare("DELETE FROM transactions WHERE id = ?").run(D1);
+      for (const { id } of named) copy.prepare(REPOINT_MESSAGE_TRANSACTION_SQL as unknown as string).run(id);
     })();
-    expect(dump(db)).toBe(viaHandler);
+    expect(dump(db)).toBe(dump(copy));
+    copy.close();
   });
 });
 
