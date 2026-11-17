@@ -4,31 +4,266 @@
   "about": "The todo change protocol of supabase/migrations/20261118110000_backlog_4263_todo_server_core.sql (BACKLOG-4263): the ops cloud_todo_push and the core accept, the answers they give, and the rows cloud_todo_pull returns. Checked against the migration text by supabase/tests/backlog-4263/harness.py check.",
   "push": {
     "function": "cloud_todo_push(p_expected_user_id uuid, p_source_install_id uuid, p_sent_at text, p_ops jsonb)",
-    "limits": {"ops": 200, "bytes": 1048576},
-    "errors": ["not_authorized", "wrong_account", "invalid_input", "not_entitled", "install_removed", "batch_too_large"],
+    "limits": {
+      "ops": 200,
+      "bytes": 1048576
+    },
+    "errors": [
+      "not_authorized",
+      "wrong_account",
+      "invalid_input",
+      "not_entitled",
+      "install_removed",
+      "batch_too_large"
+    ],
     "effective_time": "receive time - (p_sent_at - op.edited_at); -infinity (unknowable) when the age is below 0, above 365 days, either reading is missing or unparseable, or op.clock_stepped is true"
   },
-  "op_kinds": ["create_checklist", "create_item", "set", "remove", "restore"],
-  "entities": ["item", "checklist"],
-  "parts": {"item": ["done", "title", "note", "due", "order"], "checklist": ["order"]},
+  "op_kinds": [
+    "create_checklist",
+    "create_item",
+    "set",
+    "remove",
+    "restore"
+  ],
+  "entities": [
+    "item",
+    "checklist"
+  ],
+  "parts": {
+    "item": [
+      "done",
+      "title",
+      "note",
+      "due",
+      "order"
+    ],
+    "checklist": [
+      "order"
+    ]
+  },
   "op_fields": {
-    "all": ["op_id", "kind", "edited_at", "clock_stepped"],
-    "set": ["entity", "id | deal_id + local_id", "part", "value", "base_rev", "edit_seq", "held_locked"],
-    "remove": ["entity", "id | deal_id + local_id"],
-    "restore": ["entity", "id | deal_id + local_id"],
-    "create_checklist": ["deal_id", "local_id", "template_id", "template_name", "sort_order", "is_private"],
-    "create_item": ["deal_id", "checklist_local_id", "local_id", "title", "description", "is_required", "expected_document_type", "local_created_at", "done", "note", "due_date", "sort_order", "edit_seq"]
+    "all": [
+      "op_id",
+      "kind",
+      "edited_at",
+      "clock_stepped"
+    ],
+    "set": [
+      "entity",
+      "id | deal_id + local_id",
+      "part",
+      "value",
+      "base_rev",
+      "edit_seq",
+      "held_locked"
+    ],
+    "remove": [
+      "entity",
+      "id | deal_id + local_id"
+    ],
+    "restore": [
+      "entity",
+      "id | deal_id + local_id"
+    ],
+    "create_checklist": [
+      "deal_id",
+      "local_id",
+      "template_id",
+      "template_name",
+      "sort_order",
+      "is_private"
+    ],
+    "create_item": [
+      "deal_id",
+      "checklist_local_id",
+      "local_id",
+      "title",
+      "description",
+      "is_required",
+      "expected_document_type",
+      "local_created_at",
+      "done",
+      "note",
+      "due_date",
+      "sort_order",
+      "edit_seq"
+    ]
   },
-  "statuses": ["applied", "unchanged", "lost", "applied_to_removed", "removed", "already_removed", "restored", "not_removed",
-               "not_restorable", "refused_removed", "locked", "not_allowed", "not_found", "rejected", "added", "exists", "mapped", "already_added"],
-  "result": ["op_id", "status", "entity", "cloud_id", "local_id", "cloud_deal_id", "parts", "conflict", "reason", "field"],
-  "part_shape": ["rev", "value", "at", "by", "edit_seq"],
+  "statuses": [
+    "applied",
+    "unchanged",
+    "lost",
+    "applied_to_removed",
+    "removed",
+    "already_removed",
+    "restored",
+    "not_removed",
+    "not_restorable",
+    "refused_removed",
+    "locked",
+    "not_allowed",
+    "not_found",
+    "rejected",
+    "added",
+    "exists",
+    "mapped",
+    "already_added",
+    "install_removed"
+  ],
+  "result": [
+    "op_id",
+    "status",
+    "entity",
+    "cloud_id",
+    "local_id",
+    "cloud_deal_id",
+    "parts",
+    "conflict",
+    "reason",
+    "field"
+  ],
+  "part_shape": [
+    "rev",
+    "value",
+    "at",
+    "by",
+    "edit_seq"
+  ],
   "pull": {
-    "function": "cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer)",
-    "fields": ["head", "rows", "next_after", "install_max_edit_seq", "resync_required"],
-    "row_entities": ["deal", "checklist", "item", "event"],
-    "limit": 500
+    "function": "cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer, p_horizon bigint DEFAULT NULL)",
+    "fields": [
+      "head",
+      "rows",
+      "next_after",
+      "horizon",
+      "install_max_edit_seq",
+      "resync_required"
+    ],
+    "row_entities": [
+      "deal",
+      "checklist",
+      "item",
+      "event"
+    ],
+    "limit": 500,
+    "cursor": "The desktop stores the pair (next_after, horizon) from every page it has applied, in the same local transaction as the page, and sends both back as p_after_seq and p_horizon. A full pull starts with p_after_seq 0 and p_horizon omitted (NULL), and keeps the horizon of each page it applies. When resync_required is true the desktop applies nothing from that answer, drops its cursor and starts a full pull (p_after_seq 0, no p_horizon).",
+    "resync_rule": "resync_required = p_after_seq > head OR (horizon > p_after_seq AND horizon > coalesce(p_horizon, CASE WHEN p_after_seq = 0 THEN horizon ELSE 0 END)), where horizon is the owner's forgotten_through_seq read in the same snapshot as the page."
   },
-  "history_outcomes": ["applied", "lost", "unchanged", "removed", "restored", "applied_to_removed", "held_locked"],
-  "refusals_from_install_scoped_writers": ["install_removed", "not_found"]
+  "history_outcomes": [
+    "applied",
+    "lost",
+    "unchanged",
+    "removed",
+    "restored",
+    "applied_to_removed",
+    "held_locked"
+  ],
+  "refusals_from_install_scoped_writers": [
+    "install_removed",
+    "not_found"
+  ],
+  "ledger": {
+    "rule": "An op's answer is kept for exact replay unless it wrote nothing and can change without the op changing. A repeated op_id whose answer was kept returns that answer and writes nothing; a repeated op_id whose answer was not kept is evaluated again.",
+    "not_kept": [
+      "not_found",
+      "locked",
+      "refused_removed",
+      "install_removed",
+      "rejected/parent_missing",
+      "not_restorable/my_items_exists"
+    ],
+    "batch_errors_never_kept": [
+      "not_authorized",
+      "wrong_account",
+      "invalid_input",
+      "not_entitled",
+      "install_removed",
+      "batch_too_large",
+      "busy"
+    ]
+  },
+  "field_types": {
+    "rule": "A field present with a JSON type outside its list rejects that op alone (status rejected, reason invalid_value, field = the field names); the batch continues. op_id and kind are checked for the whole batch (invalid_input). edited_at of the wrong type or unparseable makes the op's time unknowable (E2).",
+    "entity": [
+      "string"
+    ],
+    "id": [
+      "string"
+    ],
+    "deal_id": [
+      "string"
+    ],
+    "local_id": [
+      "string"
+    ],
+    "checklist_local_id": [
+      "string"
+    ],
+    "template_id": [
+      "string"
+    ],
+    "template_name": [
+      "string",
+      "null"
+    ],
+    "sort_order": [
+      "number",
+      "null"
+    ],
+    "is_private": [
+      "boolean",
+      "null"
+    ],
+    "title": [
+      "string"
+    ],
+    "note": [
+      "string",
+      "null"
+    ],
+    "due_date": [
+      "string",
+      "null"
+    ],
+    "done": [
+      "boolean",
+      "object"
+    ],
+    "description": [
+      "string",
+      "null"
+    ],
+    "is_required": [
+      "boolean",
+      "null"
+    ],
+    "expected_document_type": [
+      "string",
+      "null"
+    ],
+    "local_created_at": [
+      "string",
+      "null"
+    ],
+    "part": [
+      "string"
+    ],
+    "base_rev": [
+      "integer",
+      "null"
+    ],
+    "edit_seq": [
+      "integer",
+      "null"
+    ],
+    "clock_stepped": [
+      "boolean",
+      "null"
+    ],
+    "held_locked": [
+      "boolean",
+      "null"
+    ],
+    "value": "per part (done boolean|{is_checked, checked_at}; title string; note string|null; due YYYY-MM-DD|null; order integer|null)"
+  }
 }

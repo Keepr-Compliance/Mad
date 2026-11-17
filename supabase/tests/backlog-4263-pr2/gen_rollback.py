@@ -17,7 +17,7 @@ R='20261114110000_backlog_4244_mcp_data_tools.sql'
 out=['''-- BACKLOG-4263 PR-2 rollback: removes everything 20261118110000_backlog_4263_todo_server_core.sql adds and
 -- puts the replaced functions back at their earlier bodies (copied from the files that define them:
 -- 20261112190000_backlog_4236_cloud_autosave_schema.sql, 20261114130000_backlog_4243_cloud_list_install_rows.sql,
--- 20261114110000_backlog_4244_mcp_data_tools.sql).
+-- 20261114110000_backlog_4244_mcp_data_tools.sql, 20261118100000_backlog_4263_mcp_list_all_deals.sql).
 -- It deletes every soft-removed deal (removed_at set), with its rows, and fences their unreferenced blobs,
 -- because the earlier functions have no removed state. It deletes the history, ledger, feed head and
 -- removed-install rows, the added columns and their values, and the ledger row.
@@ -51,15 +51,16 @@ out.append(unit(L,'cloud_list_install_rows','$f$'))
 out.append('GRANT CREATE ON SCHEMA public TO mcp_reader;\nSET ROLE mcp_reader;\n')
 for n in ['_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists']:
     out.append(unit(R,n,'$fn$'))
+out.append(unit('20261118100000_backlog_4263_mcp_list_all_deals.sql','_mcp_r_list_all_deals','$fn$'))
 out.append('RESET ROLE;\nREVOKE CREATE ON SCHEMA public FROM mcp_reader;\n')
 fns=['cloud_purge_deal_now(uuid, uuid)','_cloud_todo_purge()','_cloud_todo_purge_deal(uuid, uuid)','cloud_install_status(uuid, uuid)',
  'cloud_reclaim_install(uuid, uuid)','cloud_list_removed(uuid)','cloud_todo_restore(uuid, text, uuid, uuid)',
- 'cloud_todo_history(uuid, text, uuid, integer)','cloud_todo_pull(uuid, uuid, bigint, integer)','cloud_todo_push(uuid, uuid, text, jsonb)',
+ 'cloud_todo_history(uuid, text, uuid, integer)','cloud_todo_pull(uuid, uuid, bigint, integer, bigint)','cloud_todo_push(uuid, uuid, text, jsonb)',
  '_cloud_todo_apply(uuid, jsonb, jsonb)','_cloud_todo_apply_op(uuid, jsonb, text, uuid, jsonb, timestamptz)',
  '_cloud_todo_unremove_deal(uuid, uuid, jsonb)','_cloud_todo_soft_remove_deal(uuid, uuid, text, jsonb)','_cloud_todo_deal_locked(uuid, uuid)',
  '_cloud_todo_write_part(uuid, text, uuid, text, jsonb, timestamptz, text, bigint)','_cloud_todo_norm(text, text, jsonb, boolean, timestamptz)',
  '_cloud_todo_same(text, jsonb, jsonb)','_cloud_todo_checklist_json(public.cloud_deal_checklists)','_cloud_todo_item_json(public.cloud_deal_checklist_items)',
- '_cloud_todo_hist(uuid, uuid, text, uuid, text, text, jsonb, jsonb, text, jsonb, text, timestamptz, timestamptz, uuid)','_cloud_todo_take_seq(uuid, integer)','_cloud_install_removed(uuid, uuid)']
+ '_cloud_todo_hist(uuid, uuid, text, uuid, text, text, jsonb, jsonb, text, jsonb, text, timestamptz, timestamptz, uuid)','_cloud_todo_take_seq(uuid, integer)','_cloud_install_removed(uuid, uuid)','_cloud_todo_recorded(jsonb)']
 for f in fns: out.append('DROP FUNCTION IF EXISTS public.%s;\n'%f)
 out.append('''DROP TABLE IF EXISTS public.cloud_todo_history;
 DROP TABLE IF EXISTS public.cloud_todo_ops;

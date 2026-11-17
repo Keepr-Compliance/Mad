@@ -95,8 +95,8 @@ $h$;
 CREATE FUNCTION pg_temp.push(u uuid, inst uuid, sent text, ops jsonb) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.call_as(u, format('SELECT public.cloud_todo_push(%L::uuid, %L::uuid, %L::text, %L::jsonb)', u, inst, sent, ops)))
 $h$;
-CREATE FUNCTION pg_temp.pull(u uuid, inst uuid, after bigint, lim int DEFAULT 500) RETURNS jsonb LANGUAGE sql AS $h$
-  SELECT pg_temp.j(pg_temp.call_as(u, format('SELECT public.cloud_todo_pull(%L::uuid, %L::uuid, %L::bigint, %L::integer)', u, inst, after, lim)))
+CREATE FUNCTION pg_temp.pull(u uuid, inst uuid, after bigint, lim int DEFAULT 500, horizon bigint DEFAULT NULL) RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT pg_temp.j(pg_temp.call_as(u, format('SELECT public.cloud_todo_pull(%L::uuid, %L::uuid, %L::bigint, %L::integer, %L::bigint)', u, inst, after, lim, horizon)))
 $h$;
 CREATE FUNCTION pg_temp.rpc(u uuid, q text) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.call_as(u, q))
@@ -130,18 +130,19 @@ $h$;
 CREATE FUNCTION pg_temp.head(u uuid) RETURNS bigint LANGUAGE sql STABLE AS $h$
   SELECT coalesce((SELECT last_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = u), 0)
 $h$;
--- every row of a full pull loop from `after` (page size lim): {ids:[...], seqs:[...], pages:n, resync:bool}
-CREATE FUNCTION pg_temp.pull_all(u uuid, inst uuid, after bigint, lim int) RETURNS jsonb LANGUAGE plpgsql AS $h$
-DECLARE r jsonb; a bigint := after; ids jsonb := '[]'; seqs jsonb := '[]'; n int := 0; rs boolean := false;
+-- every row of a pull loop from `after` (page size lim), carrying the horizon as the desktop must:
+-- {ids:[...], seqs:[...], pages:n, resync:bool}
+CREATE FUNCTION pg_temp.pull_all(u uuid, inst uuid, after bigint, lim int, horizon bigint DEFAULT NULL) RETURNS jsonb LANGUAGE plpgsql AS $h$
+DECLARE r jsonb; a bigint := after; hz bigint := horizon; ids jsonb := '[]'; seqs jsonb := '[]'; n int := 0; rs boolean := false;
 BEGIN
   LOOP
-    r := pg_temp.pull(u, inst, a, lim);
+    r := pg_temp.pull(u, inst, a, lim, hz);
     IF r ->> 'ok' IS DISTINCT FROM 'true' THEN RETURN jsonb_build_object('error', r); END IF;
     n := n + 1; rs := rs OR (r ->> 'resync_required')::boolean;
     ids := ids || coalesce((SELECT jsonb_agg(x ->> 'cloud_id') FROM jsonb_array_elements(r -> 'rows') x), '[]');
     seqs := seqs || coalesce((SELECT jsonb_agg((x ->> 'change_seq')::bigint) FROM jsonb_array_elements(r -> 'rows') x), '[]');
     EXIT WHEN jsonb_array_length(r -> 'rows') < lim OR n > 200;
-    a := (r ->> 'next_after')::bigint;
+    a := (r ->> 'next_after')::bigint; hz := (r ->> 'horizon')::bigint;
   END LOOP;
   RETURN jsonb_build_object('ids', ids, 'seqs', seqs, 'pages', n, 'resync', rs, 'last', r);
 END $h$;

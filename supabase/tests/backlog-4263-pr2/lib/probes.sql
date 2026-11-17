@@ -102,7 +102,7 @@ BEGIN
   rd := pg_temp.push(A, pg_temp.id('I1'), pg_temp.nowt(), jsonb_build_array(pg_temp.op_set(i1, 'note', '"offline edit"', 1, 1, pg_temp.nowt())));
   PERFORM pg_temp.deldeal(A, pg_temp.id('D2'));
   rx := pg_temp.ai(A, jsonb_build_array(pg_temp.op_set(i3, 'note', '"x"')));
-  rr := pg_temp.ai(A, jsonb_build_array(pg_temp.op('restore', 'item', i1)));
+  rr := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'item', i1));
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.st(rc) = 'removed', 'checklist ' || rc::text),
     pg_temp.pass(pg_temp.st(ra) = 'refused_removed' AND (pg_temp.it(i1)).is_checked IS NOT TRUE, 'ai ' || ra::text),
@@ -439,13 +439,15 @@ END $p$;
 -- Q8 / C41: cloud_purge_deal_now
 CREATE FUNCTION pg_temp.p_purge_now() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); D1 uuid := pg_temp.id('D1'); D2 uuid := pg_temp.id('D2');
-        r_live jsonb; r_anon text; r_b jsonb; r_a jsonb; r_again jsonb; r_none text;
+        r_live jsonb; r_anon text; r_b jsonb; r_a jsonb; r_again jsonb; r_none text; r_bd text;
 BEGIN
   r_live := pg_temp.rpc(A, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, D1));
   PERFORM pg_temp.deldeal(A, D2);
   r_anon := pg_temp.call_as(NULL, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, D2), 'anon');
   r_none := pg_temp.as_user(NULL, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, D2));
   r_b := pg_temp.rpc(B, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', B, D2));
+  r_bd := pg_temp.as_user(B, format('SELECT to_jsonb(public._cloud_todo_purge_deal(%L::uuid, %L::uuid))', B, D2))
+          || CASE WHEN EXISTS (SELECT 1 FROM public.cloud_deals WHERE id = D2) THEN ' kept' ELSE ' gone' END;
   r_a := pg_temp.rpc(A, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, D2));
   r_again := pg_temp.rpc(A, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, D2));
   RETURN pg_temp.all_of(
@@ -453,6 +455,7 @@ BEGIN
     pg_temp.pass(r_anon LIKE 'ERR 42501%', 'anon ' || r_anon::text),
     pg_temp.pass(pg_temp.j(r_none) ->> 'error' = 'not_authorized', 'no claims ' || r_none::text),
     pg_temp.pass(r_b ->> 'status' = 'not_found', 'other owner ' || r_b::text),
+    pg_temp.pass(r_bd = '"not_found" kept', 'purge step as other owner ' || r_bd),
     pg_temp.pass(r_a ->> 'status' = 'purged' AND NOT EXISTS (SELECT 1 FROM public.cloud_deals WHERE id = D2)
                  AND (SELECT purge_requested_at FROM public.cloud_blobs WHERE id = pg_temp.id('BL1')) IS NOT NULL
                  AND NOT EXISTS (SELECT 1 FROM public.cloud_todo_history WHERE cloud_deal_id = D2), 'owner ' || r_a::text),
@@ -622,35 +625,10 @@ BEGIN
 END $p$;
 
 -- C26: only the allocator reads the sequence; every function that writes change_seq takes its number from it
-CREATE FUNCTION pg_temp.p_seq_catalog() RETURNS text LANGUAGE plpgsql AS $p$
-DECLARE bad text; who text;
-BEGIN
-  SELECT string_agg(p.proname, ', ') INTO who FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc ~ 'cloud_todo_seq\M';
-  IF who IS DISTINCT FROM '_cloud_todo_take_seq' THEN RETURN 'FAIL: sequence readers: ' || coalesce(who, 'none'); END IF;
-  SELECT string_agg(p.proname, ', ') INTO bad FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-     AND (p.prosrc ~* 'change_seq\s*=[^=]' OR p.prosrc ~* 'insert\s+into\s+public\.cloud_(deals|deal_checklists|deal_checklist_items|todo_history)\s*\([^)]*change_seq')
-     AND p.prosrc !~ '_cloud_todo_take_seq\(';
-  IF bad IS NOT NULL THEN RETURN 'FAIL: change_seq written without the allocator: ' || bad; END IF;
-  RETURN 'PASS';
-END $p$;
+-- (p_seq_catalog: rewritten below)
 
 -- lock order: the head is taken after settings and before any deal row lock (catalogue text order)
-CREATE FUNCTION pg_temp.p_lock_order() RETURNS text LANGUAGE plpgsql AS $p$
-DECLARE r record; s text; ph int; pd int; bad text := '';
-BEGIN
-  FOR r IN SELECT * FROM (VALUES
-      ('public.cloud_upsert_deal(uuid,jsonb)', '_cloud_todo_take_seq(v_uid, 0)', 'INSERT INTO public.cloud_deals'),
-      ('public.cloud_delete_deal(uuid,uuid)', '_cloud_todo_take_seq(v_uid, 0)', 'FOR UPDATE;'),
-      ('public.cloud_delete_install(uuid,uuid)', '_cloud_todo_take_seq(v_uid, 0)', 'ORDER BY d.id FOR UPDATE'),
-      ('public._cloud_todo_apply(uuid,jsonb,jsonb)', '_cloud_todo_take_seq(p_owner, 0)', '/*CORE:lockdeals*/')) v(sig, head, deal) LOOP
-    SELECT prosrc INTO s FROM pg_proc WHERE oid = to_regprocedure(r.sig);
-    ph := position(r.head IN s); pd := position(r.deal IN s);
-    IF NOT (ph > 0 AND pd > 0 AND ph < pd AND position('public.cloud_autosave_settings WHERE user_id' IN s) BETWEEN 1 AND ph) THEN
-      bad := bad || r.sig || ' head@' || ph || ' deal@' || pd || ' ';
-    END IF;
-  END LOOP;
-  RETURN pg_temp.pass(bad = '', bad);
-END $p$;
+-- (p_lock_order: rewritten below)
 
 -- the earlier one-way path still works after the migration (a desktop built from this branch)
 CREATE FUNCTION pg_temp.p_old_path() RETURNS text LANGUAGE plpgsql AS $p$
@@ -741,3 +719,277 @@ BEGIN
   RETURN pg_temp.pass(r ->> 'ok' = 'true' AND pg_temp.st(r, 0) = 'not_found' AND pg_temp.st(r, 1) = 'not_found' AND pg_temp.st(r, 2) = 'not_found'
                       AND pg_temp.st(r, 3) = 'not_found' AND pg_temp.st(r, 4) = 'applied', r::text);
 END $p$;
+
+
+-- C26 (R5): every statement that assigns change_seq takes the number from the allocator in that statement;
+-- only the allocator reads the sequence
+CREATE FUNCTION pg_temp.p_seq_catalog() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE bad text := ''; who text; r record; st text;
+BEGIN
+  SELECT string_agg(p.proname, ', ') INTO who FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc ~ 'cloud_todo_seq\M';
+  IF who IS DISTINCT FROM '_cloud_todo_take_seq' THEN RETURN 'FAIL: sequence readers: ' || coalesce(who, 'none'); END IF;
+  FOR r IN SELECT p.proname, p.prosrc FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc ~ 'change_seq' LOOP
+    FOREACH st IN ARRAY regexp_split_to_array(r.prosrc, ';') LOOP
+      IF (st ~* 'change_seq\s*=[^=]' OR st ~* 'insert\s+into\s+public\.cloud_(deals|deal_checklists|deal_checklist_items|todo_history)\s*\([^)]*change_seq')
+         AND st !~ '_cloud_todo_take_seq\(' THEN
+        bad := bad || r.proname || ': ' || left(regexp_replace(st, '\s+', ' ', 'g'), 120) || ' | ';
+      END IF;
+    END LOOP;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '', 'change_seq written without the allocator in the same statement: ' || bad);
+END $p$;
+
+-- lock order (R5): in every writer that takes the head, per branch: settings before the head, the head before
+-- any deal row lock or write
+CREATE FUNCTION pg_temp.p_lock_order() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE r record; s text; bad text := ''; blk text; a int; b int; c int;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('public.cloud_upsert_deal(uuid,jsonb)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE', 'PERFORM public._cloud_todo_take_seq(v_uid, 0);', 'INSERT INTO public.cloud_deals'),
+      ('public.cloud_upsert_deal(uuid,jsonb)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE', 'PERFORM public._cloud_todo_take_seq(v_uid, 0);', 'x.local_transaction_id = v_local FOR UPDATE'),
+      ('public.cloud_delete_deal(uuid,uuid)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE', 'PERFORM public._cloud_todo_take_seq(v_uid, 0);', 'FOR UPDATE;'),
+      ('public.cloud_delete_install(uuid,uuid)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE', 'PERFORM public._cloud_todo_take_seq(v_uid, 0);', 'ORDER BY d.id FOR UPDATE'),
+      ('public.cloud_todo_restore(uuid,text,uuid,uuid)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE', 'PERFORM public._cloud_todo_take_seq(v_uid, 0);', 'WHERE x.id = p_id AND x.owner_user_id = v_uid FOR UPDATE'),
+      ('public._cloud_todo_purge_deal(uuid,uuid)', 'IF p_owner IS NULL', 'PERFORM public._cloud_todo_take_seq(p_owner, 0);', 'WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE'),
+      ('public.cloud_purge_deal_now(uuid,uuid)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE', 'NOT EXISTS (SELECT 1 FROM public.cloud_deals d', 'public._cloud_todo_purge_deal(v_uid'),
+      ('public._cloud_todo_purge()', 'FOR v_owner IN', 'FOR UPDATE SKIP LOCKED', 'public._cloud_todo_purge_deal(v_owner'),
+      ('public.set_my_cloud_autosave(uuid,boolean,integer)', 'public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE', 'h.owner_user_id = v_uid FOR UPDATE', 'DELETE FROM public.cloud_deals')) v(sig, first, head, deal) LOOP
+    SELECT prosrc INTO s FROM pg_proc WHERE oid = to_regprocedure(r.sig);
+    a := position(r.first IN s); b := position(r.head IN s); c := position(r.deal IN s);
+    IF NOT (a > 0 AND b > a AND c > b) THEN bad := bad || r.sig || format(' first@%s head@%s deal@%s; ', a, b, c); END IF;
+  END LOOP;
+  -- the core: both arms of the head step take the head, and nothing locks a row before the step ends
+  SELECT prosrc INTO s FROM pg_proc WHERE oid = to_regprocedure('public._cloud_todo_apply(uuid,jsonb,jsonb)');
+  a := position('IF v_kind = ''ai_app'' THEN' IN s); c := position('/*CORE:lockdeals*/' IN s);
+  blk := substr(s, a, c - a);
+  IF a = 0 OR (length(blk) - length(replace(blk, 'PERFORM public._cloud_todo_take_seq(p_owner, 0);', ''))) / length('PERFORM public._cloud_todo_take_seq(p_owner, 0);') <> 2
+     OR position('FOR UPDATE' IN substr(s, 1, a)) > 0 THEN
+    bad := bad || '_cloud_todo_apply: head not taken in both arms before the row locks; ';
+  END IF;
+  RETURN pg_temp.pass(bad = '', bad);
+END $p$;
+
+-- R1: a paged full pull across a purge horizon finishes; a stale cursor resyncs; a purge between two pages resyncs
+CREATE FUNCTION pg_temp.p_resync() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb; pa jsonb; p1 jsonb; p2 jsonb; old_cursor bigint; old_hz bigint; st jsonb; f bigint;
+BEGIN
+  -- a cursor that was current before the purge
+  p1 := pg_temp.pull(A, I1, 0, 500);
+  old_cursor := 2; old_hz := (p1 ->> 'horizon')::bigint;
+  PERFORM pg_temp.deldeal(A, pg_temp.id('D2'));
+  UPDATE public.cloud_deals SET restorable_until = now() - interval '1 day' WHERE id = pg_temp.id('D2');
+  PERFORM pg_temp.clear_claims();
+  r := public._cloud_todo_purge();
+  f := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  pa := pg_temp.pull_all(A, I1, 0, 1);
+  st := pg_temp.pull(A, I1, old_cursor, 500, old_hz);
+  -- a purge between two pages of a full pull
+  p1 := pg_temp.pull(A, I1, 0, 1);
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('i2'), pg_temp.nowt())));
+  UPDATE public.cloud_deal_checklist_items SET removed_at = now() - interval '31 days' WHERE id = pg_temp.id('i2');
+  UPDATE public.cloud_deal_checklist_items SET purged_at = now() - interval '366 days' WHERE id = pg_temp.id('i3');
+  r := public._cloud_todo_purge();
+  p2 := pg_temp.pull(A, I1, (p1 ->> 'next_after')::bigint, 1, (p1 ->> 'horizon')::bigint);
+  RETURN pg_temp.all_of(
+    pg_temp.pass((pa ->> 'resync')::boolean IS NOT TRUE AND (pa ->> 'pages')::int > 3, 'limit-1 full pull after purge: ' || left(pa::text, 200) || ' forgotten ' || f),
+    pg_temp.pass((st ->> 'resync_required')::boolean, 'stale cursor ' || old_cursor || '/' || old_hz || ' forgotten ' || f || ': ' || left(st::text, 120)),
+    pg_temp.pass((p2 ->> 'resync_required')::boolean, 'purge between pages: ' || left(p2::text, 160) || ' page1 ' || left(p1::text, 80)));
+END $p$;
+
+-- R5: the horizon moves for tombstone and history deletes on their own (no deal purged)
+CREATE FUNCTION pg_temp.p_purge_horizon() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); i3 uuid := pg_temp.id('i3'); i1 uuid := pg_temp.id('i1'); f0 bigint; f1 bigint; f2 bigint; s3 bigint; hmax bigint; r jsonb;
+BEGIN
+  UPDATE public.cloud_deal_checklist_items SET purged_at = now() - interval '366 days', removed_at = now() - interval '400 days' WHERE id = i3;
+  s3 := (SELECT change_seq FROM public.cloud_deal_checklist_items WHERE id = i3);
+  f0 := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  PERFORM pg_temp.clear_claims();
+  r := public._cloud_todo_purge();
+  f1 := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  FOR n IN 1..52 LOOP
+    PERFORM public._cloud_todo_hist(A, pg_temp.id('D1'), 'item', i1, 'change', 'note', NULL, to_jsonb(n), 'applied',
+              '{"kind":"desktop"}'::jsonb, NULL, now(), now() - interval '40 days', NULL);
+  END LOOP;
+  hmax := (SELECT max(change_seq) FROM (SELECT change_seq FROM public.cloud_todo_history WHERE entity_id = i1 ORDER BY change_seq LIMIT 2) x);
+  r := public._cloud_todo_purge();
+  f2 := (SELECT forgotten_through_seq FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  RETURN pg_temp.all_of(
+    pg_temp.pass(NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklist_items WHERE id = i3) AND f1 >= s3 AND f1 > f0, format('tombstone: seq %s f0 %s f1 %s', s3, f0, f1)),
+    pg_temp.pass((SELECT count(*) FROM public.cloud_todo_history WHERE entity_id = i1) = 50 AND f2 >= hmax, format('history: left %s max deleted %s f2 %s',
+                 (SELECT count(*) FROM public.cloud_todo_history WHERE entity_id = i1), hmax, f2)));
+END $p$;
+
+-- R6: with Keepr Cloud off, the removal calls write nothing; turning it on again is not refused
+CREATE FUNCTION pg_temp.p_off_writes() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); di jsonb; dd jsonb; pn jsonb; up jsonb; reg int; hd int;
+BEGIN
+  PERFORM pg_temp.onoff(A, false);
+  di := pg_temp.delinst(A, I1);
+  dd := pg_temp.deldeal(A, pg_temp.id('D1'));
+  pn := pg_temp.rpc(A, format('SELECT public.cloud_purge_deal_now(%L::uuid, %L::uuid)', A, pg_temp.id('D1')));
+  reg := (SELECT count(*) FROM public.cloud_removed_installs WHERE owner_user_id = A);
+  hd := (SELECT count(*) FROM public.cloud_todo_feed_head WHERE owner_user_id = A);
+  PERFORM pg_temp.onoff(A, true);
+  up := pg_temp.deal(A, pg_temp.dp(I1, 'fresh'));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(di ->> 'success' = 'true' AND di ->> 'deleted_deals' = '0' AND dd ->> 'error' = 'not_found' AND pn ->> 'status' = 'not_found',
+                 di::text || dd::text || pn::text),
+    pg_temp.pass(reg = 0 AND hd = 0, format('register %s head %s', reg, hd)),
+    pg_temp.pass(pg_temp.st(up) = 'applied', 'upload after on: ' || up::text));
+END $p$;
+
+-- R3: every field of every op type fed a wrong JSON type is refused for that op alone; the batch goes on
+CREATE FUNCTION pg_temp.p_types() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); s text := pg_temp.nowt(); ops jsonb := '[]'; want jsonb := '[]'; base jsonb; c record; r jsonb; res text[] := '{}'; k int := 0;
+BEGIN
+  FOR c IN SELECT * FROM (VALUES
+      ('set', 'entity', '5'), ('set', 'id', '5'), ('set', 'part', '5'), ('set', 'base_rev', '"x"'), ('set', 'base_rev', '1.5'), ('set', 'edit_seq', '"x"'),
+      ('set', 'edit_seq', '2.5'), ('set', 'clock_stepped', '"x"'), ('set', 'held_locked', '"x"'), ('set', 'value', '5'),
+      ('create_item', 'deal_id', '5'), ('create_item', 'checklist_local_id', '7'), ('create_item', 'local_id', '7'), ('create_item', 'title', '5'),
+      ('create_item', 'note', '5'), ('create_item', 'due_date', '5'), ('create_item', 'done', '5'), ('create_item', 'sort_order', '"x"'),
+      ('create_item', 'description', '5'), ('create_item', 'is_required', '"x"'), ('create_item', 'expected_document_type', '5'),
+      ('create_item', 'local_created_at', 'true'), ('create_item', 'edit_seq', '"x"'),
+      ('create_checklist', 'deal_id', '5'), ('create_checklist', 'local_id', '5'), ('create_checklist', 'template_id', 'true'),
+      ('create_checklist', 'template_name', '5'), ('create_checklist', 'sort_order', '"x"'), ('create_checklist', 'is_private', '"maybe"'),
+      ('remove', 'entity', '5'), ('remove', 'id', '{}'), ('restore', 'entity', '5'), ('restore', 'id', '[]')) v(kind, field, bad) LOOP
+    k := k + 1;
+    base := CASE c.kind
+      WHEN 'set' THEN jsonb_build_object('kind', 'set', 'entity', 'item', 'id', pg_temp.id('i1'), 'part', 'note', 'value', 'x', 'base_rev', 1, 'edit_seq', 1)
+      WHEN 'create_item' THEN jsonb_build_object('kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'checklist_local_id', 'cl1', 'local_id', 'ty-' || k, 'title', 'T' || k)
+      WHEN 'create_checklist' THEN jsonb_build_object('kind', 'create_checklist', 'deal_id', pg_temp.id('D1'), 'local_id', 'tc-' || k, 'template_id', 't' || k)
+      ELSE jsonb_build_object('kind', c.kind, 'entity', 'item', 'id', pg_temp.id('m1')) END;
+    ops := ops || (base || jsonb_build_object('op_id', gen_random_uuid(), 'edited_at', s, c.field, c.bad::jsonb));
+    want := want || to_jsonb(c.kind || '.' || c.field);
+  END LOOP;
+  ops := ops || pg_temp.op_set(pg_temp.id('i2'), 'note', '"good"', 1, 1, s);
+  r := pg_temp.push(A, pg_temp.id('I1'), s, ops);
+  IF r ->> 'ok' IS DISTINCT FROM 'true' THEN RETURN 'FAIL: batch refused: ' || left(r::text, 300); END IF;
+  FOR n IN 0..jsonb_array_length(want) - 1 LOOP
+    res := res || pg_temp.pass(pg_temp.st(r, n) = 'rejected', (want ->> n) || ' -> ' || coalesce(pg_temp.st(r, n), 'null') || ' ' || coalesce(pg_temp.r0(r, n) ->> 'field', ''));
+  END LOOP;
+  res := res || pg_temp.pass(pg_temp.st(r, jsonb_array_length(want)) = 'applied' AND (pg_temp.it(pg_temp.id('i2'))).note = 'good', 'good op');
+  res := res || pg_temp.pass((SELECT count(*) FROM public.cloud_deal_checklist_items WHERE local_item_id LIKE 'ty-%') = 0
+                             AND (SELECT count(*) FROM public.cloud_deal_checklists WHERE local_checklist_id LIKE 'tc-%') = 0, 'nothing created by a refused op');
+  RETURN pg_temp.all_of(VARIADIC res);
+END $p$;
+
+-- R7: every mcp_reader-owned function that reads cloud_deals filters removed deals at each read, except the
+-- install numbering read marked KEEP_REMOVED
+CREATE FUNCTION pg_temp.p_reader_catalog() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE r record; parts text[]; bad text := ''; n int := 0;
+BEGIN
+  FOR r IN SELECT p.proname, p.prosrc FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+              AND pg_get_userbyid(p.proowner) = 'mcp_reader' AND p.prosrc ~ 'public\.cloud_deals\M' LOOP
+    n := n + 1;
+    parts := regexp_split_to_array(r.prosrc, 'public\.cloud_deals\M(?!%ROWTYPE)');
+    FOR i IN 2..cardinality(parts) LOOP
+      IF left(parts[i], 420) !~ 'removed_at IS NULL' AND left(parts[i], 420) !~ 'KEEP_REMOVED:install_numbering' THEN
+        bad := bad || r.proname || '#' || (i - 1) || ' ';
+      END IF;
+    END LOOP;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '' AND n >= 4, format('readers %s, reads without the filter: %s', n, bad));
+END $p$;
+
+-- R7: list_all_deals does not return a soft-removed deal; its shape is unchanged
+CREATE FUNCTION pg_temp.p_list_all() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); D2 uuid := pg_temp.id('D2'); r0 jsonb; r1 jsonb; ids0 text[]; ids1 text[];
+BEGIN
+  r0 := pg_temp.j(pg_temp.as_user(A, 'SELECT public._mcp_r_list_all_deals(NULL, NULL, NULL, NULL)'));
+  PERFORM pg_temp.deldeal(A, D2);
+  r1 := pg_temp.j(pg_temp.as_user(A, 'SELECT public._mcp_r_list_all_deals(NULL, NULL, NULL, NULL)'));
+  SELECT array_agg(x ->> 0) INTO ids0 FROM jsonb_array_elements(r0 -> 'rows') x;
+  SELECT array_agg(x ->> 0) INTO ids1 FROM jsonb_array_elements(r1 -> 'rows') x;
+  RETURN pg_temp.all_of(
+    pg_temp.pass(D2::text = ANY (ids0) AND NOT (D2::text = ANY (coalesce(ids1, '{}'))), 'before ' || array_to_string(ids0, ',') || ' after ' || coalesce(array_to_string(ids1, ','), '')),
+    pg_temp.pass(pg_temp.keys(r1) = pg_temp.keys(r0) AND r1 -> 'columns' = r0 -> 'columns' AND r1 ->> 'kind' = 'keepr.list_all_deals', 'shape'));
+END $p$;
+CREATE FUNCTION pg_temp.keys(o jsonb) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
+  SELECT coalesce(array_agg(k ORDER BY k COLLATE "C"), ARRAY[]::text[]) FROM jsonb_object_keys(o) k
+$h$;
+
+-- R2 (SR): two desktop ops on one part of a removed item arriving out of order: the later edit stays
+CREATE FUNCTION pg_temp.sr_removed_reorder() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); i2 uuid := pg_temp.id('i2'); r0 jsonb; r1 jsonb; r2 jsonb;
+BEGIN
+  r0 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', i2, pg_temp.nowt())));
+  r1 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op_set(i2, 'note', '"later edit"', 1, 3, pg_temp.nowt('-1 minute'))));
+  r2 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op_set(i2, 'note', '"earlier edit"', 1, 2, pg_temp.nowt('-10 minutes'))));
+  RETURN pg_temp.pass((pg_temp.it(i2)).note = 'later edit' AND pg_temp.st(r1) = 'applied_to_removed' AND pg_temp.st(r2) = 'lost'
+                      AND (pg_temp.it(i2)).removed_at IS NOT NULL,
+    format('remove=%s first=%s second=%s final note=%s', pg_temp.st(r0), pg_temp.st(r1), pg_temp.st(r2), (pg_temp.it(i2)).note));
+END $p$;
+
+-- R3 (SR): a bad boolean in one op is answered for that op only
+CREATE FUNCTION pg_temp.sr_bad_boolean_aborts() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r jsonb;
+BEGIN
+  r := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(
+         pg_temp.op_set(pg_temp.id('i1'), 'note', '"good op"', 1, 1, pg_temp.nowt()),
+         jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist', 'deal_id', pg_temp.id('D1'), 'local_id', 'bad-cl',
+                            'template_id', 'tpl-y', 'is_private', 'maybe', 'edited_at', pg_temp.nowt())));
+  RETURN pg_temp.pass(pg_temp.st(r) = 'applied' AND pg_temp.st(r, 1) = 'rejected', 'batch answer: ' || left(r::text, 300));
+END $p$;
+
+-- R4 (SR + not_found): an order-dependent refusal is not kept; the same op_id is evaluated again later
+CREATE FUNCTION pg_temp.sr_ledger_transient() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); D1 uuid := pg_temp.id('D1'); op jsonb; op2 jsonb; r1 jsonb; r2 jsonb; r3 jsonb; r4 jsonb; d jsonb; ok jsonb; okr jsonb;
+BEGIN
+  op := jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', D1, 'checklist_local_id', 'later-cl',
+                           'local_id', 'later-it', 'title', 'Waits for its list', 'edited_at', pg_temp.nowt());
+  r1 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(op));
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_checklist',
+           'deal_id', D1, 'local_id', 'later-cl', 'template_id', 'tpl-x', 'template_name', 'Later', 'edited_at', pg_temp.nowt())));
+  r2 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(op));
+  -- not_found: the deal header is uploaded after the op was first sent
+  op2 := jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'set', 'entity', 'item', 'deal_id', D1, 'local_id', 'late-x',
+                            'part', 'note', 'value', 'set later', 'base_rev', 1, 'edit_seq', 1, 'edited_at', pg_temp.nowt());
+  r3 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(op2));
+  PERFORM pg_temp.up(A, 'cloud_upsert_checklist_items', I1, D1, jsonb_build_array(pg_temp.rw('late-x', '{"local_checklist_id":"cl1","title":"Late"}')));
+  r4 := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(op2));
+  -- an applied answer is still replayed exactly
+  ok := pg_temp.op_set(pg_temp.id('i1'), 'note', '"once"', 1, 1, pg_temp.nowt());
+  okr := pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(ok));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.r0(r1) ->> 'reason' = 'parent_missing' AND pg_temp.st(r2) = 'added', format('parent_missing then %s', pg_temp.st(r2))),
+    pg_temp.pass(pg_temp.st(r3) = 'not_found' AND pg_temp.st(r4) = 'applied', format('not_found then %s', pg_temp.st(r4))),
+    pg_temp.pass(pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(ok || '{"value":"twice"}')) -> 'results' = okr -> 'results', 'applied replay'));
+END $p$;
+
+-- S1: an AI app cannot restore a checklist, nor (switch off) a brokerage checklist item; it can restore My items
+CREATE FUNCTION pg_temp.p_ai_restore() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); I1 uuid := pg_temp.id('I1'); r1 jsonb; r2 jsonb; r3 jsonb; o1 jsonb;
+BEGIN
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('i1'), pg_temp.nowt())));
+  r1 := pg_temp.ai(A, jsonb_build_array(pg_temp.op('restore', 'item', pg_temp.id('i1'))));
+  PERFORM pg_temp.ai(A, jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('m1'))));
+  r3 := pg_temp.ai(A, jsonb_build_array(pg_temp.op('restore', 'item', pg_temp.id('m1'))));
+  PERFORM pg_temp.push(A, I1, pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'checklist', pg_temp.id('cl1'), pg_temp.nowt())));
+  r2 := pg_temp.ai(A, jsonb_build_array(pg_temp.op('restore', 'checklist', pg_temp.id('cl1'))));
+  o1 := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'checklist', pg_temp.id('cl1')));
+  RETURN pg_temp.all_of(pg_temp.pass(pg_temp.st(r1) = 'not_allowed', 'template item ' || r1::text),
+                        pg_temp.pass(pg_temp.st(r2) = 'not_allowed', 'checklist ' || r2::text),
+                        pg_temp.pass(pg_temp.st(r3) = 'restored', 'my item ' || r3::text),
+                        pg_temp.pass(pg_temp.st(o1) = 'restored', 'owner restores the checklist ' || o1::text));
+END $p$;
+
+-- S2: AI ops on a deal the readers hide (not confirmed) answer not_found
+CREATE FUNCTION pg_temp.p_ai_unconfirmed() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); r1 jsonb; r2 jsonb;
+BEGIN
+  UPDATE public.cloud_deals SET is_confirmed = false WHERE id = pg_temp.id('D1');
+  r1 := pg_temp.ai(A, jsonb_build_array(jsonb_build_object('op_id', gen_random_uuid(), 'kind', 'create_item', 'deal_id', pg_temp.id('D1'), 'title', 'From AI')));
+  r2 := pg_temp.ai(A, jsonb_build_array(pg_temp.op_set(pg_temp.id('m1'), 'note', '"x"')));
+  RETURN pg_temp.pass(pg_temp.st(r1) = 'not_found' AND pg_temp.st(r2) = 'not_found' AND (pg_temp.it(pg_temp.id('m1'))).note IS NULL, r1::text || r2::text);
+END $p$;
+
+-- S3: a deal removed on its own, then its install removed: restoring the deal answers install_removed and changes nothing
+CREATE FUNCTION pg_temp.p_restore_under_removed_install() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE A uuid := pg_temp.id('A'); D3 uuid := pg_temp.id('D3'); rr jsonb;
+BEGIN
+  PERFORM pg_temp.deldeal(A, D3);
+  PERFORM pg_temp.delinst(A, pg_temp.id('I2'));
+  rr := pg_temp.rpc(A, format('SELECT public.cloud_todo_restore(%L::uuid, %L, %L::uuid)', A, 'deal', D3));
+  RETURN pg_temp.pass(pg_temp.st(rr) = 'install_removed' AND (SELECT removed_at IS NOT NULL FROM public.cloud_deals WHERE id = D3), rr::text);
+END $p$;
+

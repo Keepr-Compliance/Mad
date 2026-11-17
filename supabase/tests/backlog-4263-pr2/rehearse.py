@@ -31,7 +31,7 @@ traced = re.findall(r"\('(public\.[^']+)', '([0-9a-f]{32})'\)", H.MIG)
 probe = """DO $z$ BEGIN RAISE EXCEPTION 'P4263_RB %%', jsonb_build_object(
  'traced_ok', (SELECT count(*) FROM (VALUES %s) v(sig, m) JOIN pg_proc p ON p.oid = to_regprocedure(v.sig) AND md5(p.prosrc) = v.m),
  'traced_total', %d,
- 'new_functions', (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND (proname ~ '^_cloud_todo_' OR proname IN
+ 'new_functions', (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND (proname ~ '^_cloud_todo_' OR proname IN ('_cloud_install_removed','_cloud_todo_recorded') OR proname IN
      ('cloud_todo_push','cloud_todo_pull','cloud_todo_history','cloud_todo_restore','cloud_list_removed','cloud_reclaim_install','cloud_install_status','cloud_purge_deal_now'))),
  'new_tables', (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname IN ('cloud_todo_feed_head','cloud_todo_history','cloud_todo_ops','cloud_removed_installs','cloud_todo_seq')),
  'added_columns', (SELECT count(*) FROM pg_attribute WHERE attrelid IN ('public.cloud_deals'::regclass,'public.cloud_deal_checklists'::regclass,'public.cloud_deal_checklist_items'::regclass)

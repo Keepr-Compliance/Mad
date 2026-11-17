@@ -1,223 +1,8 @@
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
+BACKLOG-4263 PR-2 results, measured on the test database (rolled back) on the tree merged with int-portal/hosted-mcp-1 @ 02b2a8fd6 (merge commit c51452760) plus the R1-R8/S1-S3 changes of the commit that adds this file.
 PASS   C_p_a1 
+PASS   C_p_ai_restore 
 PASS   C_p_ai_rules 
+PASS   C_p_ai_unconfirmed 
 PASS   C_p_bad_ids 
 PASS   C_p_claims 
 PASS   C_p_create 
@@ -234,1206 +19,154 @@ PASS   C_p_idem
 PASS   C_p_install 
 PASS   C_p_install_restore 
 PASS   C_p_later_wins 
+PASS   C_p_list_all 
 PASS   C_p_lock('reason') 
 PASS   C_p_lock('sub') 
 PASS   C_p_lock_order 
 PASS   C_p_my_items_unique 
+PASS   C_p_off_writes 
 PASS   C_p_old_path 
 PASS   C_p_parents 
 PASS   C_p_parts 
 PASS   C_p_pull 
 PASS   C_p_purge 
+PASS   C_p_purge_horizon 
 PASS   C_p_purge_now 
+PASS   C_p_reader_catalog 
 PASS   C_p_reader_counts 
 PASS   C_p_removal_wins 
 PASS   C_p_replay 
+PASS   C_p_restore_under_removed_install 
+PASS   C_p_resync 
 PASS   C_p_seq_catalog 
 PASS   C_p_soft_delete 
 PASS   C_p_strip 
 PASS   C_p_turnoff 
+PASS   C_p_types 
+PASS   C_sr_bad_boolean_aborts 
+PASS   C_sr_ledger_transient 
+PASS   C_sr_removed_reorder 
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=35 mutants=0 problems=0
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
-CAUGHT M_C1_retried_create_overwrites want=red -> FAIL: #3 FAIL: retried create {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:01.171664+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_
-CAUGHT M_C1_stale_base_applies want=red -> FAIL: #3 FAIL: stale note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
-CAUGHT M_C22_edit_seq_dropped want=red -> FAIL: #2 FAIL: A {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
-CAUGHT M_C28_equal_is_conflict want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
-CAUGHT M_C29_parents_ignored want=red -> FAIL: #2 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
-CAUGHT M_C31_negative_age_valid want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "ed
-CAUGHT M_C31_wider_upper_bound want=red -> FAIL: #4 FAIL: 365d_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit
-CAUGHT M_C38_age_from_receive_time want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, 
+controls=47 mutants=0 problems=0
+CAUGHT M_C1_retried_create_overwrites want=red -> FAIL: #3 FAIL: retried create {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.541228+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_
+CAUGHT M_C1_stale_base_applies want=red -> FAIL: #3 FAIL: stale note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
+CAUGHT M_C22_edit_seq_dropped want=red -> FAIL: #2 FAIL: A {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
+CAUGHT M_C28_equal_is_conflict want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
+CAUGHT M_C29_parents_ignored want=red -> FAIL: #2 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": 
+CAUGHT M_C31_negative_age_valid want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "ed
+CAUGHT M_C31_wider_upper_bound want=red -> FAIL: #4 FAIL: 365d_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit
+CAUGHT M_C38_age_from_receive_time want=red -> FAIL: #1 FAIL: minus_1ms want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, 
 CAUGHT M_C7_loser_not_in_history want=red -> FAIL: #5 FAIL: lost row
-CAUGHT M_D8_history_shares_row_number want=red -> FAIL: #5 FAIL: two parts: head +2 {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "e
-CAUGHT M_F4_children_not_renumbered want=red -> FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,<uuid> want <uuid>,<uuid>,6464c6d1-ee4a-4452-88bf-e7
+CAUGHT M_D8_history_shares_row_number want=red -> FAIL: #5 FAIL: two parts: head +2 {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "e
+CAUGHT M_F4_children_not_renumbered want=red -> FAIL: #3 FAIL: pull after un-remove <uuid>,<uuid>,<uuid> want <uuid>,<uuid>,9ed04b98-93c5-4570-abf9-1f
 CAUGHT M_F4_unremove_only_on_new_hash want=red -> FAIL: #1 FAIL: upsert {"ok": true, "results": [{"status": "unchanged", "version": 1, "cloud_id": "<uuid>", "local_id": "d1", "restored": false, "content_hash": "009a1c7c71566207efc7ed74a1180a2979c56ef552a699b49db56a6333f
-CAUGHT M_W_ai_edits_removed want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
-CAUGHT M_W_concurrent_always_wins want=red -> FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": 
-CAUGHT M_W_edit_resurrects want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:20:59.248562+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"
+CAUGHT M_R2_removed_skips_merge want=red -> FAIL: remove=removed first=applied_to_removed second=applied_to_removed final note=earlier edit
+CAUGHT M_W_ai_edits_removed want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {
+CAUGHT M_W_concurrent_always_wins want=red -> FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": 
+CAUGHT M_W_edit_resurrects want=red -> FAIL: #3 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:02.063926+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=15 problems=0
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
-CAUGHT M_C19_window_dropped want=red -> FAIL: #7 FAIL: repeat add {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:08.335937+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T04:21
+controls=0 mutants=16 problems=0
+CAUGHT M_C19_window_dropped want=red -> FAIL: #7 FAIL: repeat add {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:06.450733+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T05:58
+CAUGHT M_C36_claim_not_restored want=red -> FAIL: #13 FAIL: claim after purge: service_role
 CAUGHT M_C36_purge_without_claim want=red -> FAIL: #1 FAIL: purge {"deals_purged": 0, "failed_owners": 1, "rows_scrubbed": 0, "skipped_owners": 0} | #2 FAIL: i2 purged | #3 FAIL: i2 history 2 | #5 FAIL: D2 deleted | #6 FAIL: blob fenced | #8 FAIL: horizon | #10 FAIL: pull tombstone | #11 FAIL: resto
-CAUGHT M_C37_stepped_ignored want=red -> FAIL: #7 FAIL: stepped want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_se
-CAUGHT M_C8a_lock_reason_dropped want=red -> FAIL: #1 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
+CAUGHT M_C37_stepped_ignored want=red -> FAIL: #7 FAIL: stepped want lost got {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_se
+CAUGHT M_C8a_lock_reason_dropped want=red -> FAIL: #1 FAIL: ai {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
 CAUGHT M_C8b_oldest_submission want=red -> FAIL: #3 FAIL: needs_changes v2 {"ok": true, "results": [{"op_id": "<uuid>", "entity": "item", "status": "locked", "cloud_id": "<uuid>", "cloud_deal_id": "<uuid>"}]}
-CAUGHT M_C8b_submission_dropped want=red -> FAIL: #2 FAIL: submitted {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
+CAUGHT M_C8b_submission_dropped want=red -> FAIL: #2 FAIL: submitted {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}
 CAUGHT M_C8c_uploading_locked want=red -> FAIL: #1 FAIL: uploading {"ok": true, "results": [{"op_id": "<uuid>", "entity": "item", "status": "locked", "cloud_id": "<uuid>", "cloud_deal_id": "<uuid>"}]}
 CAUGHT M_P_purge_before_30_days want=red -> FAIL: #4 FAIL: m1 kept (29 days)
 CAUGHT M_P_purge_leaves_blobs want=red -> FAIL: #6 FAIL: blob fenced
-CAUGHT M_Q1_ai_removes_template want=red -> FAIL: #2 FAIL: remove template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
-CAUGHT M_Q1_ai_renames_template want=red -> FAIL: #1 FAIL: rename template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
-CAUGHT M_R10_6_strip_dropped want=red -> FAIL: #1 FAIL: note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done"
+CAUGHT M_Q1_ai_removes_template want=red -> FAIL: #2 FAIL: remove template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
+CAUGHT M_Q1_ai_renames_template want=red -> FAIL: #1 FAIL: rename template {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq":
+CAUGHT M_R10_6_strip_dropped want=red -> FAIL: #1 FAIL: note {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done"
 EQUIV  M_X_item_owner_only want=green -> PASS
-CAUGHT M_X_other_install want=red -> FAIL: #3 FAIL: install {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:04.706287+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done":
+CAUGHT M_X_other_install want=red -> FAIL: #3 FAIL: install {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:05.602915+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done":
 CAUGHT M_X_owner_filters_dropped want=red -> FAIL: #1 FAIL: ai "ERR 23503 insert or update on table \"cloud_todo_history\" violates foreign key constraint \"cloud_todo_history_deal_fk\""
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=15 problems=0
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
+controls=0 mutants=16 problems=0
 CAUGHT M_C16_restore_purged want=red -> FAIL: #3 FAIL: i2 history 1 | #11 FAIL: restore purged {"ok": true, "results": [{"op_id": "<uuid>", "parts": null, "entity": "item", "status": "restored", "cloud_id": "<uuid>", "conflict": false, "loc
-CAUGHT M_C27_resync_from_head_only want=red -> FAIL: #9 FAIL: stale cursor {"ok": true, "head": 56, "rows": [{"entity": "deal", "cloud_id": "<uuid>", "local_id": "d1", "change_seq": 14, "removed_at": null, "removed_kind": null, "restorable_until
-CAUGHT M_C30_push_ignores_register want=red -> FAIL: #4 FAIL: push {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:13.602064+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, 
+CAUGHT M_C27_resync_from_head_only want=red -> FAIL: #2 FAIL: stale cursor 2/13 forgotten 40: {"ok": true, "head": 40, "rows": [{"entity": "deal", "cloud_id": "<uuid>", "local_id": "d1 | #3 FAIL: purge between pages: {"ok": true, "head": 43, "rows": [{"parts": {"order":
+CAUGHT M_C30_push_ignores_register want=red -> FAIL: #4 FAIL: push {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:08.994545+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, 
 CAUGHT M_C30_upsert_ignores_register want=red -> FAIL: #3 FAIL: upload {"ok": true, "results": [{"status": "unchanged", "version": 1, "cloud_id": "<uuid>", "local_id": "d3", "restored": true, "content_hash": "5eab11f11ed0d41a1389a2f21cebdcc7262f7547e857994547435dd71d00d
-CAUGHT M_C36_claim_not_restored want=red -> FAIL: #13 FAIL: claim after purge: service_role
-CAUGHT M_C5_replay_dropped want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T04:21:13.602064+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at"
+CAUGHT M_C5_replay_dropped want=red -> FAIL: #1 FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:08.994545+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "done": {"at"
 CAUGHT M_CL_core_owner_check want=red -> FAIL: #1 FAIL: core no claims {"ok": false, "error": "not_entitled"} | #6 FAIL: core other owner {"ok": true, "results": []}
 CAUGHT M_CL_purge_deal_trusts_empty_claims want=red -> FAIL: #2 FAIL: purge_deal no claims ERR 42501 not allowed
 CAUGHT M_D2_reclaim_keys_on_argument want=red -> FAIL: #6 FAIL: reclaim {"ok": true, "removed_entry": true}{"ok": true, "removed_entry": false}
 CAUGHT M_P_deal_purged_early want=red -> FAIL: #7 FAIL: D3 kept (within 30 days)
 CAUGHT M_Q8_purge_live_deal want=red -> FAIL: #1 FAIL: live {"ok": true, "status": "purged"}
-CAUGHT M_Q8_purge_other_owner want=red -> FAIL: #4 FAIL: other owner {"ok": true, "status": "purged"}
+CAUGHT M_Q8_purge_other_owner want=red -> FAIL: #5 FAIL: purge step as other owner "purged" kept
+CAUGHT M_R1_horizon_dropped want=red -> FAIL: #1 FAIL: limit-1 full pull after purge: {"ids": ["<uuid>", "<uuid>", "<uuid>", "<uuid>", "32d05e25-658e-4404-a8e3-a743b2 forgotten 45
 CAUGHT M_R6_delete_is_hard want=red -> FAIL: #1 FAIL: delete {"ok": true, "deleted": {"files": 1, "parties": 0, "messages": 0, "checklists": 1, "checklist_items": 1}, "restorable": true, "blobs_fenced": 0} | #2 FAIL: files and blob kept | #3 FAIL: repeat {"ok": false, "error": "not_found"} head +0 |
-CAUGHT M_W23_installs_count_removed want=red -> FAIL: #6 FAIL: installs {"installs": [{"deals": 2, "last_synced_at": "2026-11-17T04:21:15.446641+00:00", "source_install_id": "<uuid>"}, {"deals": 1, "last_synced_at": "2026-11-17T04:21:15.422829+00:00", "source_install_id
-CAUGHT M_W23_lir_deal_not_removed want=red -> FAIL: #4 FAIL: lir deal {"ok": true, "rows": [{"removed": false, "cloud_id": "<uuid>", "local_id": "d2", "content_hash": "fb69e6e57c90658caecf35f432be8c6771e89f24f61f78fd1a6a84ece9aa1e5d", "cloud_deal_id": "0bc82be5-6ad9-4eb
+CAUGHT M_W23_get_deal_shows_removed want=red -> FAIL: #8 FAIL: get {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "status": "active", "street": null, "address": "Fixture d2 Way", "deal_id": "<uuid>", "details": {"stage": null, "sale_price": 
+CAUGHT M_W23_installs_count_removed want=red -> FAIL: #6 FAIL: installs {"installs": [{"deals": 2, "last_synced_at": "2026-11-17T05:58:09.429653+00:00", "source_install_id": "<uuid>"}, {"deals": 1, "last_synced_at": "2026-11-17T05:58:09.41439+00:00", "source_install_id"
+CAUGHT M_W23_lir_deal_not_removed want=red -> FAIL: #4 FAIL: lir deal {"ok": true, "rows": [{"removed": false, "cloud_id": "<uuid>", "local_id": "d2", "content_hash": "fb69e6e57c90658caecf35f432be8c6771e89f24f61f78fd1a6a84ece9aa1e5d", "cloud_deal_id": "2ed76942-4915-4aa
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=15 problems=0
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
+controls=0 mutants=16 problems=0
 CAUGHT M_C15_my_items_index_dropped want=red -> FAIL: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "my2", "content_hash": "bbd8ed20a9f5c7d4d26a3fffd127ed6f6a3c314c9e87b7b59ce9f7d7e24641eb"}]}
 CAUGHT M_C17_head_left want=red -> FAIL: #2 FAIL: left: cloud_todo_feed_head=1 
 EQUIV  M_C17_history_left want=green -> PASS
 CAUGHT M_C17_ops_left want=red -> FAIL: #2 FAIL: left: cloud_todo_ops=1 
 CAUGHT M_C17_register_left want=red -> FAIL: #2 FAIL: left: cloud_removed_installs=1 
-CAUGHT M_C26_direct_change_seq_writer want=red -> FAIL: change_seq written without the allocator: _p4263_rogue
+CAUGHT M_C26_direct_change_seq_writer want=red -> FAIL: change_seq written without the allocator in the same statement: _p4263_rogue:  UPDATE public.cloud_deals SET change_seq = 1 WHERE false  | 
 CAUGHT M_C41_purge_now_anon want=red -> FAIL: #2 FAIL: anon {"ok": false, "error": "not_authorized"}
-CAUGHT M_LO_delete_head_not_first want=red -> FAIL: public.cloud_delete_deal(uuid,uuid) head@0 deal@715 
-CAUGHT M_LO_upsert_head_not_first want=red -> FAIL: public.cloud_upsert_deal(uuid,jsonb) head@0 deal@3782 
+CAUGHT M_LO_delete_head_not_first want=red -> FAIL: public.cloud_delete_deal(uuid,uuid) first@452 head@0 deal@931; 
+CAUGHT M_LO_upsert_head_not_first want=red -> FAIL: public.cloud_upsert_deal(uuid,jsonb) first@494 head@0 deal@3782; public.cloud_upsert_deal(uuid,jsonb) first@494 head@0 deal@4205; 
 CAUGHT M_R10_core_granted want=red -> FAIL: internal reachable or definer: _cloud_todo_apply(uuid,jsonb,jsonb)
 CAUGHT M_R10_push_anon want=red -> FAIL: rpc acl: cloud_todo_push(uuid,uuid,text,jsonb)
 CAUGHT M_R10_table_select want=red -> FAIL: table privileges: cloud_todo_history:authenticated
 CAUGHT M_R6_counts_ignore_checklist want=red -> FAIL: #1 FAIL: 3/3
-CAUGHT M_W23_get_deal_shows_removed want=red -> FAIL: #8 FAIL: get {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "status": "active", "street": null, "address": "Fixture d2 Way", "deal_id": "<uuid>", "details": {"stage": null, "sale_price": 
+CAUGHT M_SR2_direct_seq_inside_allocator_user want=red -> FAIL: change_seq written without the allocator in the same statement: _cloud_todo_apply_op:  UPDATE public.cloud_deal_checklist_items SET change_seq = -change_seq WHERE id = v_id | 
+CAUGHT M_V_ids_cast_inline want=red -> FAIL: "ERR 22P02 invalid input syntax for type uuid: \"abc\""
 CAUGHT M_W23_list_shows_removed want=red -> FAIL: #7 FAIL: list_deals
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=15 problems=0
-MUTATION APPLIED C1_stale_base_applies (_cloud_todo_apply_op, mutated body md5 88f778dea4ae0190ef217e8bcc0af47d)
-  - IF v_base IS NOT DISTINCT FROM (cur ->> 'rev')::bigint                                     /*MERGE:causal*/
-  + IF true /*MERGE:causal*/
-MUTATION APPLIED C1_retried_create_overwrites (_cloud_todo_apply_op, mutated body md5 12ddc995bbaa4ab458c09eaf8b7466ce)
-  - 'edit_seq', op -> 'edit_seq'), p_recv);
-  + 'edit_seq', op -> 'edit_seq', 'base_rev', (public._cloud_todo_item_json(t) -> 'parts' -> pt ->> 'rev')::bigint), p_recv);
-MUTATION APPLIED C7_loser_not_in_history (_cloud_todo_apply_op, mutated body md5 9e8ef91260b5a746e06274ee652ca510)
-  - PERFORM public._cloud_todo_hist(p_owner, d.id, ent, v_id, 'change', v_part, cur -> 'value', nv, 'lost',     /*MERGE:lost_history*/
-  - p_actor, cur ->> 'by', v_eff, p_recv, v_opid);
-  + NULL; /*MERGE:lost_history*/
-MUTATION APPLIED C28_equal_is_conflict (_cloud_todo_apply_op, mutated body md5 0099dd4c73db4074942dff9228e3f506)
-  - ELSIF public._cloud_todo_same(v_part, cur -> 'value', nv) THEN
-  + ELSIF false THEN
-MUTATION APPLIED C22_edit_seq_dropped (_cloud_todo_apply_op, mutated body md5 9cc84fd4edbf23186cab538754d94d46)
-  - AND v_es > coalesce((cur ->> 'edit_seq')::bigint, -1)) THEN
-  + ) THEN
-MUTATION APPLIED C29_parents_ignored (_cloud_todo_apply_op, mutated body md5 db0bdec0f768590be159e180ae7dd584)
-  - v_rem_parent := d.removed_at IS NOT NULL OR (ent = 'item' AND c.removed_at IS NOT NULL);
-  + v_rem_parent := false;
-MUTATION APPLIED W_ai_edits_removed (_cloud_todo_apply_op, mutated body md5 069c7039b6ce19974c09d1ec4636d262)
-  - IF NOT v_desk THEN
-  - RETURN jsonb_build_object('op_id', v_opid, 'status', 'refused_removed', 'entity', ent, 'cloud_id', v_id);
-  - END IF;
-  - PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-  + IF false THEN
-  + RETURN NULL;
-  + END IF;
-  + PERFORM public._cloud_todo_write_part(p_owner, ent, v_id, v_part, nv
-MUTATION APPLIED W_edit_resurrects (_cloud_todo_write_part, mutated body md5 e1289b5075c136d30e21a1391ca0ecc2)
-  - SET note = p_value #>> '{}' WHERE
-  + SET note = p_value #>> '{}', removed_at = NULL WHERE
-MUTATION APPLIED W_concurrent_always_wins (_cloud_todo_apply_op, mutated body md5 6b508d010df19cb02423fed67e0a4293)
-  - v_wins := (v_eff, v_kind) > (v_cur_eff, split_part(coalesce(cur ->> 'by', ''), ':', 1));
-  + v_wins := true;
-MUTATION APPLIED F4_children_not_renumbered (_cloud_todo_unremove_deal, mutated body md5 b710e2f38b106dcccc5eee5bf9218faf)
-  - UPDATE public.cloud_deal_checklist_items SET change_seq = (public._cloud_todo_take_seq(p_owner, 1))[1] WHERE id = v_id;   /*F4:items*/
-  + NULL; /*F4:items*/
-MUTATION APPLIED F4_unremove_only_on_new_hash (cloud_upsert_deal, mutated body md5 bb0e0a82462693a23a87b4aecd4d4552)
-  - IF d.removed_at IS NOT NULL THEN
-  + IF d.removed_at IS NOT NULL AND d.content_hash IS DISTINCT FROM v_hash THEN
-MUTATION APPLIED D8_history_shares_row_number (_cloud_todo_hist, mutated body md5 4ca251783e9af80cd02f2ec3b840fcbb)
-  - v_seq := (public._cloud_todo_take_seq(p_owner, 1))[1];
-  + v_seq := coalesce((SELECT max(x.change_seq) FROM public.cloud_deal_checklist_items x WHERE x.id = p_entity_id), (public._cloud_todo_take_seq(p_owner, 
-MUTATION APPLIED C38_age_from_receive_time (cloud_todo_push, mutated body md5 3b788f18d94a5911934786628972936e)
-  - v_age := v_sent - v_ed;
-  + v_age := v_recv - v_ed;
-MUTATION APPLIED C31_negative_age_valid (cloud_todo_push, mutated body md5 5732bc37e3f6e0c73773ec156e329bfc)
-  - OR v_age < interval '0' OR
-  + OR
-MUTATION APPLIED C31_wider_upper_bound (cloud_todo_push, mutated body md5 f7305f51b8d24a11af2eef966414b634)
-  - v_age > interval '365 days'
-  + v_age > interval '366 days'
-MUTATION APPLIED C37_stepped_ignored (cloud_todo_push, mutated body md5 c6c6a23583fa8cd99310257f3dbdb804)
-  - OR (op ->> 'clock_stepped') = 'true'
-MUTATION APPLIED X_owner_filters_dropped (_cloud_todo_apply_op, mutated body md5 3071941ad3c761003b9abbe096b42068)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-  - SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;
-  + SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;
-MUTATION APPLIED X_item_owner_only (_cloud_todo_apply_op, mutated body md5 6941b54a31993a0b6b601f1793673bb6)
-  - WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/
-  + WHERE true /*OWNER:item*/
-MUTATION APPLIED X_other_install (_cloud_todo_apply_op, mutated body md5 2d7c700660d423e6e9f4e3c6a856047a)
-  - IF d.id IS NULL OR (v_desk AND d.source_install_id IS DISTINCT FROM p_inst) THEN
-  + IF d.id IS NULL THEN
-MUTATION APPLIED C8a_lock_reason_dropped (_cloud_todo_deal_locked, mutated body md5 19fd3c541fec653f848b2501fd05233f)
-  - SELECT d.lock_reason IS NOT NULL
-  + SELECT false
-MUTATION APPLIED C8b_submission_dropped (_cloud_todo_deal_locked, mutated body md5 b5060e0a8b6be42e157559d116aaa994)
-  - s.status IN ('submitted', 'under_review', 'resubmitted', 'approved')
-  + false
-MUTATION APPLIED C8b_oldest_submission (_cloud_todo_deal_locked, mutated body md5 3f4e10ef08030dde88b3a5f1c42d5b9e)
-  - ORDER BY s.version DESC, s.id DESC LIMIT 1
-  + ORDER BY s.version ASC, s.id ASC LIMIT 1
-MUTATION APPLIED C8c_uploading_locked (_cloud_todo_deal_locked, mutated body md5 46b138b7a9105a1fea1f913493519d65)
-  - ('submitted', 'under_review', 'resubmitted', 'approved')
-  + ('uploading', 'submitted', 'under_review', 'resubmitted', 'approved')
-MUTATION APPLIED Q1_ai_renames_template (_cloud_todo_apply_op, mutated body md5 2c8035ceccab13f9d82fc426b496c97f)
-  - IF NOT v_desk AND (v_part = 'order' OR (v_part = 'title' AND NOT v_my)) THEN
-  + IF NOT v_desk AND v_part = 'order' THEN
-MUTATION APPLIED Q1_ai_removes_template (_cloud_todo_apply_op, mutated body md5 51ff98b18ee0b3d30be1b1571edf8ffe)
-  - IF NOT v_desk AND (ent = 'checklist' OR NOT v_my) THEN
-  + IF NOT v_desk AND ent = 'checklist' THEN
-MUTATION APPLIED R10_6_strip_dropped (_cloud_todo_norm, mutated body md5 1f7ce7e2862cf806970b43006d215bc3)
-  - IF p_ai THEN v := btrim(public._mcp_strip(v)); END IF;
-  + IF p_ai THEN v := btrim(v); END IF;
-MUTATION APPLIED C19_window_dropped (_cloud_todo_apply_op, mutated body md5 666233115ecb33d1ea2357af9126503e)
-  - AND x.created_at > now() - interval '10 minutes'
-  + AND false
-MUTATION APPLIED P_purge_before_30_days (_cloud_todo_purge, mutated body md5 8506387576d3b46286c336031bf2b560)
-  - v_cut timestamptz := now() - interval '30 days';
-  + v_cut timestamptz := now() - interval '1 day';
-MUTATION APPLIED P_purge_leaves_blobs (_cloud_todo_purge_deal, mutated body md5 1800207c7601f430d719c05ac6eb1ded)
-  - PERFORM public._cloud_fence_unreferenced(p_owner, v_blobs);
-  + NULL;
-MUTATION APPLIED C36_purge_without_claim (_cloud_todo_purge, mutated body md5 5a9f7e2d28eea62845dc47b0f94af95a)
-  - PERFORM set_config('request.jwt.claim.role', 'service_role', true);
-  + NULL;
-MUTATION APPLIED C36_claim_not_restored (_cloud_todo_purge, mutated body md5 d496a1eb69e965ce7c1279d7afc4a959)
-  - PERFORM set_config('request.jwt.claim.role', coalesce(v_role, ''), true);
-  + NULL;
-MUTATION APPLIED P_deal_purged_early (_cloud_todo_purge, mutated body md5 851831fdfab372c7ae193614747fc3a6)
-  - d.restorable_until < now()   /*PURGE:deal_age*/
-  + d.restorable_until < now() + interval '31 days'
-MUTATION APPLIED C27_resync_from_head_only (cloud_todo_pull, mutated body md5 bfe63757a0ea65d64225434a77cc3a9e)
-  - 'resync_required', (v_after > 0 AND v_after < v_forgot) OR v_after > v_head);
-  + 'resync_required', v_after > v_head);
-MUTATION APPLIED C16_restore_purged (_cloud_todo_apply_op, mutated body md5 88f62e2ae6d713bc4f3b34f15ee9d9fb)
-  - IF c.purged_at IS NOT NULL OR (ent = 'item' AND t.purged_at IS NOT NULL) THEN
-  + IF false THEN
-MUTATION APPLIED Q8_purge_live_deal (_cloud_todo_purge_deal, mutated body md5 2ea106478a9d60e4e84275b0dc4bc365)
-  - IF v_rem IS NULL THEN RETURN 'not_removed'; END IF;
-MUTATION APPLIED Q8_purge_other_owner (_cloud_todo_purge_deal, mutated body md5 4035039b7cee18b7660c59cc75a20e65)
-  - WHERE d.id = p_deal AND d.owner_user_id = p_owner FOR UPDATE;
-  + WHERE d.id = p_deal FOR UPDATE;
-MUTATION APPLIED CL_purge_deal_trusts_empty_claims (_cloud_todo_purge_deal, mutated body md5 4f8c1932e4b14fcccec3611c563247ee)
-  - AND auth.role() IS DISTINCT FROM 'service_role')
-  + AND auth.role() IS NOT NULL AND auth.role() IS DISTINCT FROM 'service_role')
-MUTATION APPLIED CL_core_owner_check (_cloud_todo_apply, mutated body md5 2293aa6e10176f4298d7b92b75c362e0)
-  - IF p_owner IS NULL OR p_owner IS DISTINCT FROM auth.uid() THEN
-  + IF p_owner IS NULL THEN
-MUTATION APPLIED C5_replay_dropped (_cloud_todo_apply, mutated body md5 6a6efd71bb29e0e565e95684199d973f)
-  - WHERE o.owner_user_id = p_owner AND o.op_id = (op ->> 'op_id')::uuid;
-  + WHERE false;
-MUTATION APPLIED C30_upsert_ignores_register (cloud_upsert_deal, mutated body md5 3a051cc1f2eae3b64d21b89021e03390)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED C30_push_ignores_register (cloud_todo_push, mutated body md5 f893c67b7442f330e986ba157a6ed0d1)
-  - IF public._cloud_install_removed(
-  + IF false AND public._cloud_install_removed(
-MUTATION APPLIED D2_reclaim_keys_on_argument (cloud_reclaim_install, mutated body md5 f0f02407b2629987c70fb18d6998b4fa)
-  - WHERE ri.owner_user_id = auth.uid()
-  + WHERE true
-MUTATION APPLIED R6_delete_is_hard (cloud_delete_deal, mutated body md5 68ccd45121da44204ad1cfdaef2e6999)
-  - PERFORM public._cloud_todo_soft_remove_deal(v_uid, v_deal, 'deal',
-  - jsonb_build_object('kind', 'desktop', 'ref', NULL, 'label', 'Keepr desktop'));
-  + DELETE FROM public.cloud_deals WHERE id = v_deal;
-MUTATION APPLIED W23_lir_deal_not_removed (cloud_list_install_rows, mutated body md5 e8cffe5da09d7b518981e411643bebcb)
-  - 't.id',            't.removed_at IS NOT NULL'),
-  + 't.id', 'false'),
-MUTATION APPLIED W23_installs_count_removed (cloud_list_installs, mutated body md5 1449a955965c4ce518171fd12d1bb2f9)
-  - AND d.removed_at IS NULL
-MUTATION APPLIED W23_get_deal_shows_removed (_mcp_r_get_deal, mutated body md5 964ae2a77e244054ea1b77591453d78b)
-  - AND x.removed_at IS NULL /*LIVE:get_deal*/
-MUTATION APPLIED W23_list_shows_removed (_mcp_r_list_deals, mutated body md5 17c12b00551ec1da504b382c43107974)
-  - AND dl.removed_at IS NULL /*LIVE:list_deals*/
-MUTATION APPLIED R6_counts_ignore_checklist (_mcp_r_deal_checklists, mutated body md5 27af50071366b1b8697f777522a6e5da)
-  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_checklists cl WHERE cl.id = t.cloud_checklist_id AND cl.removed_at IS NOT NULL) /*LIVE:cl_total_parent
-MUTATION APPLIED C17_ops_left (set_my_cloud_autosave, mutated body md5 17313f63cbd4309faeff27578445e6ed)
-  - DELETE FROM public.cloud_todo_ops WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_head_left (set_my_cloud_autosave, mutated body md5 c2c73531bdebf80e635889996f722aa4)
-  - DELETE FROM public.cloud_todo_feed_head WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_register_left (set_my_cloud_autosave, mutated body md5 5679bff8f8fde4a3baded4382bec9b93)
-  - DELETE FROM public.cloud_removed_installs WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED C17_history_left (set_my_cloud_autosave, mutated body md5 756236ed04940526cace9f3f2c894160)
-  - DELETE FROM public.cloud_todo_history WHERE owner_user_id = v_uid;
-  + NULL;
-MUTATION APPLIED LO_upsert_head_not_first (cloud_upsert_deal, mutated body md5 adc35d09fb6f2131eb41d7849dac9ad9)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:deal*/
-  + NULL; /*HEAD:deal*/
-MUTATION APPLIED LO_delete_head_not_first (cloud_delete_deal, mutated body md5 16c8f7c1a25fad24a8d3a40e70aef58b)
-  - PERFORM public._cloud_todo_take_seq(v_uid, 0);                                             /*HEAD:delete_deal*/
-  + NULL; /*HEAD:delete_deal*/
-MUTATION APPLIED C15_my_items_index_dropped (ddl)
-  + DROP INDEX public.cloud_deal_checklists_my_items_uq
-MUTATION APPLIED C26_direct_change_seq_writer (ddl)
-  + CREATE FUNCTION public._p4263_rogue() RETURNS void LANGUAGE sql SET search_path = '' AS $r$ UPDATE public.cloud_deals SET change_seq = 1 WHERE false $r$
-MUTATION APPLIED R10_core_granted (ddl)
-  + GRANT EXECUTE ON FUNCTION public._cloud_todo_apply(uuid, jsonb, jsonb) TO authenticated
-MUTATION APPLIED R10_push_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_todo_push(uuid, uuid, text, jsonb) TO anon
-MUTATION APPLIED C41_purge_now_anon (ddl)
-  + GRANT EXECUTE ON FUNCTION public.cloud_purge_deal_now(uuid, uuid) TO anon
-MUTATION APPLIED R10_table_select (ddl)
-  + GRANT SELECT ON public.cloud_todo_history TO authenticated
-MUTATION APPLIED V_ids_cast_inline (_cloud_todo_apply_op, mutated body md5 4d6ad2855178934209a4eb55f1df94bd)
-  - WHERE x.id = v_did
-  + WHERE x.id = (op ->> 'deal_id')::uuid
-  - AND (x.id = v_tid
-  + AND ((pg_input_is_valid(op ->> 'id', 'uuid') AND x.id = (op ->> 'id')::uuid)
-MUTATION APPLIED G_install_gate_parties (cloud_upsert_parties, mutated body md5 aee5faf88310812d09ebb5f4ba0e10fd)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:parties*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_parties (cloud_upsert_parties, mutated body md5 a8bb9f84e03e8d2f437f7d340208c826)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:parties*/
-MUTATION APPLIED G_install_gate_checklists (cloud_upsert_checklists, mutated body md5 e7a0cd11292e8fae6e96eee433f84b5e)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:checklists*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_checklists (cloud_upsert_checklists, mutated body md5 c00ff49ede732c7d25b2309ac56d9068)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:checklists*/
-MUTATION APPLIED G_install_gate_items (cloud_upsert_checklist_items, mutated body md5 f367eec9e0bb95b6842b7b84be92a136)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:items*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_items (cloud_upsert_checklist_items, mutated body md5 a03d125f5b10fdfe42badd66a07a8799)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:items*/
-MUTATION APPLIED G_install_gate_messages (cloud_upsert_messages, mutated body md5 d704b65ae652ef63887c6f356c4d7bca)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:messages*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_messages (cloud_upsert_messages, mutated body md5 9ac370c4f6a1427c6f79adf2b7142a2e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:messages*/
-MUTATION APPLIED G_install_gate_files (cloud_upsert_files, mutated body md5 972cae3f2d062e8e92909597a509f8c9)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:files*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_files (cloud_upsert_files, mutated body md5 fbe6ee59669ccc40f5e095d9011bb94e)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:files*/
-MUTATION APPLIED G_install_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 0c28b5910a6918dca9fdce322697639b)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:mark_synced*/
-  + IF false THEN
-MUTATION APPLIED G_live_gate_mark_synced (cloud_mark_deal_synced, mutated body md5 f557f775950c60e6dbcd7a25139950d2)
-  - AND d.removed_at IS NULL                                                             /*GATE:live:mark_synced*/
-MUTATION APPLIED G_install_gate_tombstone (cloud_tombstone, mutated body md5 9478109cdb86e7c8af4dad5be5d9f56f)
-  - IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
-  + IF false THEN
-MUTATION APPLIED G_new_writer_without_gate (ddl)
-  + CREATE FUNCTION public._p4263_writer(p_source_install_id uuid) RETURNS void LANGUAGE sql SET search_path = '' AS $r$ SELECT NULL::void $r$
+controls=0 mutants=16 problems=0
+CAUGHT M_G_install_gate_parties want=red -> FAIL: #1 FAIL: cloud_upsert_parties removed install: {"ok": false, "error": "not_found"}
+CAUGHT M_G_live_gate_parties want=red -> FAIL: #2 FAIL: cloud_upsert_parties removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gp", "content_hash": "9c85a566149556f8208bdb9b5f32b06626a86e2be5d6b73811c9e95933f5d
+CAUGHT M_R3_type_gate_dropped want=red -> FAIL: #2 FAIL: set.id -> not_found  | #4 FAIL: set.base_rev -> applied  | #5 FAIL: set.base_rev -> unchanged  | #6 FAIL: set.edit_seq -> unchanged  | #7 FAIL: set.edit_seq -> unchanged  | #8 FAIL: set.clock_stepped -> unchanged  | #9 FAIL: set.held_locked ->
+CAUGHT M_R4_ledger_keeps_everything want=red -> FAIL: #1 FAIL: parent_missing then rejected | #2 FAIL: not_found then not_found
+CAUGHT M_R6_delete_deal_makes_head want=red -> FAIL: #2 FAIL: register 0 head 1
+CAUGHT M_R6_delete_install_while_off want=red -> FAIL: #2 FAIL: register 1 head 1 | #3 FAIL: upload after on: {"ok": false, "error": "install_removed"}
+CAUGHT M_R6_purge_now_makes_head want=red -> FAIL: #2 FAIL: register 0 head 1
+CAUGHT M_R7_catalogue_sees_missing_filter want=red -> FAIL: readers 4, reads without the filter: _mcp_r_list_all_deals#2 
+CAUGHT M_R7_list_all_returns_removed want=red -> FAIL: #1 FAIL: before <uuid>,<uuid>,<uuid> after <uuid>,<uuid>,<uuid>
+CAUGHT M_S1_ai_restore_unrestricted want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:15.417932+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq
+CAUGHT M_S1_switch_on want=red -> FAIL: #1 FAIL: template item {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:15.417932+00:00", "by": "desktop:<uuid>", "rev": 1, "value": null, "edit_seq": null}, "don
+CAUGHT M_S2_ai_on_unconfirmed want=red -> FAIL: {"ok": true, "results": [{"op_id": "<uuid>", "parts": {"due": {"at": "2026-11-17T05:58:16.075775+00:00", "by": "ai_app:conn-1", "rev": 1, "value": null, "edit_seq": null}, "done": {"at": "2026-11-17T05:58:16.075775+00:00",
+CAUGHT M_S3_restore_under_removed_install want=red -> FAIL: {"ok": true, "results": [{"status": "restored", "cloud_id": "<uuid>", "renumbered": 3}]}
+CAUGHT M_SR3_restore_deal_without_head want=red -> FAIL: public.cloud_todo_restore(uuid,text,uuid,uuid) first@897 head@0 deal@1326; 
+CAUGHT M_SR6_purge_forget_dropped want=red -> FAIL: #1 FAIL: tombstone: seq 28 f0 13 f1 13 | #2 FAIL: history: left 50 max deleted 31 f2 13
+CAUGHT M_SR9_push_rows_locked_before_head want=red -> FAIL: _cloud_todo_apply: head not taken in both arms before the row locks; 
+INFO   fixture_rows_numbered 0 unnumbered of 6
+controls=0 mutants=16 problems=0
 CAUGHT M_G_install_gate_checklists want=red -> FAIL: #3 FAIL: cloud_upsert_checklists removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_files want=red -> FAIL: #9 FAIL: cloud_upsert_files removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_items want=red -> FAIL: #5 FAIL: cloud_upsert_checklist_items removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_mark_synced want=red -> FAIL: #11 FAIL: mark removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_messages want=red -> FAIL: #7 FAIL: cloud_upsert_messages removed install: {"ok": false, "error": "not_found"}
-CAUGHT M_G_install_gate_parties want=red -> FAIL: #1 FAIL: cloud_upsert_parties removed install: {"ok": false, "error": "not_found"}
 CAUGHT M_G_install_gate_tombstone want=red -> FAIL: #13 FAIL: tombstone removed install: {"ok": true, "results": [{"status": "removed", "version": 2, "cloud_id": "<uuid>"}]}
 CAUGHT M_G_live_gate_checklists want=red -> FAIL: #4 FAIL: cloud_upsert_checklists removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gc", "content_hash": "fb286cc32d28911df75210cb85bca14e8d2cdc790b9515db7c4edcd
 CAUGHT M_G_live_gate_files want=red -> FAIL: #10 FAIL: cloud_upsert_files removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gf", "content_hash": "eb5a7896cb9a257b80d64678982c09dcfb58b3b791a756397179cec2c873e643
 CAUGHT M_G_live_gate_items want=red -> FAIL: #6 FAIL: cloud_upsert_checklist_items removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gi", "content_hash": "113aff791372bb03166b89c6d74782baf8ef45ceb15cb150e0315a7
-CAUGHT M_G_live_gate_mark_synced want=red -> FAIL: #12 FAIL: mark removed deal: {"ok": true, "last_full_sync_at": "2026-11-17T04:21:24.721208+00:00"}
+CAUGHT M_G_live_gate_mark_synced want=red -> FAIL: #12 FAIL: mark removed deal: {"ok": true, "last_full_sync_at": "2026-11-17T05:58:18.881064+00:00"}
 CAUGHT M_G_live_gate_messages want=red -> FAIL: #8 FAIL: cloud_upsert_messages removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gm", "content_hash": "be19b650cd3fbbaef2c83588dab289b8da14e46f7769886fda688de2478
-CAUGHT M_G_live_gate_parties want=red -> FAIL: #2 FAIL: cloud_upsert_parties removed deal: {"ok": true, "results": [{"status": "applied", "version": 1, "cloud_id": "<uuid>", "local_id": "gp", "content_hash": "9c85a566149556f8208bdb9b5f32b06626a86e2be5d6b73811c9e95933f5d
 CAUGHT M_G_new_writer_without_gate want=red -> FAIL: #1 FAIL: writers without the install gate: _p4263_writer
-CAUGHT M_V_ids_cast_inline want=red -> FAIL: "ERR 22P02 invalid input syntax for type uuid: \"abc\""
 INFO   fixture_rows_numbered 0 unnumbered of 6
-controls=0 mutants=15 problems=0
+controls=0 mutants=12 problems=0
 a: [{"r":3,"hold":""}]
 b: [{"r":4}]
 c: [{"r1":{"head":2,"tags":["seed"],"next_after":2},"waiters":1}]
 d: [{"r2":{"head":4,"tags":["w1","w2"],"next_after":4},"committed":["seed","w1","w2"]}]
 residue check: schema p4263cc_<run> gone (0)
 C14 pristine: PASS
+a: [{"r":2,"hold":""}]
+b: [{"r":3}]
+c: [{"r1":{"head":3,"tags":["w2"],"next_after":3},"waiters":0}]
 d: [{"r2":{"head":3,"tags":[],"next_after":3},"committed":["seed","w1","w2"]}]
 residue check: schema p4263cc_<run> gone (0)
 C14 seq_no_head: FAIL (seen ['w2'] of ['w1', 'w2'], waiters 0)
+a: [{"r":3,"hold":""}]
+b: [{"r":4}]
+c: [{"r1":{"head":4,"tags":["seed","w2"],"next_after":4},"waiters":0}]
+d: [{"r2":{"head":3,"tags":[],"next_after":4},"committed":["seed","w1","w2"]}]
+residue check: schema p4263cc_<run> gone (0)
+C14 sr7: FAIL (seen ['w2'] of ['w1', 'w2'], waiters 0)
