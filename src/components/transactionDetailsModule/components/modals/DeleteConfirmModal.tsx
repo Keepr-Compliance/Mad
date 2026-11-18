@@ -4,6 +4,18 @@
  */
 import React from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import { useKeeprCloudOnHere } from "../../../../hooks/useKeeprCloudOnHere";
+
+/**
+ * BACKLOG-4263 PR-6 (plan §14): for a Keepr Cloud user main keeps the deleted deal 30 days, restorable from
+ * Settings › Keepr Cloud. Shared with the bulk dialog (BulkActionBar.tsx).
+ */
+export const CLOUD_DELETE_COPY = {
+  oneTitle: "Delete this deal?",
+  one: "It is removed from this computer and from Keepr Cloud. You can restore it, with its people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
+  manyTitle: (n: number) => `Delete ${n} deals?`,
+  many: "They are removed from this computer and from Keepr Cloud. You can restore them, with their people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that they are deleted for good.",
+} as const;
 
 interface DeleteConfirmModalProps {
   propertyAddress: string;
@@ -19,6 +31,7 @@ export function DeleteConfirmModal({
   onDelete,
   isDeleting = false,
 }: DeleteConfirmModalProps): React.ReactElement {
+  const cloudOn = useKeeprCloudOnHere();
   return (
     <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
         <div className="flex items-center gap-3 mb-3">
@@ -37,8 +50,14 @@ export function DeleteConfirmModal({
               />
             </svg>
           </div>
-          <h3 className="text-lg font-bold text-gray-900">Delete Transaction?</h3>
+          <h3 className="text-lg font-bold text-gray-900">{cloudOn ? CLOUD_DELETE_COPY.oneTitle : "Delete Transaction?"}</h3>
         </div>
+        {cloudOn ? (
+          <p className="text-sm text-gray-600 mb-6" data-testid="delete-transaction-cloud-text">
+            {CLOUD_DELETE_COPY.one}
+          </p>
+        ) : (
+        <>
         <p className="text-sm text-gray-600 mb-2">
           Are you sure you want to delete this transaction? This will permanently
           remove:
@@ -53,6 +72,8 @@ export function DeleteConfirmModal({
         <p className="text-sm text-red-600 font-semibold mb-6">
           This action cannot be undone.
         </p>
+        </>
+        )}
         <div className="flex items-center gap-3 justify-end">
           <button
             onClick={onCancel}
@@ -62,7 +83,7 @@ export function DeleteConfirmModal({
           </button>
           <button
             onClick={onDelete}
-            disabled={isDeleting}
+            disabled={isDeleting || cloudOn === null}
             data-testid="delete-transaction-confirm"
             className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all disabled:opacity-50"
           >
