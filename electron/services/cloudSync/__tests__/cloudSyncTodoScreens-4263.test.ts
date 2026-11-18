@@ -249,7 +249,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
   describe("HIST: history", () => {
     /**
      * Rows TRANSCRIBED from cloud_todo_history on the test database (supabase/tests/backlog-4263-pr6/harness-6-history.sql,
-     * run 2026-11-18, rolled back; keys and values as observed, the fixture's own invented texts; change_seq and
+     * run 2026-11-18, rolled back; keys and values as observed (a desktop row's label is "Keepr desktop", migration 20261118110000 :1004), the fixture's own invented texts; change_seq and
      * times replaced by fixed values). Item i2: a desktop edit that LOST to an AI app's later note; item i3: removed
      * by an AI app, restored by the owner; item i1: a desktop edit with an unknowable clock ('-infinity').
      */
@@ -257,20 +257,20 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       change_seq: 1, other_by: null, received_at: "2026-11-18T05:01:13.4+00:00", effective_at: "2026-11-18T05:01:13.4+00:00", ...x,
     });
     const I2_ROWS = [
-      row({ kind: "conflict", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr", other_by: "ai_app:conn-1", old_value: "from desk", new_value: "from ai" }),
-      row({ kind: "change", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr", other_by: "ai_app:conn-1", old_value: "from ai", new_value: "from desk" }),
+      row({ kind: "conflict", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr desktop", other_by: "ai_app:conn-1", old_value: "from desk", new_value: "from ai" }),
+      row({ kind: "change", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr desktop", other_by: "ai_app:conn-1", old_value: "from ai", new_value: "from desk" }),
       row({ kind: "change", part: "note", outcome: "applied", actor_kind: "ai_app", actor_label: "Claude", old_value: "start", new_value: "from ai" }),
-      row({ kind: "change", part: "created", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", effective_at: "-infinity", old_value: null, new_value: { title: { rev: 1, value: "Appraisal" } } }),
+      row({ kind: "change", part: "created", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr desktop", effective_at: "-infinity", old_value: null, new_value: { title: { rev: 1, value: "Appraisal" } } }),
     ];
     const I3_ROWS = [
       row({ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr", old_value: { kind: "item", removed_at: "2026-11-18T05:01:13.502342+00:00" }, new_value: null }),
       row({ kind: "change", part: "removed", outcome: "removed", actor_kind: "ai_app", actor_label: "Claude", old_value: { kind: null, removed_at: null }, new_value: { kind: "item" } }),
     ];
     const I1_ROWS = [
-      row({ kind: "change", part: "title", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", effective_at: "-infinity", old_value: "Inspection", new_value: "Inspection report" }),
+      row({ kind: "change", part: "title", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr desktop", effective_at: "-infinity", old_value: "Inspection", new_value: "Inspection report" }),
       row({ kind: "change", part: "done", outcome: "applied", actor_kind: "ai_app", actor_label: "Claude", old_value: { checked_at: null, is_checked: false }, new_value: { checked_at: "2026-11-18T05:01:13.354072+00:00", is_checked: true } }),
-      row({ kind: "change", part: "note", outcome: "unchanged", actor_kind: "desktop", actor_label: "Keepr", old_value: "a", new_value: "a" }),
-      row({ kind: "change", part: "order", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", old_value: 0, new_value: 1 }),
+      row({ kind: "change", part: "note", outcome: "unchanged", actor_kind: "desktop", actor_label: "Keepr desktop", old_value: "a", new_value: "a" }),
+      row({ kind: "change", part: "order", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr desktop", old_value: 0, new_value: 1 }),
     ];
     const cloudIdOf = (db: TestDb, id: string) => (db.prepare("SELECT cloud_id FROM cloud_sync_todo_state WHERE local_id = ?").get(id) as { cloud_id: string }).cloud_id;
 
