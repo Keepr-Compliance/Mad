@@ -2816,12 +2816,13 @@ END $c$;
 
 -- ---------------------------------------------------------------- 500 writes a day per user
 CREATE FUNCTION pg_temp.c_rate() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE A uuid := pg_temp.id('A'); s0 text; r jsonb; r4 jsonb; r3 jsonb; s4 text; c4 int; c3 int;
+DECLARE A uuid := pg_temp.id('A'); s0 text; s1 text; r jsonb; r4 jsonb; r3 jsonb; s4 text; c4 int; c3 int;
 BEGIN
   PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(true);
   INSERT INTO public.mcp_rate_counters (bucket, window_start, count) VALUES ('todo_write_user:' || A::text, public._mcp_window(interval '1 day'), 500);
   s0 := pg_temp.state(A);
   r := pg_temp.w(pg_temp.q_upd(11, pg_temp.id('m1'), '{"done":true}'));
+  s1 := pg_temp.state(A);
   -- parts count: 497 used, a four-part update does not fit (nothing added, nothing written), a three-part one does
   UPDATE public.mcp_rate_counters SET count = 497 WHERE bucket = 'todo_write_user:' || A::text;
   r4 := pg_temp.w(pg_temp.q_upd(11, pg_temp.id('m1'), '{"done":true,"title":"Four","note":"four","due_date":"2026-12-01"}'));
@@ -2831,7 +2832,7 @@ BEGIN
   c3 := (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'todo_write_user:' || A::text);
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.ws(r) = 'E:rate_limited', 'status ' || r::text),
-    pg_temp.pass(pg_temp.state(A) = s0, 'state changed'),
+    pg_temp.pass(s1 = s0, 'state changed'),
     pg_temp.pass(pg_temp.ws(r4) = 'E:rate_limited' AND s4 = s0 AND c4 = 497, 'four parts at 497 ' || r4::text || ' count ' || c4),
     pg_temp.pass(pg_temp.ws(r3) = 'applied' AND c3 = 500, 'three parts at 497 ' || r3::text || ' count ' || coalesce(c3::text, 'null')),
     pg_temp.pass(pg_temp.ws(pg_temp.w(pg_temp.q_upd(12, pg_temp.id('b1'), '{"done":true}'))) = 'applied', 'other user unaffected'));

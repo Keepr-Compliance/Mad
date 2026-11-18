@@ -22,7 +22,8 @@ import * as route from '@/app/api/mcp/route';
 import { checkDataToolEnvelope, checkWriteAccessEnvelope } from '@/lib/mcp/oauth/rpc';
 import { normaliseScope } from '@/lib/mcp/oauth/validate';
 import { CHECKLIST_ITEM_V2_KEYS, CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2, TODO_CHANGE_SHAPE, TODO_ITEM_KEYS, TODO_STATUSES } from '@/lib/mcp/tools/shapes';
-import { TOOLS } from '@/lib/mcp/server';
+import { canWriteOf, TOOLS, toolsFor } from '@/lib/mcp/server';
+import type { McpRequestContext } from '@modelcontextprotocol/server';
 import { WRITE_TOOLS } from '@/lib/mcp/tools/todos';
 import { GET_DEAL_CHECKLISTS_TOOL } from '@/lib/mcp/tools/checklists';
 import { TOOL_MESSAGES } from '@/lib/mcp/tools/text';
@@ -180,6 +181,21 @@ describe('read-only texts (the build before BACKLOG-4263 PR-5, transcribed in fi
       expect(t).toContain('Do not change anything in Keepr unless I ask.');
       expect(t).not.toContain('Keepr is read-only');
     }
+  });
+});
+
+describe('canWriteOf', () => {
+  it.each([[undefined], [{}], [{ atDigest: 'x' }], [{ canWrite: 'true' }], [{ canWrite: 1 }], [{ canWrite: false }]])(
+    'extra %p is read-only: read tools only',
+    (extra) => {
+      const ctx = { authInfo: extra === undefined ? undefined : { token: '', clientId: '', scopes: ['mcp:read'], extra } } as unknown as McpRequestContext;
+      expect(canWriteOf(ctx)).toBe(false);
+      expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
+    }
+  );
+  it('only canWrite exactly true lists the write tools', () => {
+    const ctx = { authInfo: { token: '', clientId: '', scopes: ['mcp:read'], extra: { canWrite: true } } } as unknown as McpRequestContext;
+    expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual([...TOOLS.map((t) => t.name), ...WRITE_NAMES]);
   });
 });
 
