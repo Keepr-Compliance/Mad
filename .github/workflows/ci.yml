@@ -205,34 +205,53 @@ jobs:
       - name: Skip tests (docs-only change)
         run: echo "Skipping tests for ${{ matrix.os }} / Node ${{ matrix.node-version }} - documentation-only changes detected"
 
-  test:
-    name: Test & Lint (${{ matrix.os }})
+  # BACKLOG-4125: the desktop suite runs as parallel jobs per OS instead of one
+  # long "Test & Lint" job. Per OS:
+  #   checks-<os>   install, native rebuild for Electron + asserts, type-check,
+  #                 type-check:tests, lint, and the listed suite total
+  #   jest-<os>     the root jest suite in 4 shards (--shard=i/4), 2 workers each
+  #   portal-<os>   integration tier, broker-portal jest, admin-portal vitest
+  #   test-<os>     the aggregator. Its check name is the required context
+  #                 "Test & Lint (<os>)" on develop and main.
+  #
+  # The jobs are defined once per OS (not one OS x shard matrix) so each
+  # aggregator reads its own OS's results through needs.<job>.result.
+  #
+  # Exactly one of docs-pass / test-<os> reports each required name:
+  #   - docs-only == 'true'  -> docs-pass runs; test-<os> is skipped.
+  #   - docs-only != 'true'  -> test-<os> runs for each OS in os-matrix;
+  #                             docs-pass is skipped.
+  #   - check-changes failed -> docs-pass is skipped; test-<os> runs and fails.
+  # A SKIPPED matrix job is listed under its unexpanded name
+  # "Test & Lint (${{ matrix.os }})", never under a required name; that is why
+  # docs-pass and each aggregator carry a matrix (the aggregator's has one entry).
+  #
+  # The shards call jest directly after `npm rebuild` of the native module for
+  # Node. They do not go through `npm test` (scripts/test-with-restore.js),
+  # whose restore to the Electron build takes ~45 s and is needed by nothing
+  # after jest in CI. `npm test` on a developer machine is unchanged.
+
+  checks-macos:
+    name: Checks (macos-latest)
     needs: check-changes
-    if: needs.check-changes.outputs.docs-only != 'true'
-    # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
-    # the runner is the pinned label in .github/macos-runner.json.
-    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
-    timeout-minutes: 60  # Windows test runs took 37-44 min in Nov 2026 and hit 45 (BACKLOG-4115 pre.3 PR); 30 cancelled them earlier (BACKLOG-3794)
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
-        node-version: [22.23.4]  # exact pin: Node 20 is end-of-life (BACKLOG-4053)
-
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'macos-latest')
+    # BACKLOG-3198: the macOS runner is the pinned label in .github/macos-runner.json.
+    runs-on: macos-26
+    timeout-minutes: 40
+    outputs:
+      suite-total: ${{ steps.listed.outputs.suite-total }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22.23.4
           cache: 'npm'
 
       # BACKLOG-3198: warn (not fail) when the OS inside the pinned label moved.
       - name: Report macOS runner drift
-        if: matrix.os == 'macos-latest'
         run: node scripts/ci/check-macos-runner.mjs --host --warn
 
       - name: Check Node.js version (BACKLOG-4053)
@@ -241,6 +260,11 @@ jobs:
           node scripts/ci/check-node-version.mjs "$(node -v)"
           node scripts/__tests__/check-node-version.verify.js
           node scripts/__tests__/ensure-electron-dist.verify.js
+
+      # BACKLOG-4125: the shard and aggregator guards, driven red on purpose.
+      - name: Verify the jest shard guard
+        run: node scripts/__tests__/jest-shard-guard.verify.js
+
       - name: Install Python setuptools
         run: pip install setuptools
 
@@ -281,33 +305,16 @@ jobs:
       - name: Assert native module loads under Electron (from-source build)
         run: node scripts/ci/check-native-under-electron.js
 
-      # BACKLOG-2505: NODE_OPTIONS on the next three steps.
-      #
-      # Every step from "Run tests" down already sets --max-old-space-size=4096.
-      # These three did not, so they ran on whatever old-space limit Node derives
-      # from the runner's total memory. `type-check:tests` needs ~2 GB, which put
-      # it right at that derived limit: it OOM'd (exit 134, node::OOMErrorHandler)
-      # on two consecutive re-runs of an UNCHANGED commit on PR #2212, having
-      # passed on an earlier run of the same commit.
-      #
-      # Value and shape are copied from the sibling steps rather than tuned, so
-      # every Node step in this job now carries one explicit, identical limit
-      # instead of an implicit one that varies with the runner.
+      # BACKLOG-2505: an explicit, identical old-space limit on every Node step;
+      # type-check:tests needs ~2 GB and OOM'd on the runner-derived limit.
       - name: TypeScript type check
         run: npm run type-check
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      # BACKLOG-2414: `npm run type-check` uses tsconfig.json, which EXCLUDES
-      # **/*.test.* — so the entire test suite was never type-checked by anything.
-      # A literal `const x: number = "string"` in a test file passed tsc, eslint and
-      # jest simultaneously. This step closes that hole; it is a separate step (not
-      # folded into type-check) so a failure names the test suite explicitly.
+      # BACKLOG-2414: tsconfig.json excludes **/*.test.*; this checks the test
+      # suite. BACKLOG-2505: print the limit actually in force before running.
       - name: TypeScript type check (test suite)
-        # BACKLOG-2505: print the limit actually in force before running. This is
-        # the step that OOM'd, and a green run on its own cannot tell "the cap
-        # applied" from "the OOM did not fire this time" — the printed number can.
-        # It reads V8's own limit, so it tracks the flag rather than echoing it.
         run: |
           node -p "'v8 heap_size_limit: ' + Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576) + ' MB'"
           npm run type-check:tests
@@ -319,34 +326,149 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      # BACKLOG-3288: --bail=0 makes CI report EVERY failing suite in one run. It
-      # overrides `bail: 1` in jest.config.js for CI only; local `npm test` and
-      # `npx jest` still stop at the first failure.
-      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
-      # that runs only 68 of 1010 files, and the step can still pass green.
+      # BACKLOG-4125: the number of suites the shards must add up to. CI=true is
+      # set by Actions; the root config selects the CI testMatch from it.
+      - name: Count the listed jest suites
+        id: listed
+        shell: bash
+        run: |
+          npx jest --listTests --json > "$RUNNER_TEMP/jest-list.json"
+          node scripts/ci/jest-shard-guard.mjs expected --list "$RUNNER_TEMP/jest-list.json"
+
+  jest-macos:
+    name: Jest shard ${{ matrix.shard }}/4 (macos-latest)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'macos-latest')
+    runs-on: macos-26
+    # The unsharded suite took 17-30 min on 2 workers; one shard is about a
+    # quarter of that. 25 min makes a hang visible well before the old 60.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build preload
+        run: npm run build:preload
+
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
+
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
+
+      # BACKLOG-3288: --bail=0 reports EVERY failing suite (needs "=": "--bail 0"
+      # is bail 1 plus a test filter "0"). Never add --passWithNoTests: a shard
+      # that matches nothing must fail (jest exits 1), and the guard below
+      # fails it again on a zero count.
       - name: Run tests
-        run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0
+        shell: bash
+        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 --json --outputFile="$RUNNER_TEMP/jest-shard.json"
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      # BACKLOG-1786: integration tier (business-critical pipeline: sync ->
-      # classification -> detection). Runs as its own step via a dedicated config
-      # so a failure here is not masked by the unit run, and vice-versa. Reuses the
-      # already-installed deps + rebuilt native modules from the steps above and
-      # inherits the macOS + Windows matrix. No --forceExit: this tier is verified
-      # to leak no open handles, so we want jest to fail loudly if that changes.
+      # Fails when the JSON is missing (a throwing net-guard globalTeardown
+      # suppresses it) or reports 0 suites or 0 tests. Runs after a red jest
+      # step too, so the counts are always printed.
+      - name: Check shard result
+        if: success() || failure()
+        shell: bash
+        run: node scripts/ci/jest-shard-guard.mjs shard --json "$RUNNER_TEMP/jest-shard.json" --shard ${{ matrix.shard }}/4 --out "$RUNNER_TEMP/jest-summary/macos-latest-shard-${{ matrix.shard }}.json"
+
+      - name: Upload shard summary
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jest-summary-macos-latest-${{ matrix.shard }}
+          path: ${{ runner.temp }}/jest-summary/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  portal-macos:
+    name: Integration & Portal Tests (macos-latest)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'macos-latest')
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build preload
+        run: npm run build:preload
+
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
+
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
+
+      # BACKLOG-1786: integration tier (sync -> classification -> detection),
+      # its own config. No --forceExit: this tier leaks no open handles.
       - name: Run integration test tier
         run: npm run test:integration -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      # broker-portal jest suite (BACKLOG-2005a re-enabled it: config + route tests now
-      # exist). Runs from the repo root so ts-jest / jest-environment-* resolve from the
-      # hoisted root node_modules; the portal config remaps @/ to the portal root.
-      # BACKLOG-3288: the portal config spreads the root config, so it inherits
-      # `bail: 1`; --bail=0 reports every failing suite, CI only.
-      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
-      # that matches 0 of 54 files, and the step fails with "No tests found".
+      # BACKLOG-2005a / BACKLOG-3288: runs from the repo root so ts-jest and the
+      # jest environments resolve from the hoisted node_modules; --bail=0 (with
+      # "=") reports every failing suite.
       - name: Run broker-portal tests
         run: npx jest --config broker-portal/jest.config.js --silent --bail=0
         env:
@@ -357,6 +479,329 @@ jobs:
         run: npx vitest run
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+
+  # The required check "Test & Lint (macos-latest)". always(): without it a failed
+  # or cancelled shard SKIPS this job, and a skipped required job reports
+  # success. It fails unless every needed job succeeded and the shards' suite
+  # total equals the Checks job's `jest --listTests` count.
+  test-macos:
+    name: Test & Lint (${{ matrix.os }})
+    needs: [check-changes, checks-macos, jest-macos, portal-macos]
+    if: always() && needs.check-changes.outputs.docs-only != 'true' && (needs.check-changes.result != 'success' || contains(needs.check-changes.outputs.os-matrix, 'macos-latest'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+
+      - name: Require every needed job to have succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/ci/jest-shard-guard.mjs results --require check-changes,checks-macos,jest-macos,portal-macos
+
+      - name: Download shard summaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: jest-summary-macos-latest-*
+          path: ${{ runner.temp }}/jest-summary
+          merge-multiple: true
+
+      - name: Check the shards ran every listed suite
+        env:
+          EXPECTED: ${{ needs.checks-macos.outputs.suite-total }}
+        run: node scripts/ci/jest-shard-guard.mjs aggregate --dir "$RUNNER_TEMP/jest-summary" --shards 4 --expected "$EXPECTED"
+
+  checks-windows:
+    name: Checks (windows-latest)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'windows-latest')
+    # BACKLOG-3198: the macOS runner is the pinned label in .github/macos-runner.json.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    outputs:
+      suite-total: ${{ steps.listed.outputs.suite-total }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Check Node.js version (BACKLOG-4053)
+        shell: bash
+        run: |
+          node scripts/ci/check-node-version.mjs "$(node -v)"
+          node scripts/__tests__/check-node-version.verify.js
+          node scripts/__tests__/ensure-electron-dist.verify.js
+
+      # BACKLOG-4125: the shard and aggregator guards, driven red on purpose.
+      - name: Verify the jest shard guard
+        run: node scripts/__tests__/jest-shard-guard.verify.js
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build preload
+        run: npm run build:preload
+
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here. The checks below need it.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Rebuild native modules for Electron
+        run: node scripts/rebuild-native.js
+        continue-on-error: true
+
+      # BACKLOG-4052 (R-6): the step above may fail without failing the job;
+      # this asserts what it was for: the module loads under this Electron.
+      - name: Assert native module loads under Electron
+        run: node scripts/ci/check-native-under-electron.js
+
+      # BACKLOG-4052: the CA denylist, run under this Electron's own Node.
+      - name: Check Node CA denylist under Electron
+        run: node scripts/ci/check-node-ca-denylist.js
+
+      # BACKLOG-4052 (R-7): permanent. Skip prebuild-install and build with the
+      # electron-rebuild fallback (@electron/rebuild), so a broken fallback shows
+      # up here and not on the day a prebuild is missing.
+      - name: Rebuild native modules from source (forced fallback)
+        run: node scripts/rebuild-native.js
+        env:
+          KEEPR_REBUILD_FROM_SOURCE: '1'
+
+      - name: Assert native module loads under Electron (from-source build)
+        run: node scripts/ci/check-native-under-electron.js
+
+      # BACKLOG-2505: an explicit, identical old-space limit on every Node step;
+      # type-check:tests needs ~2 GB and OOM'd on the runner-derived limit.
+      - name: TypeScript type check
+        run: npm run type-check
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      # BACKLOG-2414: tsconfig.json excludes **/*.test.*; this checks the test
+      # suite. BACKLOG-2505: print the limit actually in force before running.
+      - name: TypeScript type check (test suite)
+        run: |
+          node -p "'v8 heap_size_limit: ' + Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576) + ' MB'"
+          npm run type-check:tests
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Run linter
+        run: npm run lint
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      # BACKLOG-4125: the number of suites the shards must add up to. CI=true is
+      # set by Actions; the root config selects the CI testMatch from it.
+      - name: Count the listed jest suites
+        id: listed
+        shell: bash
+        run: |
+          npx jest --listTests --json > "$RUNNER_TEMP/jest-list.json"
+          node scripts/ci/jest-shard-guard.mjs expected --list "$RUNNER_TEMP/jest-list.json"
+
+  jest-windows:
+    name: Jest shard ${{ matrix.shard }}/4 (windows-latest)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'windows-latest')
+    runs-on: windows-latest
+    # The unsharded suite took 17-30 min on 2 workers; one shard is about a
+    # quarter of that. 25 min makes a hang visible well before the old 60.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build preload
+        run: npm run build:preload
+
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
+
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
+
+      # BACKLOG-3288: --bail=0 reports EVERY failing suite (needs "=": "--bail 0"
+      # is bail 1 plus a test filter "0"). Never add --passWithNoTests: a shard
+      # that matches nothing must fail (jest exits 1), and the guard below
+      # fails it again on a zero count.
+      - name: Run tests
+        shell: bash
+        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 --json --outputFile="$RUNNER_TEMP/jest-shard.json"
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      # Fails when the JSON is missing (a throwing net-guard globalTeardown
+      # suppresses it) or reports 0 suites or 0 tests. Runs after a red jest
+      # step too, so the counts are always printed.
+      - name: Check shard result
+        if: success() || failure()
+        shell: bash
+        run: node scripts/ci/jest-shard-guard.mjs shard --json "$RUNNER_TEMP/jest-shard.json" --shard ${{ matrix.shard }}/4 --out "$RUNNER_TEMP/jest-summary/windows-latest-shard-${{ matrix.shard }}.json"
+
+      - name: Upload shard summary
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jest-summary-windows-latest-${{ matrix.shard }}
+          path: ${{ runner.temp }}/jest-summary/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  portal-windows:
+    name: Integration & Portal Tests (windows-latest)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true' && contains(needs.check-changes.outputs.os-matrix, 'windows-latest')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build preload
+        run: npm run build:preload
+
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
+
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
+
+      # BACKLOG-1786: integration tier (sync -> classification -> detection),
+      # its own config. No --forceExit: this tier leaks no open handles.
+      - name: Run integration test tier
+        run: npm run test:integration -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      # BACKLOG-2005a / BACKLOG-3288: runs from the repo root so ts-jest and the
+      # jest environments resolve from the hoisted node_modules; --bail=0 (with
+      # "=") reports every failing suite.
+      - name: Run broker-portal tests
+        run: npx jest --config broker-portal/jest.config.js --silent --bail=0
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Run admin-portal tests
+        working-directory: admin-portal
+        run: npx vitest run
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+  # The required check "Test & Lint (windows-latest)". always(): without it a failed
+  # or cancelled shard SKIPS this job, and a skipped required job reports
+  # success. It fails unless every needed job succeeded and the shards' suite
+  # total equals the Checks job's `jest --listTests` count.
+  test-windows:
+    name: Test & Lint (${{ matrix.os }})
+    needs: [check-changes, checks-windows, jest-windows, portal-windows]
+    if: always() && needs.check-changes.outputs.docs-only != 'true' && (needs.check-changes.result != 'success' || contains(needs.check-changes.outputs.os-matrix, 'windows-latest'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+
+      - name: Require every needed job to have succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/ci/jest-shard-guard.mjs results --require check-changes,checks-windows,jest-windows,portal-windows
+
+      - name: Download shard summaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: jest-summary-windows-latest-*
+          path: ${{ runner.temp }}/jest-summary
+          merge-multiple: true
+
+      - name: Check the shards ran every listed suite
+        env:
+          EXPECTED: ${{ needs.checks-windows.outputs.suite-total }}
+        run: node scripts/ci/jest-shard-guard.mjs aggregate --dir "$RUNNER_TEMP/jest-summary" --shards 4 --expected "$EXPECTED"
 
   # BACKLOG-2485: block personal-looking data from entering source/test paths.
   # This repository is public, so a fixture containing a real person's address or
@@ -1010,15 +1455,24 @@ jobs:
     # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
     # the runner is the pinned label in .github/macos-runner.json.
     runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
-    needs: [check-changes, test]
-    if: needs.check-changes.outputs.docs-only != 'true'
+    # BACKLOG-4125: needs both aggregators. On a feature-branch push only macOS
+    # is in os-matrix, so test-windows is skipped; !cancelled() keeps this job
+    # from being skipped with it, and the two OS terms keep today's rule: build
+    # only when "Test & Lint" passed for every OS in os-matrix.
+    needs: [check-changes, test-macos, test-windows]
+    if: >-
+      !cancelled() &&
+      needs.check-changes.result == 'success' &&
+      needs.check-changes.outputs.docs-only != 'true' &&
+      (needs.test-macos.result == 'success' || !contains(needs.check-changes.outputs.os-matrix, 'macos-latest')) &&
+      (needs.test-windows.result == 'success' || !contains(needs.check-changes.outputs.os-matrix, 'windows-latest'))
 
     strategy:
       # BACKLOG-3242: without this, `fail-fast` defaults to true and one platform's
       # failure CANCELS the other, so a single-platform problem destroys the signal
       # for both. On 2026-09-08 the macOS job failed and Windows was cancelled mid-run,
       # leaving no evidence of whether Windows would have built. Same form as the
-      # `test` job above, which has carried it for the same reason.
+      # jest shard jobs above, which carry it for the same reason.
       fail-fast: false
       matrix:
         os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
@@ -1120,7 +1574,7 @@ jobs:
     # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
     # the runner is the pinned label in .github/macos-runner.json.
     runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
-    needs: [check-changes, test, build]
+    needs: [check-changes, test-macos, test-windows, build]
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && needs.check-changes.outputs.docs-only != 'true'
 
     strategy:
