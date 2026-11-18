@@ -754,6 +754,10 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       expect(e.server.calls.length).toBe(calls2);
       expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
+      // PR-6: what Settings receives in this state: a status the screen treats as on, with installRemoved
+      const view = await e.service.getView();
+      expect(view.installRemoved).toBe(true);
+      expect(["on", "error", "paused"]).toContain(view.status);
       // B: unaffected
       expect(todos.installRemovedAt(db, PROJECT, USER_B)).toBeNull();
       db.prepare("UPDATE transaction_checklists SET sort_order = 4 WHERE id = ?").run(fid(3, 80));

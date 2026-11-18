@@ -234,6 +234,7 @@ function installCloudSyncUnguarded(): CloudSyncService {
       client,
       projectRef: projectRefFromUrl(configuredUrl),
       sessionUser: () => service.sessionUser(),
+      localSessionUser: () => service.localSessionUser(),
       isOnline: () => net.isOnline(),
       installId: () => service.installIdForScreens(),
       archivedDealIds: async () => new Set((await service.listRemovedDeals()).map((d) => d.transactionId)),

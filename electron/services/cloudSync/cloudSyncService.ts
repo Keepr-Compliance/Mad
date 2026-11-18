@@ -331,6 +331,12 @@ export class CloudSyncService {
 
   // ------------------------------------------------------------ actions
 
+  /** BACKLOG-4263 PR-6: the local session's user only (no SDK check), for the todo screens' read-only answers. */
+  async localSessionUser(): Promise<string | null> {
+    if (!this.deps.projectRef || !this.deps.dbReady()) return null;
+    return (await this.deps.identity.current())?.userId ?? null;
+  }
+
   /** BACKLOG-4263 PR-6: the same check, for the todo screens (todoScreens.ts). */
   sessionUser(): Promise<string | null> {
     return this.actingUser();

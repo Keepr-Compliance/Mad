@@ -28,6 +28,8 @@ import { enableForUser } from "../../db/cloudSyncDbService";
 import { CloudTodoScreens } from "../todoScreens";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
 import {
+  DELETE_CHECKLIST_IN_TRANSACTION_SQL,
+  DELETE_PRIVATE_ITEM_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
   INSERT_CHECKLIST_SQL,
   INSERT_PRIVATE_CHECKLIST_SQL,
@@ -76,6 +78,7 @@ function screensOf(e: Engine, db: TestDb): CloudTodoScreens {
     client: e.client,
     projectRef: PROJECT,
     sessionUser: () => e.service.sessionUser(),
+    localSessionUser: () => e.service.localSessionUser(),
     isOnline: () => e.online.value,
     installId: () => e.service.installIdForScreens(),
     archivedDealIds: async () => new Set((await e.service.listRemovedDeals()).map((d) => d.transactionId)),
@@ -109,6 +112,18 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect(await s.listRemovedOnline()).toMatchObject({ success: false, error: "cloud_off" });
       expect(await s.restoreOnlineDeal(fid(9, 2))).toEqual({ success: false, error: "cloud_off" });
       expect(e.server.calls.length).toBe(before);
+    });
+  });
+
+  // ================================================================ LOCAL
+  describe("LOCAL: the read-only answers follow the archive's rule", () => {
+    it("Keepr Cloud on here, offline and with the online sign-in not matching: still on (the delete is still kept); actions are refused", async () => {
+      const { deal, e, s } = await synced();
+      e.authUser.id = null;
+      e.online.value = false;
+      expect(await s.localState()).toEqual({ on: true, online: false });
+      expect((await s.forDeal(deal)).on).toBe(true);
+      expect(await s.restoreTodo(deal, "item", fid(9, 1))).toEqual({ success: false, error: "cloud_off" });
     });
   });
 
@@ -286,6 +301,34 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect((await s.listRemovedTodos(deal)).items).toEqual([]);
     });
 
+    it("a My item removed on this computer: listed, restored through the server, back once with nothing queued to send", async () => {
+      const { db, deal, e, s } = await synced();
+      const cloudId = onlineItem(e, I2).id;
+      db.prepare(DELETE_PRIVATE_ITEM_SQL).run(I2, deal, MY_ITEMS_TEMPLATE_ID);
+      await pass(e);
+      expect(onlineItem(e, I2).removed).toBe(true);
+      expect((await s.listRemovedTodos(deal)).items.map((i) => [i.entity, i.cloudId])).toEqual([["item", cloudId]]);
+      expect(await s.restoreTodo(deal, "item", cloudId)).toEqual({ success: true });
+      expect((db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE id = ?").get(I2) as { n: number }).n).toBe(1);
+      expect(outbox(db)).toEqual([]);
+      expect(onlineItem(e, I2).removed).toBe(false);
+    });
+
+    it("a template checklist removed on this computer: listed, restored, back once with its items, nothing queued to send", async () => {
+      const { db, deal, e, s } = await synced();
+      const cloudId = onlineList(e, CL).id;
+      db.prepare(DELETE_CHECKLIST_IN_TRANSACTION_SQL).run(CL, deal);
+      await pass(e);
+      expect(item(db, I1)).toBeUndefined();
+      expect((await s.listRemovedTodos(deal)).items.map((i) => [i.entity, i.cloudId])).toEqual([["checklist", cloudId]]);
+      expect(await s.restoreTodo(deal, "checklist", cloudId)).toEqual({ success: true });
+      expect((db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists WHERE id = ?").get(CL) as { n: number }).n).toBe(1);
+      expect(item(db, I1)).toMatchObject({ title: "Inspection", checklist_id: CL });
+      expect((db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE checklist_id = ?").get(CL) as { n: number }).n).toBe(1);
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+    });
+
     it("offline: the list and the restore answer offline and call nothing", async () => {
       const { deal, e, s } = await removedOnline();
       e.online.value = false;
@@ -371,6 +414,29 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect((await s.listRemovedOnline()).deals.map((d) => d.kind)).toEqual(["rejected"]);
     });
 
+    it("a deal from this computer restored online only: nothing shows as a change that could not be applied", async () => {
+      const { db, deal, e, s } = await synced();
+      // deleted here without an archive (an older Keepr): removed online by the next pass
+      db.prepare("DELETE FROM transactions WHERE id = ?").run(deal);
+      await pass(e);
+      const listed = await s.listRemovedOnline();
+      expect(listed.deals.map((d) => d.kind)).toEqual(["online"]);
+      expect(await s.restoreOnlineDeal(listed.deals[0].cloudId)).toEqual({ success: true });
+      await pass(e);
+      // observed on this path: its todos keep their shadow, so the pull skips them (deal not here); none is parked
+      const parked = db.prepare("SELECT error_code FROM cloud_sync_todo_parked").all() as Row[];
+      expect(parked.filter((p) => p.error_code !== "deal_unknown")).toEqual([]);
+      expect((await e.service.getView()).parked).toBeUndefined();
+    });
+
+    it("deals removed with another computer's whole copy are not listed (one Restore would bring every one of them back)", async () => {
+      const { e, s } = await synced();
+      for (let i = 1; i <= 3; i++) {
+        e.server.softRemovedDeals.push({ id: fid(61, i), owner: USER_A, install: fid(98, 2), localId: `old-${i}`, hash: "h", version: 1, fullSyncAt: null, removedKind: "install", address: `${i} Old Copy Road` });
+      }
+      expect((await s.listRemovedOnline()).deals).toEqual([]);
+    });
+
     it("offline: answers offline and calls nothing", async () => {
       const { e, s } = await synced();
       e.online.value = false;
@@ -424,6 +490,8 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       ins.run(PROJECT, USER_A, "c1", "deal_locked");
       ins.run(PROJECT, USER_A, "c2", "deal_locked");
       ins.run(PROJECT, USER_A, "c3", "local_id_conflict");
+      // a todo of a deal that is not on this computer is not something waiting here
+      ins.run(PROJECT, USER_A, "c4", "deal_unknown");
       expect((await e.service.getView()).parked).toEqual({ locked: 2, other: 1 });
     });
   });

@@ -36,8 +36,13 @@ export interface TodoScreensDeps {
   dbReady: () => boolean;
   client: CloudClient;
   projectRef: string | null;
-  /** The validated session user the SDK agrees with, or null (cloudSyncService.sessionUser). */
+  /** The validated session user the SDK agrees with, or null (cloudSyncService.sessionUser). For actions. */
   sessionUser: () => Promise<string | null>;
+  /**
+   * This computer's signed-in user from the local session only (cloudSyncService.localSessionUser). For the read-only
+   * answers that must follow the archive's rule (`enabled = 1` for the user), also while the SDK disagrees.
+   */
+  localSessionUser: () => Promise<string | null>;
   isOnline: () => boolean;
   /** This computer's install id, or null (cloudSyncDbService.currentInstallId). */
   installId: () => string | null;
@@ -106,18 +111,18 @@ export class CloudTodoScreens {
     return this.deps.now ? this.deps.now() : new Date();
   }
 
-  /** The signed-in user when Keepr Cloud is on for them here; otherwise null. */
-  private async onUser(): Promise<string | null> {
+  /** The signed-in user when Keepr Cloud is on for them here; otherwise null. `local`: the local session only (reads). */
+  private async onUser(local = false): Promise<string | null> {
     const ref = this.deps.projectRef;
     if (!ref || !this.deps.dbReady()) return null;
-    const user = await this.deps.sessionUser();
+    const user = local ? await this.deps.localSessionUser() : await this.deps.sessionUser();
     if (!user) return null;
     return screens.cloudOnForUser(this.deps.db(), ref, user) ? user : null;
   }
 
   /** Local only: whether Keepr Cloud is on for the signed-in user, and whether this computer is online. */
   async localState(): Promise<{ on: boolean; online: boolean }> {
-    const user = await this.onUser();
+    const user = await this.onUser(true);
     return { on: user !== null, online: this.deps.isOnline() };
   }
 
@@ -151,7 +156,7 @@ export class CloudTodoScreens {
   /** One deal's notices and AI-app markers. Empty when Keepr Cloud is off or the deal is not this user's. */
   async forDeal(transactionId: string): Promise<CloudTodosForDeal> {
     const online = this.deps.isOnline();
-    const user = await this.onUser();
+    const user = await this.onUser(true);
     const db = this.deps.db();
     const ref = this.deps.projectRef as string;
     if (!user || !screens.dealOwnedBy(db, transactionId, user)) return { on: false, online, notices: [], markers: {} };
@@ -345,7 +350,10 @@ export class CloudTodoScreens {
       const until = str(d.restorable_until);
       if (until && Date.parse(until) <= nowMs) continue;
       const fromHere = str(d.source_install_id) === mine;
-      if (fromHere && d.removed_kind === "install") continue;
+      // A deal removed with its whole computer's copy: from this computer, "save this computer's deals again"
+      // covers it; from another computer, it went with "Delete them" for that computer's copy, and the server
+      // would restore every deal of that copy on one click. Neither is listed here.
+      if (d.removed_kind === "install") continue;
       let localId = fromHere ? this.localIdOfCloudDeal(db, user, cloudId) : null;
       if (fromHere && !localId) {
         if (localIds === undefined) localIds = await this.deps.onlineDealLocalIds();

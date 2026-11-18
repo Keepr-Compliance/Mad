@@ -120,11 +120,15 @@ export function itemValues(db: SqlDb, itemId: string): Record<string, unknown> |
   );
 }
 
-/** This user's parked rows: those waiting for a locked deal, and the rest. */
+/**
+ * This user's parked rows: those waiting for a locked deal, and the rest. Not counted: `deal_unknown`, the todos of
+ * a deal that is not on this computer (for example one restored online only): nothing here is waiting for them.
+ */
 export function parkedCounts(db: SqlDb, projectRef: string, userId: string): { locked: number; other: number } {
   const rows = db
     .prepare(
-      "SELECT error_code = 'deal_locked' AS locked, COUNT(*) AS n FROM cloud_sync_todo_parked WHERE project_ref = ? AND owner_user_id = ? GROUP BY 1",
+      `SELECT error_code = 'deal_locked' AS locked, COUNT(*) AS n FROM cloud_sync_todo_parked
+        WHERE project_ref = ? AND owner_user_id = ? AND coalesce(error_code, '') <> 'deal_unknown' GROUP BY 1`,
     )
     .all(projectRef, userId) as Array<{ locked: number; n: number }>;
   return {
