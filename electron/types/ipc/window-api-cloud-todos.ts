@@ -49,8 +49,12 @@ export interface CloudTodosForDeal {
 }
 
 export interface CloudTodoHistoryRow {
+  /** "Claude", "You, on a computer", "Keepr", "another device". */
   who: string;
+  /** ISO time, or null when not known. */
   at: string | null;
+  what: "added" | "removed" | "restored" | "changed";
+  /** changed only: done, title, note, due. */
   part: string | null;
   oldText: string | null;
   newText: string | null;

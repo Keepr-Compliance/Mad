@@ -190,22 +190,68 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
 
   // ================================================================ HIST
   describe("HIST: history", () => {
-    it("online: the last changes in the user's words; offline: no call and the offline answer", async () => {
+    /**
+     * Rows TRANSCRIBED from cloud_todo_history on the test database (supabase/tests/backlog-4263-pr6/harness-6-history.sql,
+     * run 2026-11-18, rolled back; keys and values as observed, the fixture's own invented texts; change_seq and
+     * times replaced by fixed values). Item i2: a desktop edit that LOST to an AI app's later note; item i3: removed
+     * by an AI app, restored by the owner; item i1: a desktop edit with an unknowable clock ('-infinity').
+     */
+    const row = (x: Record<string, JsonValue>): Record<string, JsonValue> => ({
+      change_seq: 1, other_by: null, received_at: "2026-11-18T05:01:13.4+00:00", effective_at: "2026-11-18T05:01:13.4+00:00", ...x,
+    });
+    const I2_ROWS = [
+      row({ kind: "conflict", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr", other_by: "ai_app:conn-1", old_value: "from desk", new_value: "from ai" }),
+      row({ kind: "change", part: "note", outcome: "lost", actor_kind: "desktop", actor_label: "Keepr", other_by: "ai_app:conn-1", old_value: "from ai", new_value: "from desk" }),
+      row({ kind: "change", part: "note", outcome: "applied", actor_kind: "ai_app", actor_label: "Claude", old_value: "start", new_value: "from ai" }),
+      row({ kind: "change", part: "created", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", effective_at: "-infinity", old_value: null, new_value: { title: { rev: 1, value: "Appraisal" } } }),
+    ];
+    const I3_ROWS = [
+      row({ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr", old_value: { kind: "item", removed_at: "2026-11-18T05:01:13.502342+00:00" }, new_value: null }),
+      row({ kind: "change", part: "removed", outcome: "removed", actor_kind: "ai_app", actor_label: "Claude", old_value: { kind: null, removed_at: null }, new_value: { kind: "item" } }),
+    ];
+    const I1_ROWS = [
+      row({ kind: "change", part: "title", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", effective_at: "-infinity", old_value: "Inspection", new_value: "Inspection report" }),
+      row({ kind: "change", part: "done", outcome: "applied", actor_kind: "ai_app", actor_label: "Claude", old_value: { checked_at: null, is_checked: false }, new_value: { checked_at: "2026-11-18T05:01:13.354072+00:00", is_checked: true } }),
+      row({ kind: "change", part: "note", outcome: "unchanged", actor_kind: "desktop", actor_label: "Keepr", old_value: "a", new_value: "a" }),
+      row({ kind: "change", part: "order", outcome: "applied", actor_kind: "desktop", actor_label: "Keepr", old_value: 0, new_value: 1 }),
+    ];
+    const cloudIdOf = (db: TestDb, id: string) => (db.prepare("SELECT cloud_id FROM cloud_sync_todo_state WHERE local_id = ?").get(id) as { cloud_id: string }).cloud_id;
+
+    it("a lost concurrent edit shows once, the right way round and not kept; the conflict row is not listed; an add shows as added", async () => {
       const { db, e, s } = await synced();
-      e.server.connections = [{ id: "conn-1", client_name: "ChatGPT", provider: "openai", redirect_host: "chatgpt.com", consented_at: "2026-11-01T00:00:00Z", last_used_at: null }];
-      const cloudId = (db.prepare("SELECT cloud_id FROM cloud_sync_todo_state WHERE local_id = ?").get(I1) as { cloud_id: string }).cloud_id;
-      e.server.history.set(cloudId, [
-        { part: "note", old_value: "a", new_value: "b", outcome: "applied", actor_kind: "ai_app", actor_ref: "conn-1", actor_label: "ChatGPT", effective_at: "2026-11-18T10:00:00Z" },
-        { part: "done", old_value: { is_checked: false }, new_value: { is_checked: true }, outcome: "lost", actor_kind: "desktop", actor_ref: INSTALL, actor_label: null, effective_at: "2026-11-18T09:00:00Z" },
-      ] as Array<Record<string, JsonValue>>);
-      expect(await s.history(I1)).toEqual({
+      e.server.history.set(cloudIdOf(db, I2), I2_ROWS);
+      const got = await s.history(I2);
+      expect(got).toEqual({
         success: true,
         rows: [
-          { who: "ChatGPT", at: "2026-11-18T10:00:00Z", part: "note", oldText: "a", newText: "b", kept: true },
-          { who: "this computer", at: "2026-11-18T09:00:00Z", part: "done", oldText: "not ticked", newText: "ticked", kept: false },
+          { who: "You, on a computer", at: "2026-11-18T05:01:13.400Z", what: "changed", part: "note", oldText: "from ai", newText: "from desk", kept: false },
+          { who: "Claude", at: "2026-11-18T05:01:13.400Z", what: "changed", part: "note", oldText: "start", newText: "from ai", kept: true },
+          { who: "You, on a computer", at: "2026-11-18T05:01:13.400Z", what: "added", part: null, oldText: null, newText: null, kept: true },
         ],
       });
-      expect(e.server.callsTo("cloud_todo_history").at(-1)!.args.p_limit).toBe(20);
+    });
+
+    it("a removal and a restore read as removed and restored, by who did them", async () => {
+      const { db, e, s } = await synced();
+      e.server.history.set(cloudIdOf(db, I2), I3_ROWS);
+      expect((await s.history(I2)).rows.map((r) => [r.what, r.who])).toEqual([["restored", "Keepr"], ["removed", "Claude"]]);
+    });
+
+    it("an unknowable clock falls back to the time the server received it; ticks read as ticked; unchanged and order rows are not listed", async () => {
+      const { db, e, s } = await synced();
+      e.server.history.set(cloudIdOf(db, I1), I1_ROWS);
+      const rows = (await s.history(I1)).rows;
+      expect(rows.map((r) => [r.part, r.at, r.oldText, r.newText])).toEqual([
+        ["title", "2026-11-18T05:01:13.400Z", "Inspection", "Inspection report"],
+        ["done", "2026-11-18T05:01:13.400Z", "not ticked", "ticked"],
+      ]);
+    });
+
+    it("asks the server for 50 rows and shows at most 20; offline: no call and the offline answer", async () => {
+      const { db, e, s } = await synced();
+      e.server.history.set(cloudIdOf(db, I1), Array.from({ length: 30 }, () => I1_ROWS[0]));
+      expect((await s.history(I1)).rows).toHaveLength(20);
+      expect(e.server.callsTo("cloud_todo_history").at(-1)!.args.p_limit).toBe(50);
       e.online.value = false;
       const n = calls(e, "cloud_todo_history");
       expect(await s.history(I1)).toEqual({ success: false, error: "offline", rows: [] });

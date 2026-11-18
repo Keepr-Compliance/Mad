@@ -51,6 +51,8 @@ export interface TodoScreensDeps {
 }
 
 const HISTORY_LIMIT = 20;
+/** Rows asked for: the list shows at most 20 after the filter; the server allows at most 50. */
+const HISTORY_FETCH = 50;
 const PART_KEYS = new Set(["done", "title", "note", "due", "order", "removed", "create"]);
 
 function str(v: unknown): string | null {
@@ -67,16 +69,27 @@ function parse(s: string | null): Record<string, unknown> | null {
   }
 }
 
+/** A history row's actor in the user's words (the row carries no ref: see history()). */
+export function historyWho(kind: string | null, label: string | null): string {
+  if (kind === "ai_app") return label && label.length > 0 && label.length <= 60 ? label : "an AI app";
+  if (kind === "desktop") return "You, on a computer";
+  if (kind === "cloud_user") return "Keepr";
+  return "another device";
+}
+
+/** A finite timestamp as ISO, or null ('-infinity' is an unknowable clock, :997-999). */
+export function whenOf(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
 /** A part value as plain text for a screen (never raw JSON). */
 export function partText(part: string | null, value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (part === "done") {
     const o = value as { is_checked?: unknown };
     return o && typeof o === "object" ? (o.is_checked === true ? "ticked" : "not ticked") : null;
-  }
-  if (part === "removed") {
-    const o = value as { removed_at?: unknown };
-    return o && typeof o === "object" ? (o.removed_at ? "removed" : "restored") : null;
   }
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
@@ -231,20 +244,30 @@ export class CloudTodoScreens {
     if (!this.deps.isOnline()) return { success: false, error: "offline", rows: [] };
     const cloudId = screens.cloudIdOf(db, this.deps.projectRef as string, user, "item", itemId);
     if (!cloudId) return { success: true, rows: [] };
-    const res = await this.deps.client.todoHistory(user, "item", cloudId, HISTORY_LIMIT);
+    const res = await this.deps.client.todoHistory(user, "item", cloudId, HISTORY_FETCH);
     if (res.kind === "transport") return { success: false, error: "offline", rows: [] };
     if (res.kind !== "ok" || !Array.isArray(res.body.rows)) return { success: false, error: "unavailable", rows: [] };
-    const names = await this.appNames(user);
+    // What cloud_todo_history returns (migration 20261118110000 :1094-1098; observed on the test database,
+    // supabase/tests/backlog-4263-pr6/harness-6-history.sql): kind, part, old_value, new_value, outcome, actor_kind,
+    // actor_label, other_by, effective_at, received_at, change_seq. NO actor_ref, and a desktop row's label is
+    // "Keepr" for every computer, so this computer cannot be told from another one here.
+    // Shown: kind 'change' only (a concurrent edit also writes a 'conflict' row, with old and new swapped when
+    // it lost, :860-869); not 'unchanged' (:835) and not the order part.
     const rows: CloudTodoHistoryRow[] = [];
-    for (const h of (res.body.rows as Array<Record<string, unknown>>).slice(0, HISTORY_LIMIT)) {
+    for (const h of res.body.rows as Array<Record<string, unknown>>) {
+      if (rows.length >= HISTORY_LIMIT) break;
+      if (h.kind !== "change" || h.outcome === "unchanged") continue;
       const part = str(h.part);
-      const actor = h.actor_kind ? `${String(h.actor_kind)}:${str(h.actor_ref) ?? ""}` : null;
+      if (!part || part === "order") continue;
+      const what: CloudTodoHistoryRow["what"] =
+        part === "created" ? "added" : part === "removed" ? (h.outcome === "restored" ? "restored" : "removed") : "changed";
       rows.push({
-        who: this.who(actor, str(h.actor_label), names),
-        at: str(h.effective_at) ?? str(h.received_at),
-        part,
-        oldText: partText(part, h.old_value),
-        newText: partText(part, h.new_value),
+        who: historyWho(str(h.actor_kind), str(h.actor_label)),
+        at: whenOf(h.effective_at) ?? whenOf(h.received_at),
+        what,
+        part: what === "changed" ? part : null,
+        oldText: what === "changed" ? partText(part, h.old_value) : null,
+        newText: what === "changed" ? partText(part, h.new_value) : null,
         kept: h.outcome !== "lost",
       });
     }
