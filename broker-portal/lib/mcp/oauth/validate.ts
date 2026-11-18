@@ -92,18 +92,29 @@ export function canonicalResource(raw: string, expected: string): boolean {
   return m[1].toLowerCase() === e[1] && m[2].toLowerCase() === e[2].toLowerCase() && m[3] === e[3];
 }
 
-/** Scope values that mean the one scope this server grants. */
+/**
+ * The scopes this server knows (BACKLOG-4263 PR-5): 'mcp:read', and 'mcp:todos' (read, and change todos). The
+ * database grants 'mcp:todos' only when it was asked for AND its write switch is on; otherwise 'mcp:read'
+ * (migration 20261118130000, _mcp_granted_scope).
+ */
+export const SUPPORTED_SCOPES = ['mcp:read', 'mcp:todos'] as const;
+/** What the metadata, registration answer and 401 challenge advertise. */
+export const ADVERTISED_SCOPE = SUPPORTED_SCOPES.join(' ');
+
+/** Scope values that mean read access (OIDC extras are accepted and ignored). */
 const READ_SCOPES = new Set(['mcp:read', 'offline_access', 'openid', 'profile', 'email']);
 
 /**
- * 'mcp:read' when the scope is absent or empty, or every space-separated value
- * is one of READ_SCOPES; otherwise the raw value, which the database refuses.
+ * 'mcp:todos' when the request names it and every other value is one of READ_SCOPES; 'mcp:read' when the
+ * scope is absent or empty, or every space-separated value is one of READ_SCOPES; otherwise the raw value,
+ * which the database refuses.
  */
 export function normaliseScope(raw: string | null | undefined): string {
   if (raw === null || raw === undefined) return 'mcp:read';
   const tokens = raw.split(' ').filter((t) => t.length > 0);
   if (tokens.length === 0) return 'mcp:read';
-  return tokens.every((t) => READ_SCOPES.has(t)) ? 'mcp:read' : raw;
+  if (!tokens.every((t) => READ_SCOPES.has(t) || t === 'mcp:todos')) return raw;
+  return tokens.includes('mcp:todos') ? 'mcp:todos' : 'mcp:read';
 }
 
 const CLIENT_ID = /^kpr_c_[A-Za-z0-9_-]{22}$/;

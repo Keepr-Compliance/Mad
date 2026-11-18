@@ -292,7 +292,7 @@ describe('H15a: database result mapping', () => {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: 'mcp:read',
+      scope: 'mcp:read mcp:todos',
     });
     expect(body.client_id).toBe(mockRpc.mock.calls[0][1].p_client_id);
     expect(Number.isInteger(body.client_id_issued_at)).toBe(true);

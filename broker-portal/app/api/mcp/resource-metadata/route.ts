@@ -8,6 +8,7 @@
 
 import { withOAuthRoute } from '@/lib/mcp/oauth/guard';
 import { oauthJson } from '@/lib/mcp/oauth/http';
+import { SUPPORTED_SCOPES } from '@/lib/mcp/oauth/validate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,7 @@ const route = withOAuthRoute('resource-metadata', ['GET', 'HEAD'], async (_req, 
   oauthJson(200, {
     resource: cfg.resource,
     authorization_servers: [cfg.issuer],
-    scopes_supported: ['mcp:read'],
+    scopes_supported: [...SUPPORTED_SCOPES],
     bearer_methods_supported: ['header'],
     resource_name: 'Keepr',
   })

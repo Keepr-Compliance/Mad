@@ -9,6 +9,7 @@
 import { withOAuthRoute } from '@/lib/mcp/oauth/guard';
 import { oauthJson } from '@/lib/mcp/oauth/http';
 import { AUTHORIZE_PATH, REGISTER_PATH, TOKEN_PATH } from '@/lib/mcp/oauth/paths';
+import { SUPPORTED_SCOPES } from '@/lib/mcp/oauth/validate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,7 @@ const route = withOAuthRoute('metadata', ['GET', 'HEAD'], async (_req, cfg) =>
     grant_types_supported: ['authorization_code', 'refresh_token'],
     token_endpoint_auth_methods_supported: ['none'],
     code_challenge_methods_supported: ['S256'],
-    scopes_supported: ['mcp:read'],
+    scopes_supported: [...SUPPORTED_SCOPES],
     authorization_response_iss_parameter_supported: true,
     client_id_metadata_document_supported: false,
   })

@@ -94,6 +94,8 @@ interface ConsentView {
   nonce: string;
   /** An active connection with the same redirect address is replaced when this request completes. */
   replacesExisting: boolean;
+  /** BACKLOG-4263 PR-5: approving grants 'mcp:todos' (read, and change todos); the page shows that wording. */
+  canChangeTodos: boolean;
 }
 
 type ViewResult = ConsentView | Refused<ViewError> | Transport;
@@ -107,7 +109,7 @@ function checkView(v: unknown, requestId: string): ViewResult {
       isClientName(v.client_name) &&
       isProvider(v.provider) &&
       isHost(v.redirect_host) &&
-      v.scope === 'mcp:read' &&
+      (v.scope === 'mcp:read' || v.scope === 'mcp:todos') &&
       typeof v.notice_version === 'number' &&
       Number.isInteger(v.notice_version) &&
       isNonce(v.nonce) &&
@@ -121,6 +123,7 @@ function checkView(v: unknown, requestId: string): ViewResult {
         noticeVersion: v.notice_version,
         nonce: v.nonce,
         replacesExisting: v.replaces_existing,
+        canChangeTodos: v.scope === 'mcp:todos',
       };
     }
     return transport(null);

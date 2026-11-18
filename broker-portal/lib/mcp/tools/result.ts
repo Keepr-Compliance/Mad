@@ -36,6 +36,7 @@ export function fromDatabase(res: DataToolResult): CallToolResult {
       case 'invalid_input':
       case 'not_found':
       case 'too_large':
+      case 'read_only':
         return toolError(TOOL_MESSAGES[res.error]);
       default:
         return toolError(TOOL_MESSAGES.unavailable);
@@ -94,6 +95,7 @@ export function optBoolean(o: Record<string, unknown>, k: string): boolean | nul
   return v;
 }
 
+/** Read tools. The write tools (./todos.ts) declare their own. */
 export const TOOL_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,

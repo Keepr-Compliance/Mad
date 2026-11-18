@@ -7,7 +7,16 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { CHECKLISTS_SHAPE, checkShape, GET_DEAL_SHAPE, LIST_ALL_DEALS_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
+import {
+  CHECKLISTS_SHAPE,
+  CHECKLISTS_SHAPE_V2,
+  checkShape,
+  GET_DEAL_SHAPE,
+  LIST_ALL_DEALS_SHAPE,
+  LIST_DEALS_SHAPE,
+  TODO_CHANGE_SHAPE,
+  type Shape,
+} from '@/lib/mcp/tools/shapes';
 
 export const RPC_TIMEOUT_MS = 8000;
 
@@ -369,6 +378,8 @@ export const DATA_TOOL_ERRORS = [
   'too_large',
   'timeout',
   'error',
+  // BACKLOG-4263 PR-5: a write tool on a connection that may not write (migration 20261118130000)
+  'read_only',
 ] as const;
 export type DataToolError = (typeof DATA_TOOL_ERRORS)[number];
 
@@ -377,11 +388,14 @@ export type DataToolResult =
   | { kind: 'error'; error: DataToolError }
   | Transport;
 
-export function checkDataToolEnvelope(v: unknown, shape: Shape): DataToolResult {
+/** `shape` may list several accepted versions of one frame (BACKLOG-4263 PR-5: get_deal_checklists v1 and v2). */
+export function checkDataToolEnvelope(v: unknown, shape: Shape | readonly Shape[]): DataToolResult {
   if (!isObject(v)) return transport(null);
+  const shapes = Array.isArray(shape) ? shape : [shape as Shape];
   if (v.ok === true) {
-    if (hasExactKeys(v, ['ok', 'result']) && isObject(v.result) && checkShape(v.result, shape)) {
-      return { kind: 'ok', result: v.result };
+    const result = v.result;
+    if (hasExactKeys(v, ['ok', 'result']) && isObject(result) && shapes.some((sh) => checkShape(result, sh))) {
+      return { kind: 'ok', result };
     }
     return transport(null);
   }
@@ -465,5 +479,88 @@ export async function getDealChecklistsFor(cfg: ClientConfig, a: GetDealChecklis
     p_checklist_id: a.checklistId,
   });
   if ('kind' in res) return res;
-  return checkDataToolEnvelope(res.data, CHECKLISTS_SHAPE);
+  return checkDataToolEnvelope(res.data, [CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2]);
+}
+
+// ---------------------------------------------------------------------------
+// AI-app todo writes (BACKLOG-4263 PR-5), supabase/migrations/20261118130000_backlog_4263_mcp_todo_write_tools.sql
+// mcp_write_access(p_secret text, p_at_digest bytea, p_resource text)
+//   -> {ok:true, write:boolean} | {ok:false, error:'not_connected'}
+// mcp_update_todo(p_secret, p_at_digest, p_resource, p_item_id text, p_changes jsonb, p_request_id text)
+// mcp_add_todo(p_secret, p_at_digest, p_resource, p_deal_id text, p_title text, p_note text, p_due_date text, p_request_id text)
+// mcp_remove_todo / mcp_restore_todo(p_secret, p_at_digest, p_resource, p_item_id text, p_request_id text)
+//   -> {ok:true, result:<keepr.todo_change v1>} | {ok:false, error:<DATA_TOOL_ERRORS>}
+// ---------------------------------------------------------------------------
+
+type WriteAccessResult = { kind: 'ok'; write: boolean } | { kind: 'not_connected' } | Transport;
+
+/** Only exactly {ok:true, write:<boolean>} is a success; anything else (an older database included) is not. */
+export function checkWriteAccessEnvelope(v: unknown): WriteAccessResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true && hasExactKeys(v, ['ok', 'write']) && typeof v.write === 'boolean') return { kind: 'ok', write: v.write };
+  if (hasExactKeys(v, ['ok', 'error']) && refusal(v, ['not_connected'] as const)) return { kind: 'not_connected' };
+  return transport(null);
+}
+
+export async function writeAccess(cfg: ClientConfig, a: AccessArgs): Promise<WriteAccessResult> {
+  const res = await call(cfg, 'mcp_write_access', { p_secret: a.secret, p_at_digest: a.atDigest, p_resource: a.resource });
+  if ('kind' in res) return res;
+  return checkWriteAccessEnvelope(res.data);
+}
+
+export interface TodoChanges {
+  done?: boolean;
+  title?: string;
+  note?: string | null;
+  due_date?: string | null;
+}
+
+export async function updateTodoFor(
+  cfg: ClientConfig,
+  a: AccessArgs & { itemId: string; changes: TodoChanges; requestId: string | null }
+): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_update_todo', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_item_id: a.itemId,
+    p_changes: a.changes,
+    p_request_id: a.requestId,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, TODO_CHANGE_SHAPE);
+}
+
+export async function addTodoFor(
+  cfg: ClientConfig,
+  a: AccessArgs & { dealId: string; title: string; note: string | null; dueDate: string | null; requestId: string | null }
+): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_add_todo', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_deal_id: a.dealId,
+    p_title: a.title,
+    p_note: a.note,
+    p_due_date: a.dueDate,
+    p_request_id: a.requestId,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, TODO_CHANGE_SHAPE);
+}
+
+export async function removeOrRestoreTodoFor(
+  cfg: ClientConfig,
+  fn: 'mcp_remove_todo' | 'mcp_restore_todo',
+  a: AccessArgs & { itemId: string; requestId: string | null }
+): Promise<DataToolResult> {
+  const res = await call(cfg, fn, {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_item_id: a.itemId,
+    p_request_id: a.requestId,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, TODO_CHANGE_SHAPE);
 }

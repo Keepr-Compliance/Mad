@@ -21,9 +21,24 @@ import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists'
 import { getDeal, GET_DEAL_TOOL, listAllDeals, LIST_ALL_DEALS_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
 import { SERVER_INSTRUCTIONS, TOOL_MESSAGES } from './tools/text';
+import { addTodo, removeTodo, restoreTodo, updateTodo, WRITE_TOOLS } from './tools/todos';
+import { writeAccess } from './oauth/rpc';
+import { accessFor } from './tools/result';
 
-/** The tools, in the order tools/list returns them. */
+/** The read tools, in the order tools/list returns them. */
 export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL, LIST_ALL_DEALS_TOOL];
+
+/**
+ * BACKLOG-4263 PR-5: the write tools follow the read tools only when the database says this token's connection
+ * can write (mcp_write_access: granted 'mcp:todos' AND the write switch on). Any other answer, an error or a
+ * database without the function included, lists the read tools only.
+ */
+export async function toolsFor(atDigest: unknown) {
+  const a = accessFor(atDigest);
+  if (!a) return TOOLS;
+  const res = await writeAccess(a.cfg, a.access);
+  return res.kind === 'ok' && res.write === true ? [...TOOLS, ...WRITE_TOOLS] : TOOLS;
+}
 
 export const MCP_SERVER_NAME = 'keepr';
 export const MCP_SERVER_VERSION = '0.1.0';
@@ -47,7 +62,7 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     { capabilities: { tools: {}, prompts: {} }, instructions: SERVER_INSTRUCTIONS }
   );
 
-  server.setRequestHandler('tools/list', async () => ({ tools: TOOLS }));
+  server.setRequestHandler('tools/list', async () => ({ tools: await toolsFor(ctx.authInfo?.extra?.atDigest) }));
 
   // Prompts are text only: no tool and no database call (lib/mcp/prompts.ts).
   server.setRequestHandler('prompts/list', async () => ({ prompts: PROMPTS }));
@@ -60,6 +75,11 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     [GET_DEAL_TOOL.name, (args) => getDeal(atDigest(), args)],
     [GET_DEAL_CHECKLISTS_TOOL.name, (args) => getDealChecklists(atDigest(), args)],
     [LIST_ALL_DEALS_TOOL.name, (args) => listAllDeals(atDigest(), args)],
+    // write tools: the database refuses them (read_only) unless this connection may write
+    ['update_todo', (args) => updateTodo(atDigest(), args)],
+    ['add_todo', (args) => addTodo(atDigest(), args)],
+    ['remove_todo', (args) => removeTodo(atDigest(), args)],
+    ['restore_todo', (args) => restoreTodo(atDigest(), args)],
   ]);
 
   server.setRequestHandler('tools/call', async (request) => {
