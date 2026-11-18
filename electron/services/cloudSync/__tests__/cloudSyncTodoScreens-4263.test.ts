@@ -229,6 +229,16 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
     });
 
+    it("an AI-added item whose note is edited here and not yet sent still shows Added (the waiting filter is per part)", async () => {
+      const { db, deal, e, s } = await synced();
+      const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
+      await pass(e);
+      e.online.value = false;
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", t.id);
+      expect(outbox(db).map((o) => `${o.local_id}|${o.part}`)).toEqual([`${t.id}|note`]);
+      expect((await s.forDeal(deal)).markers[t.id]).toMatchObject({ kind: "added", who: "an AI app" });
+    });
+
     it("P3: the edit here then LOSES to a newer AI change: the marker is back and names the AI change", async () => {
       const { db, deal, e, s } = await synced();
       e.server.aiSet(onlineItem(e, I1), "note", "ai one", Date.now() - 120_000);
