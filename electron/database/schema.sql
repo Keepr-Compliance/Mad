@@ -2263,6 +2263,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_state (
   removed_rev    INTEGER,
   removed_json   TEXT,
   updated_at     TEXT NOT NULL,
+  changed_json   TEXT,
   PRIMARY KEY (project_ref, owner_user_id, entity, local_id)
 );
 -- BACKLOG-4263 PR-4b (migration v82 adds the last two columns to existing databases): horizon is the
@@ -2305,6 +2306,11 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_notices (
   created_at     TEXT NOT NULL,
   dismissed_at   TEXT
 );
+-- BACKLOG-4263 PR-6 (migration v84 adds both to existing databases): the notices index (each pulled conflict
+-- event looks its change_seq up) and changed_json on the shadow (the latest AI-app change of a todo, written
+-- only by the puller from the server feed's part `by` / `at`; the marker's app name is resolved in main).
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_todo_notices_seq
+  ON cloud_sync_todo_notices (project_ref, owner_user_id, kind, change_seq);
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_trash (
   project_ref    TEXT NOT NULL,
   owner_user_id  TEXT NOT NULL,

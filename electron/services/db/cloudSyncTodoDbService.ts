@@ -736,6 +736,13 @@ export function confirmTodoAnswer(
          ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET transaction_id = excluded.transaction_id,
            ${cols.map((c) => `${c} = excluded.${c}`).join(", ")}, updated_at = excluded.updated_at`,
       ).run(...key, row.transaction_id, ...cols.map((c) => next[c] as string | number | null), at);
+      // PR-6 (v84): this computer's own change of the part an AI-app marker names is now the latest: clear the marker.
+      // The confirm path only ever writes NULL here; the puller is the only writer of a value.
+      if (row.entity === "item" && action.scope === "part" && action.rebase && hasColumn(db, "cloud_sync_todo_state", "changed_json")) {
+        db.prepare(
+          "UPDATE cloud_sync_todo_state SET changed_json = NULL WHERE project_ref = ? AND owner_user_id = ? AND entity = ? AND local_id = ? AND json_extract(changed_json, '$.part') = ?",
+        ).run(...key, row.part);
+      }
 
       // the local row: the op's own part(s), when the server's value differs
       const carried: readonly TodoPart[] =

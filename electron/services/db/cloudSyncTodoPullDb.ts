@@ -73,6 +73,8 @@ export interface PulledPart {
   rev: number;
   value: JsonValue;
   by: string | null;
+  /** The part's effective time as the server feed sent it (PR-6: the AI-app marker). */
+  at?: string | null;
 }
 
 export interface PullPage {
@@ -114,6 +116,9 @@ export interface PullCtx {
 
 type Row = Record<string, unknown>;
 
+/** PR-6: an AI app's actor as the server writes it (`ai_app:` + the connection id). Anything else is not a marker. */
+export const AI_BY = /^ai_app:[0-9A-Za-z-]{1,64}$/;
+
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -134,7 +139,7 @@ function pulledParts(row: Row): Partial<Record<StatePart, PulledPart>> {
     const v = obj(parts[p]);
     const rev = v ? num(v.rev) : null;
     if (!v || rev === null) continue;
-    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by) };
+    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by), at: str(v.at) };
   }
   return out;
 }
@@ -339,6 +344,35 @@ class Page {
         ...cols.map((c) => next[c] as string | number | null),
         this.at,
       );
+  }
+
+  /**
+   * PR-6 (v84): the AI-app marker. The ONLY writer of `changed_json` other than the confirm path's clear. Values come
+   * from the server feed only: a written part's `by` (kept only when it is `ai_app:<id>` with a plain id) and `at`.
+   * The latest such part becomes `{"part", "by", "at"}`; a later write of that part by any other side clears it.
+   */
+  private markChanged(localId: string, written: Array<{ part: TodoPart | "create"; pulled: PulledPart | undefined }>): void {
+    if (written.length === 0) return;
+    const cur = this.db
+      .prepare("SELECT changed_json FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+      .get(this.ctx.projectRef, this.ctx.userId, localId) as { changed_json: string | null } | undefined;
+    if (!cur) return;
+    const prev = obj(parseJson(cur.changed_json));
+    let next: Record<string, string> | null = prev ? (prev as Record<string, string>) : null;
+    let best: { part: string; by: string; at: string } | null = null;
+    for (const w of written) {
+      const by = w.pulled?.by ?? null;
+      const at = w.pulled?.at ?? null;
+      if (by && AI_BY.test(by) && at && !Number.isNaN(Date.parse(at))) {
+        if (!best || Date.parse(at) >= Date.parse(best.at)) best = { part: w.part, by, at: new Date(Date.parse(at)).toISOString() };
+      } else if (next && next.part === w.part) next = null;
+    }
+    if (best) next = best;
+    const text = next ? JSON.stringify({ part: next.part, by: next.by, at: next.at }) : null;
+    if (text === cur.changed_json) return;
+    this.db
+      .prepare("UPDATE cloud_sync_todo_state SET changed_json = ? WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+      .run(text, this.ctx.projectRef, this.ctx.userId, localId);
   }
 
   private writeLocal(
@@ -720,6 +754,7 @@ class Page {
       }
       this.writeShadow(entity, localId, tx, cloudId, cloudDealId, parts, skip);
       for (const w of writes) this.writeLocal(entity, localId, w.part, w.value);
+      if (entity === "item") this.markChanged(localId, writes.map((w) => ({ part: w.part, pulled: parts[w.part] })));
       if (changed || writes.length > 0) this.counts.applied++;
       else this.counts.unchanged++;
       return "ok";
@@ -783,6 +818,8 @@ class Page {
       parts,
       new Set(),
     );
+    // an item an AI app added: the marker says so (its title part carries the add's actor and time)
+    if (!trash) this.markChanged(localId, [{ part: "create", pulled: parts.title }]);
     return "ok";
   }
 

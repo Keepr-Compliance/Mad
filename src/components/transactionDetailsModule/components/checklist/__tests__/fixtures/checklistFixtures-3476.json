@@ -22,7 +22,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-3",
@@ -34,7 +35,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           },
           {
             "id": "id-4",
@@ -46,7 +48,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": "Probe note text.",
-            "sortOrder": 2
+            "sortOrder": 2,
+            "dueDate": null
           },
           {
             "id": "id-5",
@@ -58,7 +61,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 3
+            "sortOrder": 3,
+            "dueDate": null
           }
         ],
         "linksByItemId": {
@@ -190,7 +194,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-18",
@@ -202,7 +207,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           },
           {
             "id": "id-19",
@@ -214,7 +220,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 2
+            "sortOrder": 2,
+            "dueDate": null
           }
         ],
         "linksByItemId": {
@@ -265,7 +272,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-24",
@@ -277,7 +285,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           }
         ],
         "linksByItemId": {},
@@ -505,7 +514,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-3",
@@ -517,7 +527,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           },
           {
             "id": "id-4",
@@ -529,7 +540,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": "Probe note text.",
-            "sortOrder": 2
+            "sortOrder": 2,
+            "dueDate": null
           },
           {
             "id": "id-5",
@@ -541,7 +553,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 3
+            "sortOrder": 3,
+            "dueDate": null
           }
         ],
         "linksByItemId": {
@@ -673,7 +686,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-18",
@@ -685,7 +699,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           },
           {
             "id": "id-19",
@@ -697,7 +712,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": null,
-            "sortOrder": 2
+            "sortOrder": 2,
+            "dueDate": null
           }
         ],
         "linksByItemId": {
@@ -748,7 +764,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-24",
@@ -760,7 +777,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           }
         ],
         "linksByItemId": {},
@@ -789,7 +807,8 @@
             "isChecked": false,
             "checkedAt": null,
             "note": "Ask about the extension cost.",
-            "sortOrder": 0
+            "sortOrder": 0,
+            "dueDate": null
           },
           {
             "id": "id-27",
@@ -801,7 +820,8 @@
             "isChecked": true,
             "checkedAt": "2026-03-10T12:00:00.000Z",
             "note": null,
-            "sortOrder": 1
+            "sortOrder": 1,
+            "dueDate": null
           }
         ],
         "linksByItemId": {

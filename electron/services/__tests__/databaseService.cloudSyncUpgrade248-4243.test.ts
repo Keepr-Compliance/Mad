@@ -222,6 +222,9 @@ function tables(db: DatabaseType): string[] {
 function columns(db: DatabaseType, table: string): string[] {
   return (db.prepare(`PRAGMA table_info("${table}")`).all() as Row[]).map((c) => c.name as string);
 }
+function indexNames(db: DatabaseType, table: string): string[] {
+  return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name").all(table) as Array<{ name: string }>).map((r) => r.name);
+}
 function names(db: DatabaseType, type: "table" | "trigger", like: string): string[] {
   return (db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE ? ORDER BY name").all(type, like) as Row[]).map(
     (r) => r.name as string,
@@ -256,8 +259,8 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_tx_insert",
   "trg_cloud_sync_tx_update",
 ];
-/** The latest local schema version this build ships (BACKLOG-4263 PR-4c: v83). */
-const LATEST_VERSION = 83;
+/** The latest local schema version this build ships (BACKLOG-4263 PR-6: v84). */
+const LATEST_VERSION = 84;
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -1059,6 +1062,10 @@ ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
     expect(count(db, "cloud_sync_todo_outbox")).toBe(0);
     expect(count(db, "cloud_sync_todo_parked")).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_state WHERE cloud_id IS NOT NULL").get()).toEqual({ n: 7 });
+    // BACKLOG-4263 PR-6 (v84): the shadow has changed_json (no AI change in this profile, so NULL everywhere) and the notices index
+    expect(columns(db, "cloud_sync_todo_state")).toContain("changed_json");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_state WHERE changed_json IS NOT NULL").get()).toEqual({ n: 0 });
+    expect(indexNames(db, "cloud_sync_todo_notices")).toContain("idx_cloud_sync_todo_notices_seq");
     // no op loop: the next two passes send no todo change and pull nothing new
     const sent = ops().length;
     await e.service.runner!.runPass();
@@ -1164,6 +1171,64 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     expect(versionOf(back.db)).toBe(LATEST_VERSION);
     expect(back.db.prepare(`SELECT * FROM ${DEAL_ARCHIVE_TABLE}`).all()).toEqual(archived);
     await back.svc.close();
+  });
+
+  it("1h v83 PROFILE (PR-4c build, Keepr Cloud on): this build runs v84 (changed_json on the shadow, NULL; the notices index), nothing else changes, the next open changes nothing; going back, 2.48.0 opens the v84 file, its common writes succeed, and it never reads, writes or drops the column or the index", async () => {
+    const { file } = buildV79Profile(dir);
+    const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+    const pre = openKeyed(file);
+    pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+    for (const v of [80, 81, 82, 83]) svcClass.MIGRATIONS.find((m) => m.version === v)!.migrate(pre);
+    // v81 shares the todo DDL with this build's schema.sql, which now declares both; a real v83 file has neither
+    pre.exec("DROP INDEX IF EXISTS idx_cloud_sync_todo_notices_seq; ALTER TABLE cloud_sync_todo_state DROP COLUMN changed_json;");
+    pre.prepare("UPDATE schema_version SET version = 83 WHERE id = 1").run();
+    pre.prepare(
+      "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    pre.prepare(
+      "INSERT INTO cloud_sync_todo_state (project_ref, owner_user_id, entity, local_id, updated_at) VALUES (?, ?, 'item', 'kept-item', '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    pre.prepare(
+      "INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, kind, change_seq, created_at) VALUES (?, ?, 'item', 'kept-item', 'conflict', 7, '2026-11-01T00:00:00.000Z')",
+    ).run(PROJECT, U_ON);
+    expect(columns(pre, "cloud_sync_todo_state")).not.toContain("changed_json");
+    expect(indexNames(pre, "cloud_sync_todo_notices")).not.toContain("idx_cloud_sync_todo_notices_seq");
+    const stateBefore = pre.prepare("SELECT * FROM cloud_sync_todo_state").all();
+    const noticesBefore = pre.prepare("SELECT * FROM cloud_sync_todo_notices").all();
+    const before = snapshot(pre);
+    pre.close();
+
+    const { svc, db } = await openWithThisBuild();
+    expect(versionOf(db)).toBe(LATEST_VERSION);
+    expect(columns(db, "cloud_sync_todo_state").at(-1)).toBe("changed_json");
+    expect(db.prepare("SELECT changed_json FROM cloud_sync_todo_state").all()).toEqual([{ changed_json: null }]);
+    expect(indexNames(db, "cloud_sync_todo_notices")).toContain("idx_cloud_sync_todo_notices_seq");
+    expect(db.prepare("SELECT * FROM cloud_sync_todo_notices").all()).toEqual(noticesBefore);
+    expect(changedTables(db, before, ["cloud_sync_todo_state"])).toEqual(["cloud_sync_dirty", "schema_version"]);
+    // this build writes the column (as the puller does)
+    db.prepare("UPDATE cloud_sync_todo_state SET changed_json = '{\"part\":\"done\",\"by\":\"ai_app:conn-1\",\"at\":\"2026-11-18T10:00:00.000Z\"}'").run();
+    const written = db.prepare("SELECT * FROM cloud_sync_todo_state").all();
+    const cookie = db.pragma("schema_version", { simple: true });
+    const after = snapshot(db);
+    await svc.close();
+    const again = await openWithThisBuild();
+    expect(again.db.pragma("schema_version", { simple: true })).toBe(cookie);
+    expect(changedTables(again.db, after)).toEqual([]);
+    await again.svc.close();
+
+    // going back: 2.48.0's open and common writes on this v84 file
+    const old = openAs248(path.join(dir, "mad.db"));
+    expect(versionOf(old)).toBe(LATEST_VERSION);
+    expect(runWrites248(old)).toHaveLength(WRITES_248.length);
+    expect(old.prepare("SELECT * FROM cloud_sync_todo_state").all()).toEqual(written);
+    expect(columns(old, "cloud_sync_todo_state").at(-1)).toBe("changed_json");
+    expect(indexNames(old, "cloud_sync_todo_notices")).toContain("idx_cloud_sync_todo_notices_seq");
+    old.close();
+    const back = await openWithThisBuild();
+    expect(versionOf(back.db)).toBe(LATEST_VERSION);
+    expect(back.db.prepare("SELECT * FROM cloud_sync_todo_state").all()).toEqual(written);
+    await back.svc.close();
+    expect(stateBefore).toHaveLength(1);
   });
 
   it("2a GOING BACK, never on: on a profile this build upgraded, 2.48.0's own open and common writes all succeed, no cloud trigger exists, and the cloud tables stay empty", async () => {

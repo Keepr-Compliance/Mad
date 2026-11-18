@@ -582,6 +582,68 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     });
   });
 
+  describe("MARK: the AI-app marker (changed_json, v84)", () => {
+    const mark = (db: TestDb, id: string) => {
+      const r = shadow(db, id);
+      return r?.changed_json ? JSON.parse(r.changed_json as string) : null;
+    };
+
+    it("an AI app's tick is recorded from the feed (part, by, at); this computer's own later change of that part, once kept online, clears it", async () => {
+      const { db, e } = await synced();
+      const at = Date.now() - 5_000;
+      e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: new Date(at).toISOString() }, at);
+      await pass(e);
+      expect(item(db, I1)!.is_checked).toBe(1);
+      expect(mark(db, I1)).toEqual({ part: "done", by: "ai_app:conn-1", at: new Date(at).toISOString() });
+      // another part changed here does not clear it
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      await pass(e);
+      expect(mark(db, I1)).toMatchObject({ part: "done" });
+      // this computer unticks it: kept online, the marker goes
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
+      await pass(e);
+      expect(item(db, I1)!.is_checked).toBe(0);
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("an item an AI app added carries an add marker", async () => {
+      const { db, e } = await synced();
+      const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
+      await pass(e);
+      expect(mark(db, t.id)).toMatchObject({ part: "create", by: "ai_app:conn-1" });
+    });
+
+    it("a change by the owner online (not an AI app) sets no marker and clears one on the same part", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "from the AI");
+      await pass(e);
+      expect(mark(db, I1)).toMatchObject({ part: "note" });
+      const t = onlineItem(e, I1);
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "from the owner", at: Date.now(), by: "cloud_user:owner", edit_seq: null };
+      t.changeSeq = e.server.nextSeq(t.owner);
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("from the owner");
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("only an ai_app actor with a plain id becomes a marker: any other text in the feed's by is ignored", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "odd actor", Date.now(), "<b>x</b>");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("odd actor");
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("a locked deal's held change sets no marker (the change is not shown here)", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai during review");
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(mark(db, I1)).toBeNull();
+    });
+  });
+
   // ================================================================ R3
   describe("R3: the counter after a restore", () => {
     it("the restore pull raises the rewound counter to install_max_edit_seq and clears rewound_at; the next edit outranks this computer's stored edit_seq", async () => {

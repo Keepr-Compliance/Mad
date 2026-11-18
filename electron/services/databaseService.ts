@@ -103,6 +103,13 @@ import {
 import { V82_ADD_FULL_PULL_KIND_SQL, V82_ADD_HORIZON_SQL, V82_CURSOR_TABLE_INFO_SQL } from "./db/migrationV82Sql";
 // BACKLOG-4263 PR-4c: migration v83 (the 30-day deal archive for a restore on this computer).
 import { V83_DEAL_ARCHIVE_DDL } from "./db/migrationV83Sql";
+// BACKLOG-4263 PR-6: migration v84 (the notices index and the shadow's changed_json).
+import {
+  V84_ADD_CHANGED_JSON_SQL,
+  V84_NOTICES_INDEX_SQL,
+  V84_NOTICES_TABLE_INFO_SQL,
+  V84_STATE_TABLE_INFO_SQL,
+} from "./db/migrationV84Sql";
 import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
@@ -2389,6 +2396,20 @@ class DatabaseService implements IDatabaseService {
       // Empty; no existing row is written; no trigger, index or view names it. Re-runnable.
       migrate: (d) => {
         d.exec(V83_DEAL_ARCHIVE_DDL);
+      },
+    },
+    {
+      version: 84,
+      description:
+        "BACKLOG-4263 todo screens: an index on cloud_sync_todo_notices and cloud_sync_todo_state.changed_json",
+      // Guarded like v82: schema.sql (run before the chain on every open) already has both on a fresh install
+      // and on any profile whose todo tables it creates; the ALTER runs only on a v81-v83 profile. NULL on every
+      // existing row; no row is written. Re-runnable.
+      migrate: (d) => {
+        const state = d.prepare(V84_STATE_TABLE_INFO_SQL).all() as Array<{ name: string }>;
+        if (state.length > 0 && !state.some((c) => c.name === "changed_json")) d.exec(V84_ADD_CHANGED_JSON_SQL);
+        const notices = d.prepare(V84_NOTICES_TABLE_INFO_SQL).all() as Array<{ name: string }>;
+        if (notices.length > 0) d.exec(V84_NOTICES_INDEX_SQL);
       },
     },
   ];

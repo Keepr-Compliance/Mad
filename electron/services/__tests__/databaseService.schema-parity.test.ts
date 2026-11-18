@@ -1021,6 +1021,13 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-4263: Keepr Cloud two-way todos. Declared in schema.sql (IF NOT EXISTS) and created by migration v81 too; the capture triggers are created in code after the chain, never here.",
     ref: "BACKLOG-4263",
   },
+  // BACKLOG-4263 PR-6: migration v84.
+  {
+    key: "INDEX:idx_cloud_sync_todo_notices_seq",
+    what: "New index on cloud_sync_todo_notices (project_ref, owner_user_id, kind, change_seq).",
+    why: "BACKLOG-4263 PR-6: each pulled conflict event looks its change_seq up. Declared in schema.sql (IF NOT EXISTS) and created by migration v84 too.",
+    ref: "BACKLOG-4263",
+  },
   // BACKLOG-4263 PR-4c: a Keepr Cloud user's deleted deal, kept 30 days for a restore on this computer.
   {
     key: "TABLE:cloud_sync_deal_archive",
