@@ -37,7 +37,7 @@ import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import { pullTodos } from "../todos/puller";
 import { CloudClient, type RpcTransport } from "../cloudClient";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
-import { INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
+import { GET_CHECKLIST_ITEMS_SQL, INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
 import type { JsonValue } from "../jcs";
 
 type Row = Record<string, unknown>;
@@ -514,6 +514,71 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
       await pass(e);
       expect(notices()).toHaveLength(1);
+    });
+  });
+
+  describe("EVT6: old conflicts after the records are cleared (PR-6)", () => {
+    async function withConflict() {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "phone, newer");
+      await pass(e);
+      const live = () => db.prepare("SELECT dismissed_at FROM cloud_sync_todo_notices WHERE kind = 'conflict'").all() as Row[];
+      expect(live()).toEqual([{ dismissed_at: null }]);
+      return { db, e, live };
+    }
+
+    it("a turn-on's full pull (records cleared, kind NULL) stores an old conflict already dismissed", async () => {
+      const { db, e, live } = await withConflict();
+      todos.clearTodoStateForUser(db, PROJECT, USER_A);
+      expect(live()).toEqual([]);
+      await pass(e);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0 });
+      expect(live()).toEqual([{ dismissed_at: expect.any(String) }]);
+    });
+
+    it("a resync full pull keeps a conflict it has not seen undismissed", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'resync', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: null }]);
+    });
+  });
+
+  describe("PRUNE: notices are pruned at the end of a pull (PR-6)", () => {
+    it("drops dismissed notices older than 30 days and any notice older than 90 days, for this user only", async () => {
+      const { db, e } = await synced();
+      const ago = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+      const ins = db.prepare(
+        "INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, created_at, dismissed_at) VALUES (?, ?, 'item', ?, 'note', 'conflict', ?, ?)",
+      );
+      ins.run(PROJECT, USER_A, "a", ago(31), ago(30));
+      ins.run(PROJECT, USER_A, "b", ago(29), ago(1));
+      ins.run(PROJECT, USER_A, "c", ago(89), null);
+      ins.run(PROJECT, USER_A, "d", ago(91), null);
+      ins.run(PROJECT, USER_B, "e", ago(91), null);
+      await pass(e);
+      const left = (db.prepare("SELECT local_id FROM cloud_sync_todo_notices ORDER BY local_id").all() as Row[]).map((r) => r.local_id);
+      expect(left).toEqual(["b", "c", "e"]);
+    });
+  });
+
+  describe("TIE: two todos with the same order (PR-6)", () => {
+    it("an AI app's add while this computer's add is unsent lands at the same order; the list shows them in the order they were created, every time", async () => {
+      const { db, e } = await synced();
+      const mine = fid(9999, 50); // sorts after every other id here, so an id tie-break would put it last
+      db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(mine, MY, "Mine, added first", null, 1, null, 1);
+      // the AI add happens online before this computer's add is sent: the server's max does not include it
+      const theirs = e.server.aiAdd(onlineList(e, MY), "Added by the AI app", Date.now(), 1);
+      await pass(e);
+      const order = () =>
+        (db.prepare(GET_CHECKLIST_ITEMS_SQL).all(MY) as Row[]).map((r) => `${r.sort_order}:${r.title}`);
+      expect(item(db, theirs.id)).toBeDefined();
+      expect(order()).toEqual(["0:Call lender", "1:Mine, added first", "1:Added by the AI app"]);
+      for (let i = 0; i < 3; i++) expect(order()).toEqual(["0:Call lender", "1:Mine, added first", "1:Added by the AI app"]);
     });
   });
 

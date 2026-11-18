@@ -203,7 +203,7 @@ export const GET_PRIVATE_ITEM_IDS_SQL = sql`
   FROM transaction_checklist_items i
   JOIN transaction_checklists c ON c.id = i.checklist_id
   WHERE c.transaction_id = ? AND c.template_id = ?
-  ORDER BY i.sort_order, i.id
+  ORDER BY i.sort_order, i.created_at, i.rowid
 `;
 
 /**
@@ -214,13 +214,16 @@ export const SET_ITEM_SORT_ORDER_SQL = sql`
   UPDATE transaction_checklist_items SET sort_order = ? WHERE id = ? AND checklist_id = ?
 `;
 
-/** Every item of one checklist, in display order. One bound parameter. */
+/**
+ * Every item of one checklist, in display order. One bound parameter. BACKLOG-4263 PR-6: two items with the same
+ * sort_order (an AI app's add while this computer's add was unsent) keep the order they were created in.
+ */
 export const GET_CHECKLIST_ITEMS_SQL = sql`
   SELECT id, checklist_id, title, description, is_required,
-         expected_document_type, is_checked, checked_at, note, sort_order
+         expected_document_type, is_checked, checked_at, note, sort_order, due_date
   FROM transaction_checklist_items
   WHERE checklist_id = ?
-  ORDER BY sort_order, id
+  ORDER BY sort_order, created_at, rowid
 `;
 
 /**

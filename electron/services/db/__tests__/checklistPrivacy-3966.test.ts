@@ -134,6 +134,18 @@ describe("BACKLOG-3966 — the private checklist and its audience", () => {
     expect([got.requiredDone, got.requiredTotal]).toEqual([8, 15]);
   });
 
+  it("BACKLOG-4263 PR-6 (Q6): a due date reaches the agent's read only; a broker read (submission, export) carries no due date at all", async () => {
+    run("UPDATE transaction_checklist_items SET due_date = '2026-11-20' WHERE id IN ('t-0', 'n-1')");
+    const agent = await getChecklistsForTransaction(TX, "agent");
+    const byId = new Map(agent.checklists.flatMap((d) => d.items).map((i) => [i.id, i]));
+    expect([byId.get("t-0")?.dueDate, byId.get("n-1")?.dueDate, byId.get("t-1")?.dueDate]).toEqual(["2026-11-20", "2026-11-20", null]);
+    const broker = await getChecklistsForTransaction(TX, "broker");
+    const items = broker.checklists.flatMap((d) => d.items);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.filter((i) => "dueDate" in i)).toEqual([]);
+    expect(JSON.stringify(broker)).not.toContain("2026-11-20");
+  });
+
   it("the audience argument is required, with no default (type level)", () => {
     // A default or `?` makes the arity `1 | 2`, and this line stops compiling
     // under `npm run type-check:tests`.

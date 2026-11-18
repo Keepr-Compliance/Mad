@@ -71,6 +71,11 @@ export interface ChecklistItem {
   checkedAt: string | null;
   note: string | null;
   sortOrder: number;
+  /**
+   * BACKLOG-4263 PR-6: YYYY-MM-DD or null. Present only on the agent's own read (`checklists:get`); a
+   * `broker` read (submission snapshot, export) never carries it (founder decision Q6).
+   */
+  dueDate?: string | null;
 }
 
 /** One email, attachment or text inside a group. */
