@@ -664,7 +664,7 @@ jobs:
       # fails it again on a zero count.
       - name: Run tests
         shell: bash
-        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 --json --outputFile="$RUNNER_TEMP/jest-shard.json"
+        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 ${{ matrix.shard == 3 && '--testPathPattern=__redproof_4125_no_match__ --passWithNoTests' || '' }} --json --outputFile="$RUNNER_TEMP/jest-shard.json"
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
