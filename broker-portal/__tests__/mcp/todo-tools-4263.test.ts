@@ -48,7 +48,7 @@ function dbAnswer(fn: string, args: Record<string, unknown>) {
   if (fn === 'mcp_check_access') return { data: known ? checkAccessOk() : refusal('not_connected'), error: null };
   if (!known) return { data: refusal('not_connected'), error: null };
   if (fn === 'mcp_write_access') return writeAnswer instanceof Error ? { data: null, error: writeAnswer } : { data: writeAnswer, error: null };
-  if (['mcp_update_todo', 'mcp_add_todo', 'mcp_remove_todo', 'mcp_restore_todo'].includes(fn)) return { data: toolAnswer, error: null };
+  if (['mcp_update_todo', 'mcp_add_todo', 'mcp_remove_todo', 'mcp_restore_todo', 'mcp_get_deal_checklists'].includes(fn)) return { data: toolAnswer, error: null };
   return { data: null, error: { message: 'unexpected function', code: 'PGRST202' } };
 }
 
@@ -233,6 +233,13 @@ describe('refusals and failures', () => {
 
 // ---------------------------------------------------------------- frames and parity with the migration
 describe('frames', () => {
+  it.each(['FX_checklists_v1', 'FX_checklists_v2'])('get_deal_checklists shows the real %s answer whole', async (k) => {
+    toolAnswer = clone(FX[k]);
+    const r = await call('get_deal_checklists', { deal_id: fid(4) });
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toEqual(FX[k].result);
+  });
+
   it('get_deal_checklists: the real v1 and v2 answers are accepted; v2 under v1 keys, or v3, is not', () => {
     expect(FX.FX_checklists_v1.result.v).toBe(1);
     expect(FX.FX_checklists_v2.result.v).toBe(2);

@@ -320,6 +320,8 @@ END
 $base$;
 -- ================================================================ mutations
 {''.join(mut_sql)}
+-- ================================================================ real answers for the portal fixtures
+{lib('observe.sql')}
 -- ================================================================ rollback rehearsal (after the controls' fixtures: todos connections exist)
 DO $rbfx$ BEGIN PERFORM pg_temp.sw(true); PERFORM pg_temp.rec('rb_before', jsonb_build_object('todos_connections', (SELECT count(*) FROM public.mcp_connections WHERE scope = 'mcp:todos'))); END $rbfx$;
 {strip_temp_on_commit(rollback)}
@@ -340,6 +342,21 @@ facts = {'migration': MIG_PATH, 'migration_md5': mig_md5,
          'apply_md5': md5(apply), 'rollback_md5': md5(rollback)}
 outs = {'apply-20261118130000.sql': apply, 'rollback-20261118130000.sql': rollback, 'harness-5.sql': harness,
         'catalog-facts.json': json.dumps(facts, indent=2) + '\n'}
+if len(sys.argv) > 2 and sys.argv[1] == 'fixtures':
+    # python3 gen.py fixtures <kt-sql output file>: writes broker-portal/__tests__/mcp/fixtures/todo-tools-4263.json
+    first = open(sys.argv[2]).read().splitlines()[0]
+    raw = json.loads(first)['message']
+    res = json.loads(raw[raw.index('P5_RESULT ') + 10:raw.index('\nCONTEXT')])
+    fx = {k: v for k, v in sorted(res.items()) if k.startswith('FX_')}
+    text = json.dumps(fx, indent=1, sort_keys=True)
+    ids = sorted(set(re.findall(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', text)))
+    for n, u in enumerate(ids, 1):
+        text = text.replace(u, f'<id:{n}>')
+    text = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z', '2026-11-18T00:00:00.000000Z', text)
+    out = os.path.join(REPO, 'broker-portal/__tests__/mcp/fixtures/todo-tools-4263.json')
+    open(out, 'w').write(text + '\n')
+    print('wrote', out, len(fx), 'answers', len(ids), 'ids')
+    sys.exit(0)
 if len(sys.argv) > 1 and sys.argv[1] == 'check':
     bad = [k for k, v in outs.items() if open(os.path.join(HERE, k)).read() != v]
     print('differs: ' + ', '.join(bad) if bad else 'all generated files match')
