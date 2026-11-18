@@ -69,6 +69,15 @@ describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
     expect(screen.getByTestId("bulk-delete-cloud-text")).toHaveTextContent(ONE);
   });
 
+  it("bulk: the Delete button waits for main's answer", async () => {
+    let answer: (v: { on: boolean; online: boolean }) => void = () => undefined;
+    svc.localState.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<BulkDeleteConfirmModal selectedCount={3} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("bulk-delete-confirm")).toBeDisabled();
+    answer({ on: false, online: true });
+    await waitFor(() => expect(screen.getByTestId("bulk-delete-confirm")).not.toBeDisabled());
+  });
+
   it("bulk, Keepr Cloud off: today's dialog, unchanged", async () => {
     svc.localState.mockResolvedValue({ on: false, online: true });
     render(<BulkDeleteConfirmModal selectedCount={3} onConfirm={jest.fn()} onCancel={jest.fn()} />);

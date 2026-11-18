@@ -9,12 +9,19 @@ import type { CloudTodoHistoryResult } from "../../../../../../electron/types/ip
 import cloudTodosService from "../../../../../services/cloudTodosService";
 import { useCloudTodos } from "./CloudTodosContext";
 import { ago, CLOUD_TODO_COPY as T, shortDay } from "./cloudTodoCopy";
+import { MenuButton } from "../MenuButton";
 
 const PILL = "inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wide flex-shrink-0";
 const BLOCK = "mt-2.5 bg-gray-50 border border-gray-200 rounded-lg p-3";
 const SOLID = "px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-60";
 const SOLID_SECONDARY = "px-3 py-1.5 text-sm font-semibold text-gray-800 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg disabled:opacity-60";
 const OTHER_PREVIEW = 200;
+
+/** A value cut to the strip's preview length (History shows no "Show all"). */
+function cut(text: string | null): string {
+  const t = text ?? T.empty;
+  return t.length > OTHER_PREVIEW ? `${t.slice(0, OTHER_PREVIEW)}…` : t;
+}
 
 /** "Due Nov 20", in the title line, after the Required pill. */
 export function CloudDueChip({ item }: { item: ChecklistItem }): React.ReactElement | null {
@@ -83,18 +90,16 @@ export function CloudTemplateMenu({ item, readOnly }: { item: ChecklistItem; rea
           data-testid={`cloud-item-menu-${item.id}`}
         >
           {shown.map((e) => (
-            <button
+            <MenuButton
               key={e.key}
-              type="button"
               onClick={() => {
                 setOpen(false);
                 e.onSelect();
               }}
-              className="px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-gray-700"
-              data-testid={`cloud-item-${e.key}-${item.id}`}
+              testId={`cloud-item-${e.key}-${item.id}`}
             >
               {e.label}
-            </button>
+            </MenuButton>
           ))}
         </span>
       )}
@@ -223,8 +228,10 @@ function historyLine(r: CloudTodoHistoryResult["rows"][number]): string {
   const when = ago(r.at);
   const what =
     r.what === "changed"
-      ? `${T.partName[r.part ?? ""] ?? ""}: ${r.oldText ?? T.empty} → ${r.newText ?? T.empty}`
-      : T[r.what];
+      ? `${T.partName[r.part ?? ""] ?? ""}: ${cut(r.oldText)} → ${cut(r.newText)}`
+      : r.what === "added" || r.what === "removed" || r.what === "restored"
+        ? T[r.what]
+        : "";
   return [r.who, when, what].filter((x) => x.length > 0).join(" · ") + (r.kept ? "" : ` ${T.notKept}`);
 }
 

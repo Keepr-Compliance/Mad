@@ -169,12 +169,15 @@ describe('the list', () => {
   });
 
   it.each([['an unknown scope', 'mcp:admin'], ['a null scope', null], ['a scope that is not text', 1]])(
-    'one row with %s -> the whole list is the load-failure message',
+    'one row with %s -> that row shows without an Allowed line; the list and its Disconnect buttons stay',
     async (_l, scope) => {
-      mockRpc.mockResolvedValue(listOk([connectionRow({ scope })]));
+      mockRpc.mockResolvedValue(listOk([connectionRow({ scope }), connectionRow({ id: CONNECTION_ID_2, scope: 'mcp:todos' })]));
       await renderPage();
-      expect(screen.getByRole('alert')).toHaveTextContent(M_A.loadFailed);
-      expect(rows()).toEqual([]);
+      const [a, b] = rows();
+      expect(within(a).queryByTestId('ai-app-allowed')).toBeNull();
+      expect(within(a).getByRole('button', { name: AI_APPS.disconnect })).toBeInTheDocument();
+      expect(within(b).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals and change your todos.');
+      expect(screen.queryByRole('alert')).toBeNull();
     }
   );
 

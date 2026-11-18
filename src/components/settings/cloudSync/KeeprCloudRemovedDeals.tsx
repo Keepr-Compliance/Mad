@@ -22,28 +22,25 @@ function shortDate(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-export function KeeprCloudRemovedDeals({ removed }: { removed: UseKeeprCloudRemoved }): React.ReactElement | null {
+export function KeeprCloudRemovedDeals({
+  removed,
+  offline = false,
+}: {
+  removed: UseKeeprCloudRemoved;
+  /** This computer is offline: a row being deleted says it finishes when Keepr is online. */
+  offline?: boolean;
+}): React.ReactElement | null {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const restorableOnline = removed.online.filter((d) => d.kind === "online");
   const rejected = removed.online.filter((d) => d.kind === "rejected");
   const total = removed.here.length + restorableOnline.length;
-  if (total === 0 && rejected.length === 0 && !removed.onlineUnavailable) return null;
-  const line = (id: string) =>
-    removed.message?.id === id ? (
-      <p className="m-0 text-[13px] text-gray-700" data-testid={`cloud-removed-message-${id}`}>
-        {removed.message.text}
-      </p>
-    ) : null;
+  // the answer to the last action stays visible even when its row is gone (a restored or erased deal leaves the list)
+  if (total === 0 && rejected.length === 0 && !removed.onlineUnavailable && !removed.message) return null;
 
   return (
     <div className="flex flex-col gap-3" data-testid="cloud-removed">
       <div className="flex flex-col gap-1">
         <span className="text-sm font-semibold text-gray-900">{C.removedTitle}</span>
-        {total > 0 && (
-          <span className="text-[13px] text-gray-500" data-testid="cloud-removed-count">
-            {C.removedCount(total)}
-          </span>
-        )}
       </div>
 
       {removed.here.map((d) => (
@@ -53,7 +50,7 @@ export function KeeprCloudRemovedDeals({ removed }: { removed: UseKeeprCloudRemo
               <span className="text-[13px] text-gray-700">{C.removedRow(d.propertyAddress ?? C.noAddress, shortDate(d.removedAt))}</span>
               {d.deleting && (
                 <span className="text-[13px] text-gray-500" data-testid={`cloud-removed-deleting-${d.transactionId}`}>
-                  {C.deleting} {C.deletingOffline}
+                  {offline ? `${C.deleting} ${C.deletingOffline}` : C.deleting}
                 </span>
               )}
             </span>
@@ -68,17 +65,18 @@ export function KeeprCloudRemovedDeals({ removed }: { removed: UseKeeprCloudRemo
                   {C.restore}
                 </button>
               )}
-              <button
-                type="button"
-                className={SOLID_RED_BUTTON}
-                disabled={removed.busyId !== null}
-                onClick={() => setConfirmId(d.transactionId)}
-              >
-                {C.deleteForGood}
-              </button>
+              {!d.deleting && (
+                <button
+                  type="button"
+                  className={SOLID_RED_BUTTON}
+                  disabled={removed.busyId !== null}
+                  onClick={() => setConfirmId(d.transactionId)}
+                >
+                  {C.deleteForGood}
+                </button>
+              )}
             </span>
           </div>
-          {line(d.transactionId)}
         </div>
       ))}
 
@@ -95,7 +93,6 @@ export function KeeprCloudRemovedDeals({ removed }: { removed: UseKeeprCloudRemo
               {C.restore}
             </button>
           </div>
-          {line(d.cloudId)}
         </div>
       ))}
 
@@ -104,6 +101,12 @@ export function KeeprCloudRemovedDeals({ removed }: { removed: UseKeeprCloudRemo
           {C.rejectedRow(d.propertyAddress ?? C.noAddress)}
         </p>
       ))}
+
+      {removed.message && (
+        <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-removed-message">
+          {removed.message.text}
+        </p>
+      )}
 
       {removed.onlineUnavailable && (
         <p className="m-0 text-[13px] text-gray-500" data-testid="cloud-removed-online-unavailable">

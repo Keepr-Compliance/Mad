@@ -496,7 +496,7 @@ export function TransactionChecklistTab({
         ))}
       </div>
 
-      <CloudRecentlyRemoved locked={locked} />
+      <CloudRecentlyRemoved locked={locked} reloadKey={data} />
 
       <AttachmentPreviewHost preview={attachmentPreview} />
       {viewingThread && (

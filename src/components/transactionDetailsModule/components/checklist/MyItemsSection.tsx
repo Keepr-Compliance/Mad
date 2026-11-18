@@ -38,6 +38,7 @@ import type { EmailThread } from "../EmailThreadCard";
 import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistItemRow } from "./ChecklistItemRow";
 import { useCloudMenu } from "./cloud/CloudTodoRowParts";
+import { MenuButton } from "./MenuButton";
 
 /** `MyItemTitleSchema` (electron/schemas/checklist.ts) refuses longer titles. */
 export const MY_ITEM_TITLE_MAX_LENGTH = 300;
@@ -536,34 +537,6 @@ function CloudMenuEntries({ item, onClose }: { item: ChecklistItem; onClose: () 
         </MenuButton>
       ))}
     </>
-  );
-}
-
-function MenuButton({
-  children,
-  onClick,
-  disabled,
-  danger,
-  testId,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  testId: string;
-}): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 text-left text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed ${
-        danger ? "text-red-600" : "text-gray-700"
-      }`}
-      data-testid={testId}
-    >
-      {children}
-    </button>
   );
 }
 

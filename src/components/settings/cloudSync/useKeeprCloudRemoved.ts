@@ -84,7 +84,7 @@ export function useKeeprCloudRemoved(enabled: boolean, online: boolean): UseKeep
     deleteForGood: (transactionId) =>
       run(transactionId, async () => {
         const r = await cloudSyncService.deleteDealForGood(transactionId);
-        if (!r.success) return C.restoreRefused[r.error ?? ""] ?? C.actionFailed;
+        if (!r.success) return r.error === "not_found" ? C.deleteNotListed : (C.restoreRefused[r.error ?? ""] ?? C.actionFailed);
         return r.status === "pending" ? C.deletingOffline : r.status === "restored_elsewhere" ? C.restoredElsewhere : C.deletedForGood;
       }),
     restoreOnline: (cloudId) =>

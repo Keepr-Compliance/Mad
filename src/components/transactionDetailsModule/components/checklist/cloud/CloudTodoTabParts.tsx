@@ -79,7 +79,7 @@ export function CloudDealNotices(): React.ReactElement | null {
 }
 
 /** Todos and checklists of this deal removed in the last 30 days, with Restore (online only). */
-export function CloudRecentlyRemoved({ locked }: { locked: boolean }): React.ReactElement | null {
+export function CloudRecentlyRemoved({ locked, reloadKey }: { locked: boolean; reloadKey?: unknown }): React.ReactElement | null {
   const cloud = useCloudTodos();
   const transactionId = cloud?.transactionId ?? "";
   const on = !!cloud;
@@ -93,7 +93,7 @@ export function CloudRecentlyRemoved({ locked }: { locked: boolean }): React.Rea
   }, [on, transactionId]);
   useEffect(() => {
     void load();
-  }, [load, cloud?.notices, cloud?.markers]);
+  }, [load, cloud?.notices, cloud?.markers, reloadKey]);
 
   if (!cloud || !list) return null;
   if (list.success && list.items.length === 0 && !line) return null;
@@ -110,7 +110,7 @@ export function CloudRecentlyRemoved({ locked }: { locked: boolean }): React.Rea
 
   return (
     <div className="mt-6" data-testid="checklist-recently-removed">
-      <h5 className="text-base font-medium text-gray-900 mb-2">{T.recentlyRemoved}</h5>
+      <h4 className="text-lg font-semibold text-gray-900 mb-2">{T.recentlyRemoved}</h4>
       {!list.success ? (
         <p className="text-sm text-gray-600">{T.removedOffline}</p>
       ) : (

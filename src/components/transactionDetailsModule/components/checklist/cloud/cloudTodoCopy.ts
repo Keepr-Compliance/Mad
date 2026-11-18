@@ -40,7 +40,7 @@ export const CLOUD_TODO_COPY = {
     "You're offline. Changes made on your other devices or by AI apps may not show yet. Your changes here are kept and saved online when you're back online.",
   ok: "OK",
   dropped: (title: string) => `A change to “${title}” could not be saved online because the todo was removed there.`,
-  writeFailed: (title: string) => `A change from another device to “${title}” could not be applied here yet. Keepr tries again.`,
+  writeFailed: (title: string) => `A change to “${title}” from an AI app or another device could not be applied here yet. Keepr tries again.`,
   notAccepted: (title: string) => `A change to “${title}” was not accepted online.`,
   linksNotRestored: (n: number) =>
     `Restored. ${n === 1 ? "1 link" : `${n} links`} to emails or texts that no longer exist could not come back.`,

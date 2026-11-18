@@ -71,7 +71,7 @@ export const KEEPR_CLOUD_COPY = {
   installRemoved:
     "This computer's online copy was removed from another computer. Nothing from this computer is saved online until you save it again.",
   reclaim: "Save this computer's deals again",
-  reclaimDone: "Saving this computer's deals again. If Keepr closes first, it finishes on its own within a day.",
+  reclaimDone: "Saving this computer's deals again. If Keepr closes first, it finishes the next time Keepr opens.",
   parkedLocked: (n: number) =>
     n === 1
       ? "1 todo change from other devices or AI apps is waiting because its deal is locked. It applies if the deal is unlocked."
@@ -81,7 +81,6 @@ export const KEEPR_CLOUD_COPY = {
   onlineOnly: (n: number) =>
     `Online only: ${n === 1 ? "1 deal" : `${n} deals`} you restored. AI apps can read them; they are not on this computer.`,
   removedTitle: "Removed in the last 30 days",
-  removedCount: (n: number) => `Removed online in the last 30 days: ${n === 1 ? "1 deal" : `${n} deals`}`,
   removedRow: (address: string, when: string) => `${address} · deleted ${when}`,
   removedOnlineRow: (address: string, when: string) => `${address} · removed online ${when}`,
   noAddress: "Deal without an address",
@@ -113,5 +112,7 @@ export const KEEPR_CLOUD_COPY = {
     not_restorable: "This deal can no longer be restored.",
   } as Readonly<Record<string, string>>,
   deletedForGood: "Deleted for good.",
+  // Delete for good, not_found: the deal was restored or already deleted (SR review 2, required 6)
+  deleteNotListed: "This deal is no longer in this list.",
   restoredElsewhere: "This deal was restored elsewhere; it was not deleted.",
 } as const;

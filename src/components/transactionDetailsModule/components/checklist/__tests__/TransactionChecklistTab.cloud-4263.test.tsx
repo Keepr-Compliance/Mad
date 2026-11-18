@@ -11,7 +11,7 @@
  * or Recently removed calling out while offline; a blending (ghost) action button on a tinted strip.
  */
 import React from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { TransactionChecklistTab, type TransactionChecklistTabProps } from "../TransactionChecklistTab";
 import { useTransactionChecklist } from "../../../hooks/useTransactionChecklist";
@@ -72,7 +72,7 @@ async function show(answer: CloudTodosForDeal, list: ChecklistsForTransaction = 
   cloud.getForDeal.mockResolvedValue(answer);
   render(<Harness overrides={overrides} />);
   await screen.findByTestId(`checklist-item-${T_ITEM.id}`);
-  await waitFor(() => expect(cloud.getForDeal).toHaveBeenCalledWith({ transactionId: "txn-1" }));
+  await waitFor(() => expect(cloud.getForDeal).toHaveBeenCalledWith({ transactionId: overrides.transactionId ?? "txn-1" }));
   await act(async () => undefined);
 }
 
@@ -248,13 +248,78 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
       ...ON,
       notices: [
         { id: 1, kind: "dropped_not_online", itemId: null, title: "Call lender", part: null, otherText: null, otherValue: null, who: null },
+        { id: 3, kind: "local_write_failed", itemId: T_ITEM.id, title: "Inspection", part: "note", otherText: null, otherValue: null, who: null },
         { id: 2, kind: "links_not_restored", itemId: T_ITEM.id, title: T_ITEM.title, part: null, otherText: null, otherValue: null, who: null, count: 3 },
       ],
     });
     expect(screen.getByTestId("checklist-cloud-notice-1")).toHaveTextContent("A change to “Call lender” could not be saved online because the todo was removed there.");
     expect(screen.getByTestId("checklist-cloud-notice-2")).toHaveTextContent("Restored. 3 links to emails or texts that no longer exist could not come back.");
+    expect(screen.getByTestId("checklist-cloud-notice-3")).toHaveTextContent(
+      "A change to “Inspection” from an AI app or another device could not be applied here yet. Keepr tries again.",
+    );
     fireEvent.click(within(screen.getByTestId("checklist-cloud-notice-1")).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(cloud.dismissNotice).toHaveBeenCalledWith({ noticeId: 1 }));
+  });
+
+  it("a double click on Use this version sends one change (SR probe)", async () => {
+    await show({ ...ON, notices: [conflict()] });
+    const use = within(screen.getByTestId("checklist-conflict-7")).getByRole("button", { name: "Use this version" });
+    fireEvent.click(use);
+    fireEvent.click(use);
+    await waitFor(() => expect(cloud.dismissNotice).toHaveBeenCalled());
+    await act(async () => undefined);
+    expect(checklists().setItemNote).toHaveBeenCalledTimes(1);
+  });
+
+  it("a locked deal: the strip offers Dismiss only, and the row's ⋯ offers History only", async () => {
+    await show({ ...ON, notices: [conflict()] }, data, { lockedTooltip: "This deal is with your broker for review, so it can't be changed until it's returned to you." });
+    const strip = screen.getByTestId("checklist-conflict-7");
+    expect(within(strip).queryByRole("button", { name: "Use this version" })).toBeNull();
+    expect(within(strip).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    expect(within(screen.getByTestId(`cloud-item-menu-${T_ITEM.id}`)).getAllByRole("button").map((b) => b.textContent)).toEqual(["History"]);
+  });
+
+  it("the offline notice, once OK'd, does not come back when the tab is opened again for another deal", async () => {
+    await show({ ...ON, online: false });
+    fireEvent.click(within(screen.getByTestId("checklist-cloud-offline")).getByRole("button", { name: "OK" }));
+    cleanup();
+    await show({ ...ON, online: false }, data, { transactionId: "txn-2" });
+    expect(screen.queryByTestId("checklist-cloud-offline")).toBeNull();
+  });
+
+  it("History cuts each value at 200 characters (SR probe: a 4,000-character note)", async () => {
+    const big = "y".repeat(4000);
+    cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "changed", part: "note", oldText: big, newText: big, kept: true }] });
+    await show(ON);
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
+    const li = await screen.findByRole("listitem");
+    expect(li.textContent).toBe(`Claude · Note: ${"y".repeat(200)}… → ${"y".repeat(200)}…`);
+  });
+
+  it("a History row of a kind this screen does not know shows only who (SR probe)", async () => {
+    cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "weird", part: null, oldText: null, newText: null, kept: true }] });
+    await show(ON);
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
+    expect((await screen.findByRole("listitem")).textContent).toBe("Claude");
+  });
+
+  it("Recently removed is read again when the checklists change (a delete here shows without reopening)", async () => {
+    await show(ON);
+    const before = cloud.listRemoved.mock.calls.length;
+    checklists().get.mockResolvedValue({ success: true, checklists: fixtureChecklistsWithMyItems() });
+    await act(async () => changed!());
+    await waitFor(() => expect(cloud.listRemoved.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("the Recently removed heading has the tab's section-heading style", async () => {
+    cloud.listRemoved.mockResolvedValue({ success: true, items: [{ entity: "item", cloudId: "c-9", title: "Wire", removedAt: null }] });
+    await show(ON);
+    const h = within(await screen.findByTestId("checklist-recently-removed")).getByText("Recently removed");
+    expect(h.tagName).toBe("H4");
+    expect(h.className).toContain("text-lg font-semibold");
   });
 
   it("cloud-todos:changed re-reads the checklists and the Keepr Cloud parts", async () => {

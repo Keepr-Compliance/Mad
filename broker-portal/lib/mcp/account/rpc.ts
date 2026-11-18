@@ -238,7 +238,6 @@ type ListResult = { kind: 'ok'; connections: Connection[] } | Refused<'not_signe
 
 function checkConnection(v: unknown): Connection | null {
   if (!isObject(v) || !(hasExactKeys(v, CONNECTION_KEYS) || hasExactKeys(v, CONNECTION_KEYS_WITH_SCOPE))) return null;
-  if ('scope' in v && v.scope !== 'mcp:read' && v.scope !== 'mcp:todos') return null;
   if (
     !isConnectionId(v.id) ||
     !isClientName(v.client_name) ||
@@ -256,7 +255,8 @@ function checkConnection(v: unknown): Connection | null {
     redirectHost: v.redirect_host,
     consentedAt: v.consented_at,
     lastUsedAt: v.last_used_at as string | null,
-    canChangeTodos: 'scope' in v ? v.scope === 'mcp:todos' : null,
+    // An unknown scope value says nothing about this row: no "Allowed" line, the row and its Disconnect stay.
+    canChangeTodos: v.scope === 'mcp:todos' ? true : v.scope === 'mcp:read' ? false : null,
   };
 }
 

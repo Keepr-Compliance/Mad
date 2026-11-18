@@ -176,6 +176,12 @@ export function ChecklistItemRow({
               {controls ?? <CloudTemplateMenu item={item} readOnly={readOnly} />}
             </div>
           )}
+          {/* BACKLOG-4263 PR-6: on a read-only row (a locked deal) the ⋯ offers History only */}
+          {readOnly && (
+            <div className="flex items-center ml-auto flex-shrink-0">
+              <CloudTemplateMenu item={item} readOnly />
+            </div>
+          )}
         </div>
         <CloudMarker item={item} />
 

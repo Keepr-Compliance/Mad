@@ -208,7 +208,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
           </div>
         )}
 
-        {isOn && <KeeprCloudRemovedDeals removed={removed} />}
+        {isOn && <KeeprCloudRemovedDeals removed={removed} offline={view.pausedReason === "offline"} />}
 
         {cloud.message && (
           <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-message">

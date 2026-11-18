@@ -89,6 +89,7 @@ describe("Settings › Keepr Cloud — PR-6", () => {
     fireEvent.click(button);
     expect(cloud.reclaimInstall).toHaveBeenCalledTimes(1);
     rerender(<KeeprCloudSettings cloud={fakeCloud(ON, "reclaim_done")} />);
+    expect(C.reclaimDone).toBe("Saving this computer's deals again. If Keepr closes first, it finishes the next time Keepr opens.");
     expect(screen.getByTestId("cloud-message")).toHaveTextContent(C.reclaimDone);
   });
 
@@ -121,7 +122,8 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       svc.listRemovedDeals.mockResolvedValue([HERE]);
       await renderOn();
       const row = await screen.findByTestId("cloud-removed-deal-1");
-      expect(screen.getByTestId("cloud-removed-count")).toHaveTextContent("Removed online in the last 30 days: 1 deal");
+      expect(screen.getByTestId("cloud-removed")).toHaveTextContent(C.removedTitle);
+      expect(screen.getByTestId("cloud-removed")).not.toHaveTextContent("Removed online in the last 30 days:");
       expect(row).toHaveTextContent("12 Oak Street · deleted");
       expect(within(row).getByRole("button", { name: C.restore }).className).toContain("bg-sky-700");
       expect(within(row).getByRole("button", { name: C.deleteForGood }).className).toContain("bg-red-600");
@@ -141,29 +143,38 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       [{ success: false, error: "signed_out" }, "Sign in to restore this deal."],
       [{ success: false, error: "archive_not_understood" }, "Update Keepr to restore this deal."],
       [{ success: false, error: "something_new" }, C.actionFailed],
-    ])("Restore answer %j shows its line", async (answer, text) => {
-      svc.listRemovedDeals.mockResolvedValue([HERE]);
+    ])("Restore answer %j shows its line, also when the deal leaves the list (as main does on success)", async (answer, text) => {
+      svc.listRemovedDeals.mockResolvedValueOnce([HERE]).mockResolvedValue(answer.success ? [] : [HERE]);
       svc.restoreDeal.mockResolvedValue(answer);
       await renderOn();
       fireEvent.click(within(await screen.findByTestId("cloud-removed-deal-1")).getByRole("button", { name: C.restore }));
       await waitFor(() => expect(svc.restoreDeal).toHaveBeenCalledWith("deal-1"));
-      expect(await screen.findByTestId("cloud-removed-message-deal-1")).toHaveTextContent(text);
+      expect(await screen.findByTestId("cloud-removed-message")).toHaveTextContent(text);
+      if (answer.success) expect(screen.queryByTestId("cloud-removed-deal-1")).toBeNull();
     });
 
-    it("a deal being deleted: Deleting… and Will finish deleting when Keepr is online; no Restore", async () => {
+    it("a deal being deleted: Deleting… alone while online; no Restore and no second Delete for good", async () => {
       svc.listRemovedDeals.mockResolvedValue([{ ...HERE, deleting: true }]);
       await renderOn();
       const row = await screen.findByTestId("cloud-removed-deal-1");
-      expect(screen.getByTestId("cloud-removed-deleting-deal-1")).toHaveTextContent("Deleting… Will finish deleting when Keepr is online.");
-      expect(within(row).queryByRole("button", { name: C.restore })).toBeNull();
+      expect(screen.getByTestId("cloud-removed-deleting-deal-1").textContent).toBe("Deleting…");
+      expect(within(row).queryByRole("button")).toBeNull();
+    });
+
+    it("a deal being deleted while offline: Deleting… Will finish deleting when Keepr is online.", async () => {
+      svc.listRemovedDeals.mockResolvedValue([{ ...HERE, deleting: true }]);
+      await renderOn({ ...ON, status: "paused", pausedReason: "offline" });
+      await screen.findByTestId("cloud-removed-deal-1");
+      expect(screen.getByTestId("cloud-removed-deleting-deal-1").textContent).toBe("Deleting… Will finish deleting when Keepr is online.");
     });
 
     it.each([
       [{ success: true, status: "done" }, "Deleted for good."],
       [{ success: true, status: "pending" }, "Will finish deleting when Keepr is online."],
       [{ success: true, status: "restored_elsewhere" }, "This deal was restored elsewhere; it was not deleted."],
+      [{ success: false, error: "not_found" }, "This deal is no longer in this list."],
     ])("Delete for good asks first, says what it does and does not reach, then %j", async (answer, text) => {
-      svc.listRemovedDeals.mockResolvedValue([HERE]);
+      svc.listRemovedDeals.mockResolvedValueOnce([HERE]).mockResolvedValue(answer.success && (answer as { status?: string }).status === "done" ? [] : [HERE]);
       svc.deleteDealForGood.mockResolvedValue(answer);
       await renderOn();
       fireEvent.click(within(await screen.findByTestId("cloud-removed-deal-1")).getByRole("button", { name: C.deleteForGood }));
@@ -175,7 +186,7 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       expect(svc.deleteDealForGood).not.toHaveBeenCalled();
       fireEvent.click(within(dialog).getByRole("button", { name: C.deleteForGood }));
       await waitFor(() => expect(svc.deleteDealForGood).toHaveBeenCalledWith("deal-1"));
-      expect(await screen.findByTestId("cloud-removed-message-deal-1")).toHaveTextContent(text);
+      expect(await screen.findByTestId("cloud-removed-message")).toHaveTextContent(text);
     });
   });
 
@@ -198,6 +209,19 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       expect(within(screen.getByTestId("cloud-removed-rejected-c-2")).queryByRole("button")).toBeNull();
       fireEvent.click(within(row).getByRole("button", { name: C.restore }));
       await waitFor(() => expect(svc.restoreOnlineDeal).toHaveBeenCalledWith("c-1"));
+    });
+
+    it("an online Restore refused with a code this screen does not know shows the safe line, never the code", async () => {
+      svc.listRemovedOnline.mockResolvedValue({
+        success: true,
+        deals: [{ cloudId: "c-1", propertyAddress: "9 Elsewhere Road", removedAt: null, restorableUntil: null, kind: "online" }],
+      });
+      svc.restoreOnlineDeal.mockResolvedValue({ success: false, error: "something_new" });
+      await renderOn();
+      fireEvent.click(within(await screen.findByTestId("cloud-removed-online-c-1")).getByRole("button", { name: C.restore }));
+      const line = await screen.findByTestId("cloud-removed-message");
+      expect(line).toHaveTextContent(C.actionFailed);
+      expect(line).not.toHaveTextContent("something_new");
     });
 
     it("offline (paused): the deals deleted here still show; the online list says it needs Keepr online and is not asked for", async () => {
