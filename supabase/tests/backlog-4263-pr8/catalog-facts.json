@@ -52,6 +52,7 @@
     "c_fp_role",
     "c_fp_phone_table",
     "c_fp_ref",
+    "c_fp_ref_withheld",
     "c_fp_input",
     "c_fp_day",
     "c_fp_page",
@@ -59,6 +60,7 @@
     "c_fp_entitled",
     "c_secret",
     "c_td_parity",
+    "c_td_order",
     "c_td_columns",
     "c_td_filters",
     "c_td_page",
@@ -88,6 +90,8 @@
     "M13_fp_removed_people": "red",
     "M14_fp_cursor_inclusive": "red",
     "M15_fp_bytes_unbounded": "red",
+    "M16b_fp_no_inner_order": "red",
+    "M09b_fp_ref_withheld_not_grouped": "red",
     "M16_fp_rows_101": "red",
     "M17_fp_deal_arg_any_state": "red",
     "M18_fp_no_entitlement": "red",
@@ -105,6 +109,7 @@
     "M38_td_keyset_on_id": "red",
     "M39_td_due_to_exclusive": "red",
     "M40_td_bytes_unbounded": "red",
+    "M41_td_no_inner_order": "red",
     "M42_td_without_due_false_filters": "red",
     "M43_td_no_entitlement": "red",
     "M44_td_owner_term_only": "green",
@@ -129,8 +134,9 @@
     "M71_cat_outcome_check_dropped": "red",
     "M72_cat_reader_granted": "red",
     "M73_cat_tool_granted_authenticated": "red",
+    "M75_cat_existing_function_strict": "red",
     "M74_cat_tool_check_without_list_todos": "red"
   },
-  "apply_md5": "3e764320d5459ae11989added7e2ae0b",
-  "rollback_md5": "57c086cfed680253bacbca2e4c3d40db"
+  "apply_md5": "ee1a1c09667d19c046b1a7c820c62f63",
+  "rollback_md5": "3f9cf7e16b288e2c3c890b382d372b51"
 }

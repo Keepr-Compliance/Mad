@@ -300,6 +300,15 @@ describe('BACKLOG-4263 PR-8: arguments are checked before any database call', ()
     expect(rpcCalls(TD)).toHaveLength(0);
   });
 
+  it('a deal_id with upper-case hex letters is accepted and reaches the database as sent', async () => {
+    const withLetters = ['00000000', '0000', '4263', '8008', '00000000000a'].join('-'); // one hex letter
+    expect(/[a-f]/.test(withLetters.slice(-12))).toBe(true);
+    const result = await call('find_people', { deal_id: withLetters.toUpperCase() });
+    expect(result.isError).toBeFalsy();
+    expect(rpcCalls(FP)).toHaveLength(1);
+    expect(rpcCalls(FP)[0][1]).toMatchObject({ p_deal_id: withLetters.toUpperCase() });
+  });
+
   it('every argument reaches the database under its own name; omitted ones are null', async () => {
     await call('find_people', { name: ' Pat ', role: 'lender', deal_id: U.toUpperCase(), email: 'a@b.test', phone: '+1 (212) 555-0101', cursor: U });
     expect(rpcCalls(FP)[0][1]).toMatchObject({ p_name: ' Pat ', p_role: 'lender', p_deal_id: U.toUpperCase(), p_email: 'a@b.test', p_phone: '+1 (212) 555-0101', p_cursor: U });

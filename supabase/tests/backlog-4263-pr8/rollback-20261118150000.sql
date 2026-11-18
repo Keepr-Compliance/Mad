@@ -16,7 +16,8 @@ END
 $pre4263p8r$;
 CREATE TEMP TABLE p4263p8r_fn_before ON COMMIT DROP AS
   SELECT p.oid::regprocedure::text AS sig, md5(p.prosrc) AS src_md5, p.proacl::text AS acl, p.proconfig AS config, p.prosecdef AS secdef,
-         p.proowner AS owner, p.provolatile AS vol
+         p.proowner AS owner, p.provolatile AS vol, p.proisstrict AS strict, p.proleakproof AS leakproof, p.proparallel AS parallel,
+         p.procost AS cost, p.prorows AS nrows
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text NOT IN ('_mcp_r_find_people(text,text,uuid,text,text,uuid)', '_mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)', 'mcp_find_people(text,bytea,text,text,text,text,text,text,text)', 'mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)');
 CREATE TEMP TABLE p4263p8r_check_before ON COMMIT DROP AS
   SELECT c.conname AS name, pg_get_constraintdef(c.oid) AS def FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c';
@@ -58,7 +59,8 @@ BEGIN
     'other_functions_changed', (SELECT count(*) FROM pg_temp.p4263p8r_fn_before b
          WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text = b.sig
                              AND md5(p.prosrc) = b.src_md5 AND p.proacl::text IS NOT DISTINCT FROM b.acl AND p.proconfig IS NOT DISTINCT FROM b.config
-                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol)),
+                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol AND p.proisstrict = b.strict
+                             AND p.proleakproof = b.leakproof AND p.proparallel = b.parallel AND p.procost = b.cost AND p.prorows = b.nrows)),
     'tool_check', (SELECT array_agg(m[1] ORDER BY m[1] COLLATE "C") FROM pg_constraint c, regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') m
         WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.conname = 'mcp_call_log_tool_check')
         = (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(ARRAY['get_status', 'list_deals', 'get_deal', 'get_deal_checklists', 'list_all_deals', 'update_todo', 'add_todo', 'remove_todo', 'restore_todo']::text[]) x),

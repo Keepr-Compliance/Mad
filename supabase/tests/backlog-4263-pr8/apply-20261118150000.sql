@@ -10,7 +10,8 @@
 -- The tool CHECK swap (last statement of the migration) takes an ACCESS EXCLUSIVE lock on mcp_call_log until commit.
 CREATE TEMP TABLE p4263p8_fn_before ON COMMIT DROP AS
   SELECT p.oid::regprocedure::text AS sig, md5(p.prosrc) AS src_md5, p.proacl::text AS acl, p.proconfig AS config, p.prosecdef AS secdef,
-         p.proowner AS owner, p.provolatile AS vol
+         p.proowner AS owner, p.provolatile AS vol, p.proisstrict AS strict, p.proleakproof AS leakproof, p.proparallel AS parallel,
+         p.procost AS cost, p.prorows AS nrows
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace;
 CREATE TEMP TABLE p4263p8_check_before ON COMMIT DROP AS
   SELECT c.conname AS name, pg_get_constraintdef(c.oid) AS def FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c';
@@ -464,6 +465,8 @@ BEGIN
     'readers_api_grants', (SELECT count(*) FROM unnest(ARRAY['public._mcp_r_find_people(text,text,uuid,text,text,uuid)', 'public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)']) s, unnest(ARRAY['anon', 'authenticated', 'service_role']) r
         WHERE has_function_privilege(r, s::regprocedure, 'EXECUTE')),
     'readers_postgres', (SELECT bool_and(has_function_privilege('postgres', s::regprocedure, 'EXECUTE')) FROM unnest(ARRAY['public._mcp_r_find_people(text,text,uuid,text,text,uuid)', 'public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)']) s),
+    'tools_definer_owner_path', (SELECT bool_and(p.prosecdef AND p.proowner = 'postgres'::regrole::oid AND array_to_string(p.proconfig, ',') = 'search_path=""')
+        FROM unnest(ARRAY['public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)', 'public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)']) s JOIN pg_proc p ON p.oid = to_regprocedure(s)),
     'tools_other_grants', (SELECT count(*) FROM unnest(ARRAY['public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)', 'public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)']) s, unnest(ARRAY['authenticated', 'service_role']) r
         WHERE has_function_privilege(r, s::regprocedure, 'EXECUTE')),
     'anon_mcp_17', (SELECT coalesce(array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C"), '{}') FROM pg_proc p
@@ -472,7 +475,8 @@ BEGIN
     'existing_functions_changed', (SELECT count(*) FROM pg_temp.p4263p8_fn_before b
          WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text = b.sig
                              AND md5(p.prosrc) = b.src_md5 AND p.proacl::text IS NOT DISTINCT FROM b.acl AND p.proconfig IS NOT DISTINCT FROM b.config
-                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol)),
+                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol AND p.proisstrict = b.strict
+                             AND p.proleakproof = b.leakproof AND p.proparallel = b.parallel AND p.procost = b.cost AND p.prorows = b.nrows)),
     'functions_added', (SELECT coalesce(array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C"), '{}') FROM pg_proc p
         WHERE p.pronamespace = 'public'::regnamespace AND NOT EXISTS (SELECT 1 FROM pg_temp.p4263p8_fn_before b WHERE b.sig = p.oid::regprocedure::text))
         = (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(ARRAY['_mcp_r_find_people(text,text,uuid,text,text,uuid)', '_mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)', 'mcp_find_people(text,bytea,text,text,text,text,text,text,text)', 'mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)']::text[]) x),
@@ -484,7 +488,7 @@ BEGIN
     'check_count_unchanged', (SELECT count(*) FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c') = (SELECT count(*) FROM pg_temp.p4263p8_check_before),
     'ledger', (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '20261118150000')) INTO v;
   IF v -> 'bodies' <> '{}'::jsonb OR (v ->> 'readers_ok')::boolean IS NOT TRUE OR (v ->> 'readers_api_grants')::int <> 0
-     OR (v ->> 'readers_postgres')::boolean IS NOT TRUE OR (v ->> 'tools_other_grants')::int <> 0 OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE
+     OR (v ->> 'readers_postgres')::boolean IS NOT TRUE OR (v ->> 'tools_definer_owner_path')::boolean IS NOT TRUE OR (v ->> 'tools_other_grants')::int <> 0 OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE
      OR (v ->> 'existing_functions_changed')::int <> 0 OR (v ->> 'functions_added')::boolean IS NOT TRUE OR (v ->> 'tool_check')::boolean IS NOT TRUE
      OR (v ->> 'outcome_check_unchanged')::boolean IS NOT TRUE OR (v ->> 'check_count_unchanged')::boolean IS NOT TRUE OR (v ->> 'ledger')::int <> 1 THEN
     RAISE EXCEPTION 'APPLY POST-CHECK 20261118150000 FAILED, nothing applied: %', v;

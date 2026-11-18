@@ -383,6 +383,25 @@ BEGIN
     pg_temp.pass(cardinality(refs) = 100, 'DA8 page refs ' || cardinality(refs)));
 END $c$;
 
+-- one contact withheld on one deal (the smaller id) and shown on another: the shown row never carries the withheld
+-- row's id as contact_ref, and the withheld row's contact_ref is null
+CREATE FUNCTION pg_temp.c_fp_ref_withheld() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE s jsonb; w jsonb; ps jsonb; pw jsonb;
+BEGIN
+  PERFORM pg_temp.unrate();
+  s := pg_temp.w(pg_temp.q_fp(1, deal => pg_temp.id('DW')::text, role => 'appraiser'));
+  w := pg_temp.w(pg_temp.q_fp(1, deal => pg_temp.id('DPH')::text, role => 'appraiser'));
+  ps := pg_temp.person(s, pg_temp.id('p_mx_s'));
+  pw := pg_temp.person(w, pg_temp.id('p_mx_w'));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.id('p_mx_w') = pg_temp.small(20) AND pg_temp.id('p_mx_w') < pg_temp.id('p_mx_s'), 'fixture ids'),
+    pg_temp.pass(ps IS NOT NULL AND ps -> 'details_withheld' = 'false' AND ps ->> 'name' = 'Mix fixture', 'shown row ' || coalesce(ps::text, 'null')),
+    pg_temp.pass(pw IS NOT NULL AND pw -> 'details_withheld' = 'true', 'withheld row ' || coalesce(pw::text, 'null')),
+    pg_temp.pass(ps ->> 'contact_ref' IS DISTINCT FROM pg_temp.id('p_mx_w')::text AND ps ->> 'contact_ref' = pg_temp.id('p_mx_s')::text,
+                 'shown contact_ref ' || coalesce(ps ->> 'contact_ref', 'null')),
+    pg_temp.pass(pw -> 'contact_ref' = 'null'::jsonb, 'withheld contact_ref ' || coalesce(pw ->> 'contact_ref', 'null')));
+END $c$;
+
 -- input rules: each refused before any read, logged invalid_input, and not counted against the day cap
 CREATE FUNCTION pg_temp.c_fp_input() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE q text; bad text[] := '{}'; r jsonb; n int := 0; d0 int; ok1 jsonb; ok2 jsonb;
@@ -527,6 +546,29 @@ BEGIN
     pg_temp.pass(EXISTS (SELECT 1 FROM jsonb_array_elements(wa -> 'rows') x WHERE x ->> 0 = pg_temp.id('kt31')::text) AND NOT dt ? pg_temp.id('kt31')::text
                  AND (SELECT count(*) FROM jsonb_array_elements(wa -> 'rows') x WHERE (x ->> 11)::uuid = pg_temp.id('DT')) = 31, '31st list'),
     pg_temp.pass(nrows > 130 AND ndiff = 0, 'deal fields differ from get_deal on ' || ndiff || ' of ' || nrows || ' rows'));
+END $c$;
+
+-- the candidate order: 600 more todos on one live checklist of A, inserted latest due date first, all due before every
+-- fixture todo (inserted here, so no other control sees them); the first page equals a direct ordered query
+CREATE FUNCTION pg_temp.c_td_order() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE A uuid := pg_temp.id('A'); cl uuid := pg_temp.cl_of(pg_temp.id('DA1'), 'tpl'); r jsonb; got uuid[]; want uuid[]; n int; ins bigint;
+BEGIN
+  INSERT INTO public.cloud_deal_checklist_items (owner_user_id, cloud_deal_id, cloud_checklist_id, local_item_id, content_hash, title, is_required, is_checked, due_date)
+  SELECT A, pg_temp.id('DA1'), cl, 'p8-order-' || g, encode(sha256(convert_to('p8-order-' || g, 'UTF8')), 'hex'), 'Order todo ' || g, false, false,
+         DATE '2024-01-01' + (600 - g)
+    FROM generate_series(1, 600) g ORDER BY g;
+  GET DIAGNOSTICS ins = ROW_COUNT;
+  r := pg_temp.rtd(A, 'all', NULL, NULL);
+  got := pg_temp.tids(jsonb_build_object('result', r));
+  n := cardinality(got);
+  SELECT array_agg(z.id ORDER BY z.k, z.id) INTO want FROM (
+    SELECT t.id, coalesce(t.due_date, DATE '9999-12-31') AS k FROM public.cloud_deal_checklist_items t
+      JOIN public.cloud_deal_checklists c ON c.id = t.cloud_checklist_id AND c.cloud_deal_id = t.cloud_deal_id
+      JOIN public.cloud_deals d ON d.id = t.cloud_deal_id
+     WHERE t.owner_user_id = A AND t.removed_at IS NULL AND c.removed_at IS NULL AND d.is_confirmed AND d.removed_at IS NULL
+     ORDER BY 2, 1 LIMIT n) z;
+  PERFORM pg_temp.rec('obs_td_order', jsonb_build_object('inserted', ins, 'returned', n));
+  RETURN pg_temp.pass(ins = 600 AND n > 100 AND got = want, 'inserted ' || ins || ' returned ' || n || ' equal ' || coalesce((got = want)::text, 'null'));
 END $c$;
 
 -- the columns as built: due dates shown while the write switch is off; has_note, my_items, private, locked, saved_from
@@ -690,7 +732,8 @@ BEGIN
   SELECT count(*) INTO changed FROM pg_temp.p4263p8_fn_before b
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text = b.sig
                        AND md5(p.prosrc) = b.src_md5 AND p.proacl::text IS NOT DISTINCT FROM b.acl AND p.proconfig IS NOT DISTINCT FROM b.config
-                       AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol);
+                       AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol AND p.proisstrict = b.strict
+                       AND p.proleakproof = b.leakproof AND p.proparallel = b.parallel AND p.procost = b.cost AND p.prorows = b.nrows);
   SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C") INTO added FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace AND NOT EXISTS (SELECT 1 FROM pg_temp.p4263p8_fn_before b WHERE b.sig = p.oid::regprocedure::text);
   SELECT array_agg(m[1] ORDER BY m[1] COLLATE "C") INTO tool_names FROM pg_constraint c, regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') m

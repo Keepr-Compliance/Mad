@@ -5,7 +5,7 @@
 -- Deals, people, checklists and todos come from the real producers (cloud_upsert_deal, cloud_upsert_parties,
 -- cloud_tombstone, cloud_todo_push, cloud_delete_deal). Set directly, each named where it is done:
 --   cloud_deals.lock_reason (written by the desktop's deal upload; as PR-5's fixtures do);
---   the id of four people (any uuid is a value the producer can give; these are chosen to be the smallest ids so the
+--   the id of five people (any uuid is a value the producer can give; these are chosen to be the smallest ids so the
 --   contact_ref rules are tested deterministically);
 --   one todo's is_checked set to NULL: the column is nullable; the one-way item upload of 20261118110000
 --   (cloud_upsert_checklist_items, dropped by 20261118120000) wrote (r ->> 'is_checked')::boolean, NULL when the field
@@ -196,8 +196,16 @@ BEGIN
          pg_temp.pty('s3', NULL, 'Phone fixture three', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('+2125550123', NULL))),
          pg_temp.pty('s4', NULL, 'Phone fixture four', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('12125550124', NULL))),
          pg_temp.pty('s5', NULL, 'Phone fixture five', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('+442125550125', NULL))),
-         pg_temp.pty('s6', NULL, 'Phone fixture six', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('442125550126', NULL)))));
+         pg_temp.pty('s6', NULL, 'Phone fixture six', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('442125550126', NULL))),
+         pg_temp.pty('mx_w', 'cmix', 'Mix fixture', NULL, 'appraiser', 'support', 'appraiser', '[]', '[]', NULL, true)));
   PERFORM pg_temp.rec('fx_parties_DPH', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
+  -- the same contact (cmix, same computer) shown on deal DW; withheld on DPH above, with the smaller id
+  r := pg_temp.up(A, 'cloud_upsert_parties', IA, pg_temp.id('DW'), jsonb_build_array(
+         pg_temp.pty('mx_s', 'cmix', 'Mix fixture', NULL, 'appraiser', 'support', 'appraiser')));
+  PERFORM pg_temp.rec('fx_parties_mix', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
+  UPDATE public.cloud_deal_parties SET id = pg_temp.small(20) WHERE cloud_deal_id = pg_temp.id('DPH') AND local_party_id = 'mx_w';
+  PERFORM pg_temp.put('p_mx_w', pg_temp.party_of(pg_temp.id('DPH'), 'mx_w')::text);
+  PERFORM pg_temp.put('p_mx_s', pg_temp.party_of(pg_temp.id('DW'), 'mx_s')::text);
   FOR k IN SELECT unnest(ARRAY['s1', 's2', 's3', 's4', 's5', 's6']) LOOP
     PERFORM pg_temp.put('p_' || k, pg_temp.party_of(pg_temp.id('DPH'), k)::text);
   END LOOP;

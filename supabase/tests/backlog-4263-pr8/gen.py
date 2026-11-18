@@ -98,6 +98,8 @@ MUTS = [
     ('M13_fp_removed_people', '_mcp_r_find_people', [(" AND p.removed_at IS NULL /*LIVE:fp_people*/", "")], 'c_fp_scope', 'red', None),
     ('M14_fp_cursor_inclusive', '_mcp_r_find_people', [("AND (p_after_id IS NULL OR l.id > p_after_id) /*KEY:after*/", "AND (p_after_id IS NULL OR l.id >= p_after_id) /*KEY:after*/")], 'c_fp_page', 'red', None),
     ('M15_fp_bytes_unbounded', '_mcp_r_find_people', [("s.cum <= 60000 /*BOUND:bytes*/", "s.cum <= 6000000 /*BOUND:bytes*/")], 'c_fp_rowmax', 'red', None),
+    ('M16b_fp_no_inner_order', '_mcp_r_find_people', [("       ORDER BY s.id /*ORDER:fp*/\n", "")], 'c_fp_page', 'red', None),
+    ('M09b_fp_ref_withheld_not_grouped', '_mcp_r_find_people', [("PARTITION BY l.w, l.d_inst, l.local_contact_id", "PARTITION BY l.d_inst, l.local_contact_id")], 'c_fp_ref_withheld', 'red', None),
     ('M16_fp_rows_101', '_mcp_r_find_people', [("s.rk <= 100 /*BOUND:rows*/", "s.rk <= 101 /*BOUND:rows*/")], 'c_fp_page', 'red', None),
     ('M17_fp_deal_arg_any_state', '_mcp_r_find_people', [("x.owner_user_id = v_uid /*OWN:fp_deal_arg*/ AND x.is_confirmed /*CONF:fp_deal_arg*/ AND x.removed_at IS NULL /*LIVE:fp_deal_arg*/",
         "x.owner_user_id = v_uid /*OWN:fp_deal_arg*/")], 'c_fp_not_found', 'red', None),
@@ -117,6 +119,7 @@ MUTS = [
     ('M38_td_keyset_on_id', '_mcp_r_list_todos', [("(coalesce(t.due_date, DATE '9999-12-31'), t.id) > (p_after_key, p_after_id)", "t.id > p_after_id")], 'c_td_page', 'red', None),
     ('M39_td_due_to_exclusive', '_mcp_r_list_todos', [("(p_due_to IS NULL OR t.due_date <= p_due_to)", "(p_due_to IS NULL OR t.due_date < p_due_to)")], 'c_td_filters', 'red', None),
     ('M40_td_bytes_unbounded', '_mcp_r_list_todos', [("s.cum <= 85000 /*BOUND:bytes*/", "s.cum <= 8500000 /*BOUND:bytes*/")], 'c_td_page', 'red', None),
+    ('M41_td_no_inner_order', '_mcp_r_list_todos', [("       ORDER BY coalesce(t.due_date, DATE '9999-12-31'), t.id /*ORDER:td*/\n", "")], 'c_td_order', 'red', None),
     ('M42_td_without_due_false_filters', '_mcp_r_list_todos', [("(p_without_due IS NOT TRUE OR t.due_date IS NULL)", "(p_without_due IS NULL OR (t.due_date IS NULL) = p_without_due)")], 'c_td_filters', 'red', None),
     ('M43_td_no_entitlement', '_mcp_r_list_todos', [ENT], 'c_fp_entitled', 'red', None),
     ('M44_td_owner_term_only', '_mcp_r_list_todos', OWN_TD, 'c_td_isolation', 'green', None),
@@ -153,14 +156,16 @@ DDL_MUTS = [
      "has_function_privilege('authenticated', 'public._mcp_r_find_people(text,text,uuid,text,text,uuid)'::regprocedure, 'EXECUTE')", 'c_catalog'),
     ('M73_cat_tool_granted_authenticated', 'GRANT EXECUTE ON FUNCTION public.mcp_list_todos(text, bytea, text, text, text, text, text, boolean, boolean, text) TO authenticated',
      "has_function_privilege('authenticated', 'public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)'::regprocedure, 'EXECUTE')", 'c_catalog'),
+    ('M75_cat_existing_function_strict', 'ALTER FUNCTION public._mcp_txt(text, integer) STRICT',
+     "(SELECT proisstrict FROM pg_proc WHERE oid = 'public._mcp_txt(text,integer)'::regprocedure)", 'c_catalog'),
     ('M74_cat_tool_check_without_list_todos', "ALTER TABLE public.mcp_call_log DROP CONSTRAINT mcp_call_log_tool_check; ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_tool_check CHECK (tool IS NULL OR tool IN ("
      + ', '.join(repr(t) for t in TOOLS_BEFORE + ['find_people']) + ")) NOT VALID",
      "pg_get_constraintdef((SELECT oid FROM pg_constraint WHERE conrelid = 'public.mcp_call_log'::regclass AND conname = 'mcp_call_log_tool_check')) !~ 'list_todos'", 'c_catalog'),
 ]
 
 CONTROLS = ['c_fp_basic', 'c_fp_parity', 'c_fp_isolation', 'c_fp_not_found', 'c_fp_scope', 'c_fp_clean', 'c_fp_withheld', 'c_fp_email', 'c_fp_phone',
-            'c_fp_role', 'c_fp_phone_table', 'c_fp_ref', 'c_fp_input', 'c_fp_day', 'c_fp_page', 'c_fp_rowmax', 'c_fp_entitled', 'c_secret',
-            'c_td_parity', 'c_td_columns', 'c_td_filters', 'c_td_page', 'c_td_rowmax', 'c_td_isolation', 'c_claims', 'c_catalog']
+            'c_fp_role', 'c_fp_phone_table', 'c_fp_ref', 'c_fp_ref_withheld', 'c_fp_input', 'c_fp_day', 'c_fp_page', 'c_fp_rowmax', 'c_fp_entitled', 'c_secret',
+            'c_td_parity', 'c_td_order', 'c_td_columns', 'c_td_filters', 'c_td_page', 'c_td_rowmax', 'c_td_isolation', 'c_claims', 'c_catalog']
 assert {m[3] for m in MUTS} <= set(CONTROLS) and {m[3] for m in DDL_MUTS} <= set(CONTROLS)
 assert len({m[0] for m in MUTS} | {m[0] for m in DDL_MUTS}) == len(MUTS) + len(DDL_MUTS)
 
@@ -246,12 +251,14 @@ $m_{mid}$;
 mig_md5 = md5(mig)
 arr = lambda xs: ', '.join(repr(x) for x in xs)
 SNAP = """  SELECT p.oid::regprocedure::text AS sig, md5(p.prosrc) AS src_md5, p.proacl::text AS acl, p.proconfig AS config, p.prosecdef AS secdef,
-         p.proowner AS owner, p.provolatile AS vol
+         p.proowner AS owner, p.provolatile AS vol, p.proisstrict AS strict, p.proleakproof AS leakproof, p.proparallel AS parallel,
+         p.procost AS cost, p.prorows AS nrows
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace"""
 CHANGED = """(SELECT count(*) FROM pg_temp.{t} b
          WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text = b.sig
                              AND md5(p.prosrc) = b.src_md5 AND p.proacl::text IS NOT DISTINCT FROM b.acl AND p.proconfig IS NOT DISTINCT FROM b.config
-                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol))"""
+                             AND p.prosecdef = b.secdef AND p.proowner = b.owner AND p.provolatile = b.vol AND p.proisstrict = b.strict
+                             AND p.proleakproof = b.leakproof AND p.proparallel = b.parallel AND p.procost = b.cost AND p.prorows = b.nrows))"""
 ANON_Q = """(SELECT coalesce(array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C"), '{{}}') FROM pg_proc p
         WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_' AND has_function_privilege('anon', p.oid, 'EXECUTE'))
         = (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(ARRAY[{names}]::text[]) x)"""
@@ -276,6 +283,8 @@ BEGIN
     'readers_api_grants', (SELECT count(*) FROM unnest(ARRAY[{arr(SIG[n] for n in READERS)}]) s, unnest(ARRAY['anon', 'authenticated', 'service_role']) r
         WHERE has_function_privilege(r, s::regprocedure, 'EXECUTE')),
     'readers_postgres', (SELECT bool_and(has_function_privilege('postgres', s::regprocedure, 'EXECUTE')) FROM unnest(ARRAY[{arr(SIG[n] for n in READERS)}]) s),
+    'tools_definer_owner_path', (SELECT bool_and(p.prosecdef AND p.proowner = 'postgres'::regrole::oid AND array_to_string(p.proconfig, ',') = 'search_path=""')
+        FROM unnest(ARRAY[{arr(SIG[n] for n in ANON_NEW)}]) s JOIN pg_proc p ON p.oid = to_regprocedure(s)),
     'tools_other_grants', (SELECT count(*) FROM unnest(ARRAY[{arr(SIG[n] for n in ANON_NEW)}]) s, unnest(ARRAY['authenticated', 'service_role']) r
         WHERE has_function_privilege(r, s::regprocedure, 'EXECUTE')),
     'anon_mcp_17', {ANON_Q.format(names=arr(ANON_ALL))},
@@ -288,7 +297,7 @@ BEGIN
     'check_count_unchanged', {CHECKS_Q.format(t='p4263p8_check_before')},
     'ledger', (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '{VERSION}')) INTO v;
   IF v -> 'bodies' <> '{{}}'::jsonb OR (v ->> 'readers_ok')::boolean IS NOT TRUE OR (v ->> 'readers_api_grants')::int <> 0
-     OR (v ->> 'readers_postgres')::boolean IS NOT TRUE OR (v ->> 'tools_other_grants')::int <> 0 OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE
+     OR (v ->> 'readers_postgres')::boolean IS NOT TRUE OR (v ->> 'tools_definer_owner_path')::boolean IS NOT TRUE OR (v ->> 'tools_other_grants')::int <> 0 OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE
      OR (v ->> 'existing_functions_changed')::int <> 0 OR (v ->> 'functions_added')::boolean IS NOT TRUE OR (v ->> 'tool_check')::boolean IS NOT TRUE
      OR (v ->> 'outcome_check_unchanged')::boolean IS NOT TRUE OR (v ->> 'check_count_unchanged')::boolean IS NOT TRUE OR (v ->> 'ledger')::int <> 1 THEN
     RAISE EXCEPTION 'APPLY POST-CHECK {VERSION} FAILED, nothing applied: %', v;
