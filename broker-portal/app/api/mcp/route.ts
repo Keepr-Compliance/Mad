@@ -86,8 +86,9 @@ export async function POST(req: Request): Promise<Response> {
   const requests = body.kind === 'parsed' ? body.ids.length : 0;
   if (requests > MCP_BATCH_LIMIT) return done(mcpBatchTooLarge(), 'batch_too_large');
 
-  // A POST counts its JSON-RPC requests toward both limits; a POST with none counts 1 toward the window only.
+  // A POST counts its JSON-RPC requests toward both limits; a POST with none counts 1 toward each.
   const windowCost = Math.max(1, requests);
+  const inFlightCost = Math.max(1, requests);
   const refuse = (reason: Refusal) => {
     // A body that is not JSON has no request id to answer: one error with id null.
     const answer = body.kind === 'parsed' ? mcpRateLimited(body.ids, body.batch) : mcpRateLimited([null], false);
@@ -95,7 +96,7 @@ export async function POST(req: Request): Promise<Response> {
   };
   // A token that already has counters is counted (or refused) before the database; counters are created only for
   // a token mcp_check_access accepted.
-  let admission = admitKnownMcpRequest(atDigest, windowCost, requests);
+  let admission = admitKnownMcpRequest(atDigest, windowCost, inFlightCost);
   if (admission && !admission.ok) return refuse(admission.reason);
 
   const access = await checkAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
@@ -106,7 +107,7 @@ export async function POST(req: Request): Promise<Response> {
   if (access.kind !== 'ok') return done(mcpUnavailable(), 'unavailable', { error: dbCode(access.code) });
 
   if (!admission) {
-    admission = admitMcpRequest(atDigest, windowCost, requests);
+    admission = admitMcpRequest(atDigest, windowCost, inFlightCost);
     if (!admission.ok) return refuse(admission.reason);
   }
   const { slot } = admission;

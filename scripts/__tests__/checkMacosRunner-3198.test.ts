@@ -32,9 +32,9 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("BACKLOG-3198 check-macos-runner --workflows", () => {
-  it("passes on the repo's release.yml and ci.yml (4 macOS jobs)", () => {
+  it("passes on the repo's release.yml and ci.yml (6 macOS jobs)", () => {
     const r = run(["--workflows"]);
-    expect(r.stdout).toMatch(/OK — 4 macOS runs-on use macos-26/);
+    expect(r.stdout).toMatch(/OK — 6 macOS runs-on use macos-26/);
     expect(r.status).toBe(0);
   });
 
