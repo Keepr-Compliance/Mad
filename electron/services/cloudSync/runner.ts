@@ -59,6 +59,8 @@ export interface ReconcileSummary {
    * history row is `restored` by `cloud_user`. Not in orphanDeals; never deleted by "Delete them".
    */
   restoredOnlineOnly?: number;
+  /** PR-6: their online ids (at most RESTORED_CHECK_CAP), so "Delete them" spends no check on them again. */
+  restoredOnlineIds?: string[];
   deletesDeferred: number;
   marked: number;
 }
@@ -235,8 +237,13 @@ export class CloudSyncRunner {
         const here = store.readEligibleDealIds(db, userId);
         const candidates = [...deals].filter(([localId, on]) => !(on.removed || recorded.has(on.cloudId) || here.has(localId)));
         // BACKLOG-4263 PR-6: a deal the owner restored online is kept ("Online only"); one that could not be checked
-        // (a failed read, or past the check cap) is kept too: never deleted without that answer.
-        const { restored, unchecked } = await this.restoredOnlineByOwner(pinned, candidates.map(([, on]) => on.cloudId));
+        // (a failed read, or past the check cap) is kept too: never deleted without that answer. Deals the last
+        // reconcile already found restored are kept without spending a check, so the checks go to the others.
+        const known = new Set(store.lastRestoredOnlineIds(db, this.deps.projectRef, userId));
+        const toCheck = candidates.filter(([, on]) => !known.has(on.cloudId)).map(([, on]) => on.cloudId);
+        const checked = await this.restoredOnlineByOwner(pinned, toCheck);
+        const restored = new Set([...checked.restored, ...candidates.map(([, on]) => on.cloudId).filter((id) => known.has(id))]);
+        const unchecked = checked.unchecked;
         let kept = 0;
         for (const [, on] of candidates) {
           if (restored.has(on.cloudId) || unchecked.has(on.cloudId)) {
@@ -248,7 +255,7 @@ export class CloudSyncRunner {
           this.stopOn(res);
           if (!(res.kind === "ok" || (res.kind === "refused" && res.code === "not_found"))) return { ok: false, code: res.code };
         }
-        store.setOrphanCount(db, this.deps.projectRef, userId, kept - restored.size, restored.size);
+        store.setOrphanCount(db, this.deps.projectRef, userId, kept - restored.size, restored.size, [...restored]);
         return { ok: true, code: "" };
       } catch (error) {
         if (error instanceof StopPass) return { ok: false, code: error.outcome };
@@ -915,6 +922,7 @@ export class CloudSyncRunner {
     const summary: ReconcileSummary = {
       orphanDeals,
       restoredOnlineOnly: restored.size,
+      restoredOnlineIds: [...restored],
       deletesDeferred: deleteCandidates.length - toDelete.length,
       marked: mark.size,
     };

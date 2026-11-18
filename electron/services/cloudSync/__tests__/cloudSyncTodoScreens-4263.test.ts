@@ -28,6 +28,7 @@ import { enableForUser } from "../../db/cloudSyncDbService";
 import { CloudTodoScreens } from "../todoScreens";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
 import {
+  SET_CHECKLIST_ITEM_CHECKED_SQL,
   DELETE_CHECKLIST_IN_TRANSACTION_SQL,
   DELETE_PRIVATE_ITEM_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
@@ -200,6 +201,47 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       e.server.connections = [{ id: "conn-1", client_name: "Claude", provider: "anthropic", redirect_host: "claude.ai", consented_at: "2026-11-01T00:00:00Z", last_used_at: null }];
       const fresh = screensOf(e, db);
       expect((await fresh.forDeal(deal)).markers[I1]).toMatchObject({ kind: "ticked", who: "Claude" });
+    });
+  });
+
+  // ================================================================ MARKWAIT
+  describe("MARKWAIT: a part this computer changed and has not sent yet (SR P1-P3)", () => {
+    it("P1: an AI tick pulled, then unticked here and not sent: no marker (it would say Unticked by the app); none after the untick is kept", async () => {
+      const { db, deal, e, s } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: new Date().toISOString() });
+      await pass(e);
+      expect((await s.forDeal(deal)).markers[I1]).toMatchObject({ kind: "ticked" });
+      e.online.value = false;
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
+      expect(outbox(db).map((o) => o.part)).toEqual(["done"]);
+      expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
+      e.online.value = true;
+      await pass(e);
+      expect(outbox(db)).toEqual([]);
+      expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
+    });
+
+    it("P2: an AI note pulled, then a note edit here not sent: no marker while it waits", async () => {
+      const { db, deal, e, s } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "from the AI");
+      await pass(e);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
+    });
+
+    it("P3: the edit here then LOSES to a newer AI change: the marker is back and names the AI change", async () => {
+      const { db, deal, e, s } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "ai one", Date.now() - 120_000);
+      await pass(e);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 60_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai two", Date.now());
+      await pass(e);
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("ai two");
+      expect(outbox(db)).toEqual([]);
+      expect((await s.forDeal(deal)).markers[I1]).toMatchObject({ kind: "changed", who: "an AI app" });
     });
   });
 
@@ -469,6 +511,33 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect(e.server.todos).toEqual([]);
     });
 
+    it("SR P4: a last pull whose answer arrives after the turn-off committed writes nothing here", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "slow change online");
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_pull"
+          ? (new Promise((r) => setTimeout(() => r({ data: e.server.respond(fn, args), error: null, status: 200 }), 3_500)) as never)
+          : undefined;
+      expect(await e.service.turnOff()).toMatchObject({ success: true });
+      expect((db.prepare("SELECT enabled FROM cloud_sync_settings WHERE user_id = ?").get(USER_A) as { enabled: number }).enabled).toBe(0);
+      await new Promise((r) => setTimeout(r, 2_000));
+      e.server.override = null;
+      expect(item(db, I1)!.note).toBeNull();
+    }, 20_000);
+
+    it("the wait is bounded: a slow pass (3 s send, then 3 s pull) does not hold the turn-off for both", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("unsent", I1);
+      const slow = (fn: string, args: Record<string, JsonValue>) =>
+        new Promise((r) => setTimeout(() => r({ data: e.server.respond(fn, args), error: null, status: 200 }), 3_000)) as never;
+      e.server.override = (fn, args) => (fn === "cloud_todo_push" || fn === "cloud_todo_pull" ? slow(fn, args) : undefined);
+      const t = Date.now();
+      await e.service.turnOff();
+      const took = Date.now() - t;
+      e.server.override = null;
+      expect(took).toBeLessThan(5_500);
+    }, 20_000);
+
     it("offline: no pull is tried and the turn-off is not held up", async () => {
       const { db, e } = await synced();
       e.server.aiSet(onlineItem(e, I1), "note", "not reachable");
@@ -477,6 +546,25 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       await e.service.turnOff();
       expect(calls(e, "cloud_todo_pull")).toBe(pulls);
       expect(item(db, I1)!.note).toBeNull();
+    });
+  });
+
+  // ================================================================ ORPHORDER
+  describe("ORPHORDER: deals already found restored take no check slot", () => {
+    it("with 21 restored deals ahead of it, a plain online-only deal is still deleted by Delete them", async () => {
+      const { db, e } = await synced();
+      const install = e.server.deals[0].install;
+      for (let i = 1; i <= 22; i++) {
+        const id = fid(72, i);
+        e.server.deals.push({ id, owner: USER_A, install, localId: `gone-${String(i).padStart(2, "0")}`, hash: "h", version: 1, fullSyncAt: null, changeSeq: e.server.nextSeq(USER_A) });
+        if (i <= 21) e.server.history.set(id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr" }]);
+      }
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      await pass(e);
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      const online = new Set(e.server.deals.map((d) => d.id));
+      expect(online.has(fid(72, 22))).toBe(false);
+      for (let i = 1; i <= 21; i++) expect([i, online.has(fid(72, i))]).toEqual([i, true]);
     });
   });
 

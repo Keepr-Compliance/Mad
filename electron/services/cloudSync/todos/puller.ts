@@ -14,6 +14,7 @@
 import type { CallResult, CloudClient } from "../cloudClient";
 import type { SqlDb } from "../../db/cloudSyncSqlDb";
 import { getTodoCursor } from "../../db/cloudSyncTodoDbService";
+import { cloudOnForUser as cloudOnHere } from "../../db/cloudSyncTodoScreensDb";
 import {
   applyTodoPage,
   resetTodoCursorForFullPull,
@@ -114,6 +115,10 @@ export async function pullTodos(deps: TodoPullDeps): Promise<TodoPullSummary> {
         horizon,
       );
       deps.stopOn(res);
+      // PR-6 (SR P4): the answer can arrive after a turn-off, a sign-out or a stop committed while the call was in
+      // flight. Check again before anything of it is applied.
+      deps.guard();
+      if (!cloudOnHere(db, projectRef, userId)) return { ...summary, outcome: "failed" };
       const resync = res.kind === "ok" && res.body.resync_required === true;
       const horizonRequired =
         res.kind === "refused" && res.code === "horizon_required";

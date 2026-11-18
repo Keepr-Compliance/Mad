@@ -214,12 +214,16 @@ export class CloudTodoScreens {
     }
 
     const markers: Record<string, CloudTodoMarker> = {};
+    // A part this computer changed and has not sent yet is this computer's change now: no AI-app marker for it
+    // until the answer (a kept change clears the marker; a lost one keeps it).
+    const waiting = markerRows.length > 0 ? screens.waitingItemParts(db, ref, user, transactionId) : new Set<string>();
     for (const m of markerRows) {
       const j = parse(m.changed_json);
       const part = str(j?.part);
       const by = str(j?.by);
       const at = str(j?.at);
       if (!part || !PART_KEYS.has(part) || !by || !at) continue;
+      if (part !== "create" && waiting.has(`${m.local_id}|${part}`)) continue;
       const local = screens.itemValues(db, m.local_id);
       if (!local) continue;
       markers[m.local_id] = {

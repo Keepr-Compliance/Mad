@@ -1216,7 +1216,9 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     expect(changedTables(again.db, after)).toEqual([]);
     await again.svc.close();
 
-    // going back: 2.48.0's open and common writes on this v84 file
+    // going back: 2.48.0's open and common writes on this v84 file. Control for "2.48.0 never writes or drops the
+    // column or the index" (release coordinator, v84): mutant R1 (SR review, PR-6) adds to v84 a trigger that clears
+    // changed_json on any item update; it runs under 2.48.0 and turns the row comparison below red.
     const old = openAs248(path.join(dir, "mad.db"));
     expect(versionOf(old)).toBe(LATEST_VERSION);
     expect(runWrites248(old)).toHaveLength(WRITES_248.length);

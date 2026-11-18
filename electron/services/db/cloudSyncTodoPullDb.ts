@@ -819,7 +819,12 @@ class Page {
       new Set(),
     );
     // an item an AI app added: the marker says so (its title part carries the add's actor and time)
+    // an item restored from this computer's trash was not added by anyone now: no marker (any earlier one is dropped)
     if (!trash) this.markChanged(localId, [{ part: "create", pulled: parts.title }]);
+    else
+      this.db
+        .prepare("UPDATE cloud_sync_todo_state SET changed_json = NULL WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+        .run(this.ctx.projectRef, this.ctx.userId, localId);
     return "ok";
   }
 

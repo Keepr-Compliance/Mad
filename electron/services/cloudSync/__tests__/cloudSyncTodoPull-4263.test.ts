@@ -458,8 +458,13 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("a held op that loses to another side's later change does not write that change into the locked deal; this computer's value is sent back held and wins", async () => {
       const { db, deal, e } = await synced();
       db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
-      // second actor: the owner online (cloud_user) changes the note while the deal is locked here
-      e.server.aiSet(onlineItem(e, I1), "note", "online one");
+      // second actor: the owner online (cloud_user; the real server refuses an AI app on a locked deal)
+      const ownerSet = (value: string, at = Date.now()) => {
+        const t = onlineItem(e, I1);
+        t.parts.note = { rev: t.parts.note.rev + 1, value, at, by: "cloud_user:owner", edit_seq: null };
+        t.changeSeq = e.server.nextSeq(t.owner);
+      };
+      ownerSet("online one");
       let block = true;
       e.server.override = (fn, args) =>
         fn === "cloud_todo_push" && block
@@ -469,7 +474,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(item(db, I1)!.note).toBeNull();
       expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
       // a later change online, then the held op is answered (it loses on time)
-      e.server.aiSet(onlineItem(e, I1), "note", "online two", Date.now() + 60_000);
+      ownerSet("online two", Date.now() + 60_000);
       block = false;
       e.server.override = null;
       await pass(e);
@@ -537,6 +542,22 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       expect(cursor(db)).toMatchObject({ full_pull_owed: 0 });
       expect(live()).toEqual([{ dismissed_at: expect.any(String) }]);
+    });
+
+    it("a 'behind' full pull (records cleared, then the file found older than its own online history) also stores it dismissed", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'behind', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: expect.any(String) }]);
+    });
+
+    it("a backup-restore full pull keeps a conflict it has not seen undismissed (the restored file holds the notices it already had)", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'restore', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: null }]);
     });
 
     it("a resync full pull keeps a conflict it has not seen undismissed", async () => {
@@ -632,6 +653,20 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       expect(item(db, I1)!.note).toBe("odd actor");
       expect(mark(db, I1)).toBeNull();
+    });
+
+    it("an AI-added item removed online and restored by the owner comes back without an 'added' marker", async () => {
+      const { db, e } = await synced();
+      const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
+      await pass(e);
+      expect(mark(db, t.id)).toMatchObject({ part: "create" });
+      e.server.removeOnline(t);
+      await pass(e);
+      expect(item(db, t.id)).toBeUndefined();
+      e.server.restoreOnline(t);
+      await pass(e);
+      expect(item(db, t.id)).toBeDefined();
+      expect(mark(db, t.id)).toBeNull();
     });
 
     it("a locked deal's held change sets no marker (the change is not shown here)", async () => {

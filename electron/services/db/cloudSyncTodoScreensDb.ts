@@ -87,6 +87,16 @@ export function markersForDeal(db: SqlDb, projectRef: string, userId: string, tr
     .all(projectRef, userId, transactionId) as MarkerRow[];
 }
 
+/** This user's item parts waiting to be sent for one deal, as `local_id|part`. */
+export function waitingItemParts(db: SqlDb, projectRef: string, userId: string, transactionId: string): Set<string> {
+  const rows = db
+    .prepare(
+      "SELECT local_id, part FROM cloud_sync_todo_outbox WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND transaction_id = ?",
+    )
+    .all(projectRef, userId, transactionId) as Array<{ local_id: string; part: string }>;
+  return new Set(rows.map((r) => `${r.local_id}|${r.part}`));
+}
+
 /** The online id of a local todo (its shadow), or null when it is not online yet. */
 export function cloudIdOf(db: SqlDb, projectRef: string, userId: string, entity: "item" | "checklist", localId: string): string | null {
   const r = db
