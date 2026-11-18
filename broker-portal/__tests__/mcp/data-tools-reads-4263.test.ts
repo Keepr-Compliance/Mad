@@ -388,7 +388,8 @@ describe('BACKLOG-4263 PR-8: rpc parity with the migration', () => {
   });
   it('the fixtures came from a harness run of this exact migration file (md5)', () => {
     const facts = JSON.parse(readFileSync(path.join(REPO, 'supabase/tests/backlog-4263-pr8/catalog-facts.json'), 'utf8'));
-    const fileMd5 = createHash('md5').update(readFileSync(path.join(REPO, MIGRATION_PATH), 'utf8')).digest('hex');
+    // the file as committed (LF); a checkout that converts line endings must not change the answer
+    const fileMd5 = createHash('md5').update(readFileSync(path.join(REPO, MIGRATION_PATH), 'utf8').replace(/\r\n?/g, '\n')).digest('hex');
     expect(facts.migration).toBe(MIGRATION_PATH);
     expect(facts.migration_md5).toBe(fileMd5);
     expect(FX._meta.migration_md5).toBe(fileMd5);
