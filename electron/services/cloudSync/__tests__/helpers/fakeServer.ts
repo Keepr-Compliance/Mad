@@ -840,8 +840,17 @@ export class FakeServer {
     return "applied";
   }
 
-  /** An AI-app add to a checklist (local_item_id = the new id, :690-720). */
-  aiAdd(checklist: FakeTodo, title: string, atMs: number = this.serverNow()): FakeTodo {
+  /**
+   * An AI-app add to a checklist (local_item_id = the new id, :690-720). sort_order: what mcp_add_todo sends
+   * (migration 20261118130000, _mcp_todo_call ADD:order): the next free place on the live list, max + 1 over its live
+   * items, 0 for an empty list. Observed on the real functions (harness-5.sql c_order): live My items 0, 1, 2 and a
+   * removed one at 3 -> 3; a new list -> 0. Pass null for a create without sort_order (the core's own default).
+   * The SQL takes the max over the deal's live My items lists; the server keeps at most one live list per deal
+   * (partial unique index, migration 20261118110000), so that is this one list.
+   */
+  aiAdd(checklist: FakeTodo, title: string, atMs: number = this.serverNow(), sortOrder?: number | null): FakeTodo {
+    const live = this.todos.filter((x) => x.entity === "item" && x.checklistId === checklist.id && !x.removed).map((x) => x.parts.order.value);
+    const order = sortOrder !== undefined ? sortOrder : live.length === 0 ? 0 : Math.max(...live.map((v) => (typeof v === "number" ? v : -1))) + 1;
     const id = cloudId();
     const by = "ai_app:conn-1";
     const t: FakeTodo = {
@@ -853,8 +862,8 @@ export class FakeServer {
         title: { rev: 1, value: title, at: atMs, by, edit_seq: null },
         note: { rev: 1, value: null, at: atMs, by, edit_seq: null },
         due: { rev: 1, value: null, at: atMs, by, edit_seq: null },
-        // migration :638 / _cloud_todo_norm :407: an AI create without sort_order stores NULL
-        order: { rev: 1, value: null, at: atMs, by, edit_seq: null },
+        // migration :638 / _cloud_todo_norm :407 store the op's sort_order (NULL when none is sent)
+        order: { rev: 1, value: order, at: atMs, by, edit_seq: null },
         removed: { rev: 1, value: { removed_at: null, kind: null }, at: atMs, by, edit_seq: null },
       },
     };

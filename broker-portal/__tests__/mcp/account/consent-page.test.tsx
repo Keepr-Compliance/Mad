@@ -344,3 +344,40 @@ describe('the nonce reaches the form unchanged', () => {
     expect(JSON.stringify(el)).toContain(NONCE);
   });
 });
+
+describe('BACKLOG-4263 PR-5: the wording follows the scope the database would grant', () => {
+  it('a read grant (scope mcp:read) shows the read-only wording and nothing about changes', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk({ scope: 'mcp:read' }), error: null });
+    const { container } = await renderPage();
+    const text = container.textContent ?? '';
+    expect(text).toContain(CONSENT.lead('Claude (Anthropic)'));
+    expect(text).toContain(CONSENT.scope);
+    expect(text).not.toContain(CONSENT.write.scope);
+    expect(text).not.toContain(CONSENT.write.changes);
+    expect(text).not.toMatch(/tick, add, edit and remove/);
+  });
+
+  it('a write grant (scope mcp:todos) shows the wording the founder accepted (Q4, change a), and not the read-only line', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk({ scope: 'mcp:todos' }), error: null });
+    const { container } = await renderPage();
+    const text = container.textContent ?? '';
+    expect(text).toContain('Claude (Anthropic) wants to use your Keepr data.');
+    expect(text).toContain(
+      'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists (including private ones) and todos, ' +
+        'and the people on each deal with their names, companies, email addresses, phone numbers and notes. ' +
+        'It can tick, add, edit and remove your todos and set their notes and due dates. ' +
+        'It cannot read, send or delete your emails or texts, cannot read your files or contact list, and cannot change anything else.',
+    );
+    expect(text).toContain('Every change shows which app made it. You can see every change in Keepr and restore removed todos for 30 days.');
+    expect(text).not.toContain(CONSENT.scope);
+    expect(text).not.toContain(CONSENT.lead('Claude (Anthropic)'));
+    expect(screen.getByRole('button', { name: CONSENT.allow })).toBeInTheDocument();
+  });
+
+  it.each([['mcp:write'], ['mcp:read mcp:todos'], ['MCP:TODOS']])('any other scope %p is "could not complete", with no buttons', async (scope) => {
+    mockRpc.mockResolvedValue({ data: viewOk({ scope }), error: null });
+    await renderPage();
+    expect(screen.getByRole('alert')).toHaveTextContent(M_C.failed);
+    expect(buttons()).toHaveLength(0);
+  });
+});

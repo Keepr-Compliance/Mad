@@ -6,7 +6,7 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/server';
 import { getDealChecklistsFor } from '@/lib/mcp/oauth/rpc';
 import { accessFor, argsObject, fromDatabase, InvalidInput, optBoolean, optString, TOOL_ANNOTATIONS, toolError } from './result';
-import { CHECKLISTS_SHAPE, toJsonSchema, UUID } from './shapes';
+import { checklistsOutputSchema, UUID } from './shapes';
 import { ARG_TEXT, RESULT_TEXT, TOOL_MESSAGES, TOOL_TEXT } from './text';
 
 export const GET_DEAL_CHECKLISTS_TOOL: Tool = {
@@ -23,7 +23,7 @@ export const GET_DEAL_CHECKLISTS_TOOL: Tool = {
     required: ['deal_id'],
     additionalProperties: false,
   },
-  outputSchema: withDescriptions(toJsonSchema(CHECKLISTS_SHAPE)) as Tool['outputSchema'],
+  outputSchema: withDescriptions(checklistsOutputSchema()) as Tool['outputSchema'],
   annotations: TOOL_ANNOTATIONS,
 };
 

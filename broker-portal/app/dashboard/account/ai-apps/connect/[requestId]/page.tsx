@@ -90,7 +90,9 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
   const provider = PROVIDER_LABELS[view.provider];
   return (
     <Shell>
-      <p className="text-base font-semibold text-gray-900">{CONSENT.lead(provider)}</p>
+      <p className="text-base font-semibold text-gray-900">
+        {view.canChangeTodos ? CONSENT.write.lead(provider) : CONSENT.lead(provider)}
+      </p>
       <p data-testid="consent-name-host">
         {CONSENT.nameLabel}
         &ldquo;<bdi>{view.clientName}</bdi>&rdquo;{CONSENT.nameHost(view.redirectHost)}
@@ -101,7 +103,8 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
         </p>
       )}
       <p>{CONSENT.onlyIf(provider)}</p>
-      <p>{CONSENT.scope}</p>
+      <p>{view.canChangeTodos ? CONSENT.write.scope : CONSENT.scope}</p>
+      {view.canChangeTodos && <p>{CONSENT.write.changes}</p>}
       <p>{CONSENT.agreement(provider)}</p>
       <p>{CONSENT.disconnect}</p>
       <p>{CONSENT.whatDisconnects}</p>

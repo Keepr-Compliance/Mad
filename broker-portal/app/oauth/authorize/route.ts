@@ -80,18 +80,26 @@ const route = withOAuthRoute(
     const state = p.get('state') ?? null;
     const binding = existingBinding(req) ?? newBinding();
 
-    const result = await authorizeBegin(cfg, {
-      secret: cfg.secret,
-      clientId,
-      redirectUri,
-      codeChallenge: p.get('code_challenge') ?? null,
-      codeChallengeMethod: p.get('code_challenge_method') ?? null,
-      resource: cfg.resource,
-      scope: normaliseScope(p.get('scope')),
-      state,
-      bindingSha256: bindingDigest(binding),
-      ipSha256: toBytea(ipDigest(cfg.pepper, clientIp(req))),
-    });
+    const begin = (scope: string) =>
+      authorizeBegin(cfg, {
+        secret: cfg.secret,
+        clientId,
+        redirectUri,
+        codeChallenge: p.get('code_challenge') ?? null,
+        codeChallengeMethod: p.get('code_challenge_method') ?? null,
+        resource: cfg.resource,
+        scope,
+        state,
+        bindingSha256: bindingDigest(binding),
+        ipSha256: toBytea(ipDigest(cfg.pepper, clientIp(req))),
+      });
+    const scope = normaliseScope(p.get('scope'));
+    let result = await begin(scope);
+    // BACKLOG-4263 PR-5: a database without migration 20261118130000 knows only 'mcp:read'. A request that asked
+    // for 'mcp:todos' then connects read-only, as the newer database answers it while its write switch is off.
+    if (scope === 'mcp:todos' && result.kind === 'redirect' && result.error === 'invalid_scope') {
+      result = await begin('mcp:read');
+    }
 
     switch (result.kind) {
       case 'ok':

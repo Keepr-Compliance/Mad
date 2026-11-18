@@ -35,6 +35,16 @@ export const CONSENT = {
     'Turning Keepr Cloud off deletes your online copy and disconnects every AI app. ' +
     'Signing out does not disconnect them, including "Sign out all devices".',
   signedInAs: (email: string) => `Signed in as ${email}`,
+  /** BACKLOG-4263 PR-5 (founder decision Q4): the wording when approving grants 'mcp:todos'. */
+  write: {
+    lead: (provider: string) => `${provider} wants to use your Keepr data.`,
+    scope:
+      'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists (including private ones) and todos, ' +
+      'and the people on each deal with their names, companies, email addresses, phone numbers and notes. ' +
+      'It can tick, add, edit and remove your todos and set their notes and due dates. ' +
+      'It cannot read, send or delete your emails or texts, cannot read your files or contact list, and cannot change anything else.',
+    changes: 'Every change shows which app made it. You can see every change in Keepr and restore removed todos for 30 days.',
+  },
   allow: 'Allow',
   deny: 'Deny',
   allowing: 'Connecting…',
@@ -58,7 +68,7 @@ export const M_C = {
 } as const;
 
 export const AI_APPS = {
-  intro: 'AI apps you allowed to read your Keepr data.',
+  intro: 'AI apps you connected to your Keepr data.',
   nameLabel: 'The app calls itself: ',
   sendsBackTo: (host: string) => `Sends you back to ${host}`,
   connected: (date: string) => `Approved ${date} UTC`,

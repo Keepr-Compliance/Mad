@@ -13,7 +13,7 @@ import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
 import { mediaType, oauthError, oauthJson, readBodyText } from '@/lib/mcp/oauth/http';
 import { dbCode, errorNameTag, filterKeys, REGISTER_LOG_KEYS } from '@/lib/mcp/oauth/log';
 import { registerClient } from '@/lib/mcp/oauth/rpc';
-import { clientNameFor, isRedirectUriShape, isSubsetOf } from '@/lib/mcp/oauth/validate';
+import { ADVERTISED_SCOPE, clientNameFor, isRedirectUriShape, isSubsetOf } from '@/lib/mcp/oauth/validate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -89,7 +89,7 @@ const route = withOAuthRoute('register', ['POST'], async (req, cfg, log) => {
         grant_types: [...GRANT_TYPES],
         response_types: [...RESPONSE_TYPES],
         token_endpoint_auth_method: 'none',
-        scope: 'mcp:read',
+        scope: ADVERTISED_SCOPE,
       });
     case 'error':
       log.outcome = result.error;

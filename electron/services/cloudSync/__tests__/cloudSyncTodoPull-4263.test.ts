@@ -865,7 +865,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("S4: a todo created online with sort_order NULL (an AI add, the server's My items list) is created here with 0 and sends no op, neither after a full pull nor after a daily scan; nothing parks", async () => {
       const { db, e } = await synced();
-      const added = e.server.aiAdd(onlineList(e, MY), "null order");
+      const added = e.server.aiAdd(onlineList(e, MY), "null order", undefined, null);
       expect(added.parts.order.value).toBeNull();
       const list: FakeTodo = { ...onlineList(e, CL), id: fid(96, 1), localId: fid(96, 1), templateId: "tpl-null", aliases: [], fields: { template_name: "Online list", is_private: false },
         changeSeq: e.server.nextSeq(USER_A), parts: { ...onlineList(e, CL).parts, order: { rev: 1, value: null, at: Date.now(), by: "ai_app:conn-1", edit_seq: null } } };
@@ -1084,6 +1084,51 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(onlineItem(e, I1).parts.note.value).toBe("never sent");
       expect(item(db, I1)!.note).toBe("never sent");
       expect(cursor(db)).toMatchObject({ full_pull_owed: 0, full_pull_kind: null });
+    });
+  });
+
+  // ================================================================ PR-5: AI-app writes as the real write tools make them
+  describe("PR-5: an AI app's writes (mcp_update_todo / mcp_add_todo, migration 20261118130000)", () => {
+    it("(b) an AI add arrives with the sort_order the tool sends (next free place on My items) and is created here at it; nothing is sent back, not even by the scan", async () => {
+      const { db, e } = await synced();
+      // the fixture's My items list holds I2 at 0
+      const added = e.server.aiAdd(onlineList(e, MY), "Book the movers");
+      expect(added.parts.order.value).toBe(1);
+      const sent = allOps(e).length;
+      await pass(e);
+      expect(item(db, added.id)).toMatchObject({ checklist_id: MY, title: "Book the movers", sort_order: 1 });
+      expect(shadow(db, added.id)).toMatchObject({ cloud_id: added.id, order_rev: 1 });
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
+      await pass(e);
+      expect(allOps(e)).toHaveLength(sent);
+      // a second add goes after it, as the tool computes it
+      expect(e.server.aiAdd(onlineList(e, MY), "Second").parts.order.value).toBe(2);
+    });
+
+    it("(a) a keep-local full pull never keeps this computer's value over an AI app's change: only parts this install wrote last are kept", async () => {
+      const { db, e } = await synced();
+      const t = onlineItem(e, I1);
+      expect(e.server.aiSet(t, "note", "from Claude")).toBe("applied");
+      // this computer holds another value it never sent (as a restored file would), then a keep-local full pull
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("local, never sent", I1));
+      reclaimInstallForUser(db, PROJECT, USER_A, new Date());
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: null });
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("from Claude");
+      expect(onlineItem(e, I1).parts.note).toMatchObject({ value: "from Claude", by: "ai_app:conn-1" });
+      expect(outbox(db)).toEqual([]);
+    });
+
+    it("(a) second actor on different parts during a send: the AI app's done survives this computer's note push and the next pull", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk note", I1);
+      e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: "2026-11-18T00:00:00.000Z" });
+      await pass(e);
+      await pass(e);
+      expect(item(db, I1)).toMatchObject({ note: "desk note", is_checked: 1 });
+      expect(onlineItem(e, I1).parts.note.value).toBe("desk note");
+      expect((onlineItem(e, I1).parts.done.value as Row).is_checked).toBe(true);
+      expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
     });
   });
 

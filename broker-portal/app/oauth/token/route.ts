@@ -20,6 +20,7 @@ import {
   isCredential,
   normaliseScope,
   parseForm,
+  SUPPORTED_SCOPES,
 } from '@/lib/mcp/oauth/validate';
 
 export const runtime = 'nodejs';
@@ -89,7 +90,9 @@ const route = withOAuthRoute('token', ['POST'], async (req, cfg, log) => {
     return refuse(log, 'bad_resource', 'invalid_target');
   }
   const scope = p.get('scope');
-  if (scope !== undefined && normaliseScope(scope) !== 'mcp:read') return refuse(log, 'bad_scope', 'invalid_scope');
+  if (scope !== undefined && !(SUPPORTED_SCOPES as readonly string[]).includes(normaliseScope(scope))) {
+    return refuse(log, 'bad_scope', 'invalid_scope');
+  }
 
   const accessToken = newToken('at');
   const refreshToken = newToken('rt');

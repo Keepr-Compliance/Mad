@@ -21,8 +21,9 @@ jest.mock('@supabase/supabase-js', () => ({
 import * as route from '@/app/api/mcp/route';
 import * as serverModule from '@/lib/mcp/server';
 import { cleanAddress } from '@/lib/mcp/prompts';
+import { WRITE_TOOLS } from '@/lib/mcp/tools/todos';
 import { CHECKLISTS_SHAPE, GET_DEAL_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
-import { PROMPT_MESSAGES, PROMPT_TEXT, SERVER_INSTRUCTIONS } from '@/lib/mcp/tools/text';
+import { PROMPT_MESSAGES, PROMPT_TEXT, SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_WRITE } from '@/lib/mcp/tools/text';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, refusal } from './oauth/fixtures';
 
 const BASE = 'https://portal.test';
@@ -31,8 +32,8 @@ const ENV = { ...process.env };
 const realFetch = global.fetch;
 const KNOWN_DIGEST = expectedDigest(ACCESS_TOKEN);
 const METADATA = `${BASE}/api/mcp/resource-metadata`;
-const CHALLENGE_NO_TOKEN = `Bearer resource_metadata="${METADATA}", scope="mcp:read"`;
-const CHALLENGE_INVALID = `Bearer error="invalid_token", resource_metadata="${METADATA}", scope="mcp:read"`;
+const CHALLENGE_NO_TOKEN = `Bearer resource_metadata="${METADATA}", scope="mcp:read mcp:todos"`;
+const CHALLENGE_INVALID = `Bearer error="invalid_token", resource_metadata="${METADATA}", scope="mcp:read mcp:todos"`;
 
 // ---------------------------------------------------------------------------
 // The texts, written out here on purpose.
@@ -220,7 +221,8 @@ describe('prompts/list', () => {
     const { prompts } = await client.listPrompts();
     expect(prompts).toEqual(PROMPT_LIST);
     await client.close();
-    expect(rpcNames().every((n) => n === 'mcp_check_access')).toBe(true);
+    // the two per-request access answers (BACKLOG-4263 PR-5 adds mcp_write_access); no tool, no data function
+    expect(rpcNames().every((n) => n === 'mcp_check_access' || n === 'mcp_write_access')).toBe(true);
   });
 });
 
@@ -249,7 +251,7 @@ describe('prompts/get', () => {
     await client.getPrompt({ name: 'brief_me_on_a_deal', arguments: { address: 'Main St' } });
     await client.close();
     expect(rpcNames().length).toBeGreaterThan(0);
-    expect(new Set(rpcNames())).toEqual(new Set(['mcp_check_access']));
+    expect(new Set(rpcNames())).toEqual(new Set(['mcp_check_access', 'mcp_write_access']));
   });
 
   it.each(ERAS)('%s: an unknown prompt is -32602 with the fixed text', async (_l, mode) => {
@@ -394,7 +396,7 @@ describe('prompts requests are refused exactly like tools requests', () => {
     expect(build).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
     expect((await rpcBody(res)).result).toBeDefined();
-    expect(rpcNames()).toEqual(['mcp_check_access']);
+    expect(rpcNames()).toEqual(['mcp_check_access', 'mcp_write_access']);
   });
 });
 
@@ -471,6 +473,13 @@ const TEXTS: Array<{ label: string; text: string; tools: ToolName[]; fields: Fie
     args: [['list_deals', 'limit'], ['list_deals', 'cursor'], ['get_deal_checklists', 'deal_id'], ['get_deal_checklists', 'only_open']],
   },
   {
+    label: 'instructions for a connection that can change todos',
+    text: SERVER_INSTRUCTIONS_WRITE,
+    tools: ['list_deals', 'get_deal', 'get_deal_checklists', 'update_todo', 'add_todo', 'remove_todo', 'restore_todo'],
+    fields: LIST_ROW,
+    args: [['list_deals', 'limit'], ['list_deals', 'cursor'], ['get_deal_checklists', 'deal_id'], ['get_deal_checklists', 'only_open']],
+  },
+  {
     label: 'whats_on_my_plate',
     text: PROMPT_TEXT.whats_on_my_plate.message,
     tools: ['list_deals', 'get_deal_checklists'],
@@ -522,7 +531,7 @@ const TEXTS: Array<{ label: string; text: string; tools: ToolName[]; fields: Fie
 ];
 
 describe('the texts name fields exactly as the tools return them', () => {
-  const toolByName = new Map(serverModule.TOOLS.map((t) => [t.name, t]));
+  const toolByName = new Map([...serverModule.TOOLS, ...WRITE_TOOLS].map((t) => [t.name, t]));
 
   it.each(TEXTS)('$label: every declared result field is in that tool\'s shape and in its real output', ({ text, fields }) => {
     for (const [tool, p] of fields) {

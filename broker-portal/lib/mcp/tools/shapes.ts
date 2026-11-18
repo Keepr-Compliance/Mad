@@ -26,7 +26,7 @@ export type Shape =
   | { t: 'integer'; nullable?: boolean; values?: readonly number[] }
   | { t: 'number'; nullable?: boolean }
   | { t: 'boolean'; nullable?: boolean }
-  | { t: 'object'; props: Readonly<Record<string, Shape>> }
+  | { t: 'object'; props: Readonly<Record<string, Shape>>; nullable?: boolean }
   | { t: 'array'; items: Shape }
   /** a fixed-length array: exactly these positions, each with its own shape (BACKLOG-4263 rows) */
   | { t: 'tuple'; items: readonly Shape[] };
@@ -65,8 +65,8 @@ const DEAL_BASE = {
   saved_from: int(true),
 };
 
-const frame = (kind: string, props: Record<string, Shape>): Shape =>
-  obj({ kind: oneOf([kind]), v: { t: 'integer', values: [1] }, about: str(), ...props });
+const frame = (kind: string, props: Record<string, Shape>, v = 1): Shape =>
+  obj({ kind: oneOf([kind]), v: { t: 'integer', values: [v] }, about: str(), ...props });
 
 /** the date keys of deal.details, also returned on each list_deals row as deadlines */
 export const DEADLINE_PROPS = {
@@ -121,31 +121,84 @@ export const GET_DEAL_SHAPE = frame('keepr.get_deal', {
   people_returned: int(),
 });
 
-export const CHECKLISTS_SHAPE = frame('keepr.get_deal_checklists', {
-  deal_id: id(),
-  checklists: arr(
-    obj({
-      checklist_id: id(),
-      name: str(true),
-      private: bool(),
-      items: arr(
-        obj({
-          item_id: id(),
-          title: str(true),
-          description: str(true),
-          required: bool(true),
-          done: bool(true),
-          done_at: instant(true),
-          note: str(true),
-          expected_document: str(true),
-        })
-      ),
-    })
-  ),
-  items_total: int(),
-  items_open_required: int(),
-  items_returned: int(),
-  more: bool(),
+const CHECKLIST_ITEM_V1 = {
+  item_id: id(),
+  title: str(true),
+  description: str(true),
+  required: bool(true),
+  done: bool(true),
+  done_at: instant(true),
+  note: str(true),
+  expected_document: str(true),
+};
+/**
+ * Frame v2 (BACKLOG-4263 PR-5, migration 20261118130000): four more keys on each item. The database emits it
+ * only while AI-app writes are switched on; otherwise v1, byte for byte. This portal accepts both.
+ */
+const CHECKLIST_ITEM_V2 = {
+  ...CHECKLIST_ITEM_V1,
+  due_date: day(),
+  note_complete: bool(),
+  editable_title: bool(),
+  removable: bool(),
+};
+const checklistsFrame = (item: Record<string, Shape>, v: number): Shape =>
+  frame(
+    'keepr.get_deal_checklists',
+    {
+      deal_id: id(),
+      checklists: arr(obj({ checklist_id: id(), name: str(true), private: bool(), items: arr(obj(item)) })),
+      items_total: int(),
+      items_open_required: int(),
+      items_returned: int(),
+      more: bool(),
+    },
+    v
+  );
+export const CHECKLISTS_SHAPE = checklistsFrame(CHECKLIST_ITEM_V1, 1);
+export const CHECKLISTS_SHAPE_V2 = checklistsFrame(CHECKLIST_ITEM_V2, 2);
+export const CHECKLIST_ITEM_V2_KEYS: readonly string[] = Object.keys(CHECKLIST_ITEM_V2);
+const V2_ONLY_KEYS = Object.keys(CHECKLIST_ITEM_V2).filter((k) => !(k in CHECKLIST_ITEM_V1));
+
+/**
+ * The declared outputSchema of get_deal_checklists: one schema both frames satisfy. v is 1 or 2; the four item keys
+ * v2 adds are declared but not required (a v1 answer has none of them).
+ */
+export function checklistsOutputSchema(): Record<string, unknown> {
+  const schema = toJsonSchema(CHECKLISTS_SHAPE_V2) as Record<string, any>;
+  schema.properties.v = { type: 'integer', enum: [1, 2] };
+  const item = schema.properties.checklists.items.properties.items.items;
+  item.required = (item.required as string[]).filter((k) => !V2_ONLY_KEYS.includes(k));
+  return schema;
+}
+
+/** Statuses of keepr.todo_change; the last five mean nothing was changed. */
+export const TODO_STATUSES = [
+  'applied',
+  'unchanged',
+  'added',
+  'already_added',
+  'removed',
+  'already_removed',
+  'restored',
+  'not_removed',
+  'locked',
+  'not_allowed',
+  'is_removed',
+  'not_restorable',
+  'note_was_shortened',
+] as const;
+
+/** One todo as a write tool returns it: the v2 checklist item keys but description and expected_document, plus
+ * deal_id, checklist_id and removed (_mcp_todo_item_out). */
+const { description: _d, expected_document: _e, ...TODO_ITEM_PARTS } = CHECKLIST_ITEM_V2;
+const TODO_ITEM = obj({ ...TODO_ITEM_PARTS, deal_id: id(), checklist_id: id(), removed: bool() });
+export const TODO_ITEM_KEYS: readonly string[] = Object.keys((TODO_ITEM as Extract<Shape, { t: 'object' }>).props);
+
+/** update_todo, add_todo, remove_todo, restore_todo (migration 20261118130000, _mcp_todo_call). */
+export const TODO_CHANGE_SHAPE = frame('keepr.todo_change', {
+  status: oneOf(TODO_STATUSES),
+  item: { ...(TODO_ITEM as Extract<Shape, { t: 'object' }>), nullable: true },
 });
 
 /**
@@ -196,6 +249,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 export function checkShape(v: unknown, s: Shape): boolean {
   switch (s.t) {
     case 'object': {
+      if (v === null) return s.nullable === true;
       if (!isPlainObject(v)) return false;
       const keys = Object.keys(s.props);
       if (Object.keys(v).length !== keys.length) return false;
@@ -227,7 +281,7 @@ export function toJsonSchema(s: Shape): JsonSchema {
   switch (s.t) {
     case 'object':
       return {
-        type: 'object',
+        type: s.nullable ? ['object', 'null'] : 'object',
         properties: Object.fromEntries(Object.entries(s.props).map(([k, p]) => [k, toJsonSchema(p)])),
         required: Object.keys(s.props),
       };

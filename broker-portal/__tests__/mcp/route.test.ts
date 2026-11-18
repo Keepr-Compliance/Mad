@@ -48,8 +48,8 @@ const MCP_URL = `${BASE}/api/mcp`;
 const ENV = { ...process.env };
 const realFetch = global.fetch;
 const METADATA = `${BASE}/api/mcp/resource-metadata`;
-const CHALLENGE_NO_TOKEN = `Bearer resource_metadata="${METADATA}", scope="mcp:read"`;
-const CHALLENGE_INVALID = `Bearer error="invalid_token", resource_metadata="${METADATA}", scope="mcp:read"`;
+const CHALLENGE_NO_TOKEN = `Bearer resource_metadata="${METADATA}", scope="mcp:read mcp:todos"`;
+const CHALLENGE_INVALID = `Bearer error="invalid_token", resource_metadata="${METADATA}", scope="mcp:read mcp:todos"`;
 
 const KNOWN_DIGEST = expectedDigest(ACCESS_TOKEN);
 
@@ -179,7 +179,7 @@ describe('A1: no Authorization header', () => {
     expect(await res.json()).toEqual({
       resource: MCP_URL,
       authorization_servers: [BASE],
-      scopes_supported: ['mcp:read'],
+      scopes_supported: ['mcp:read', 'mcp:todos'],
       bearer_methods_supported: ['header'],
       resource_name: 'Keepr',
     });
@@ -438,7 +438,7 @@ describe('C33: resource, authInfo and order', () => {
       },
     } as typeof real);
     expect((await post(bearer(ACCESS_TOKEN))).status).toBe(200);
-    expect(seen).toEqual([{ token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest: KNOWN_DIGEST } }]);
+    expect(seen).toEqual([{ token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest: KNOWN_DIGEST, canWrite: false } }]);
     expect(JSON.stringify(seen)).not.toContain(ACCESS_TOKEN);
     expect(JSON.stringify(seen)).not.toContain('T'.repeat(43));
   });

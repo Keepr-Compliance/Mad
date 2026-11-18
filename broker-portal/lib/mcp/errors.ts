@@ -4,6 +4,8 @@
  * Bodies are static strings. None of these responses carries a CORS header.
  */
 
+import { ADVERTISED_SCOPE } from '@/lib/mcp/oauth/validate';
+
 const JSON_HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } as const;
 
 function json(status: number, error: string, extra: Record<string, string> = {}): Response {
@@ -24,7 +26,7 @@ export function mcpForbiddenOrigin(): Response {
 
 /** 401 that tells an MCP client where to start sign-in (RFC 9728 section 5.1) and the scope to ask for. */
 export function mcpUnauthorized(resourceMetadataUrl: string, error?: 'invalid_token'): Response {
-  const params = [`resource_metadata="${resourceMetadataUrl}"`, 'scope="mcp:read"'];
+  const params = [`resource_metadata="${resourceMetadataUrl}"`, `scope="${ADVERTISED_SCOPE}"`];
   if (error) params.unshift(`error="${error}"`);
   return json(401, error ?? 'unauthorized', { 'WWW-Authenticate': `Bearer ${params.join(', ')}` });
 }
