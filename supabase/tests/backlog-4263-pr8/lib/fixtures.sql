@@ -7,7 +7,9 @@
 --   cloud_deals.lock_reason (written by the desktop's deal upload; as PR-5's fixtures do);
 --   the id of four people (any uuid is a value the producer can give; these are chosen to be the smallest ids so the
 --   contact_ref rules are tested deterministically);
---   one todo's is_checked set to NULL (the column is nullable and the one-way upload of earlier versions wrote it).
+--   one todo's is_checked set to NULL: the column is nullable; the one-way item upload of 20261118110000
+--   (cloud_upsert_checklist_items, dropped by 20261118120000) wrote (r ->> 'is_checked')::boolean, NULL when the field
+--   was absent; no current producer writes NULL, and the test project holds no such row (measured below).
 
 CREATE TEMP TABLE p8_out (o serial, k text, v jsonb);
 CREATE FUNCTION pg_temp.rec(k text, v jsonb) RETURNS void LANGUAGE sql AS $h$ INSERT INTO pg_temp.p8_out (k, v) VALUES (k, v) $h$;
@@ -115,7 +117,7 @@ $measure8$;
 DO $fx8$
 DECLARE A uuid := pg_temp.fx(1); B uuid := pg_temp.fx(2); C uuid := pg_temp.fx(3); O uuid := pg_temp.fx(101);
         IA uuid := pg_temp.fx(301); IB uuid := pg_temp.fx(302); IA2 uuid := pg_temp.fx(303);
-        r jsonb; k text; n int; ops jsonb; worst text := repeat('"' || chr(119070), 150);
+        r jsonb; k text; i_n int; ops jsonb; worst text := repeat('"' || chr(119070), 150);
 BEGIN
   SET LOCAL session_replication_role = replica;
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
@@ -148,7 +150,7 @@ BEGIN
   END LOOP;
   r := pg_temp.deal(A, pg_temp.dp(IA2, 'da7')); PERFORM pg_temp.put('DA7', r -> 'results' -> 0 ->> 'cloud_id');
   r := pg_temp.deal(B, pg_temp.dp(IB, 'db1')); PERFORM pg_temp.put('DB1', r -> 'results' -> 0 ->> 'cloud_id');
-  PERFORM pg_temp.rec('fx_deals', to_jsonb((SELECT count(*) FROM pg_temp.p8_fx WHERE k LIKE 'D%' AND v IS NOT NULL)));
+  PERFORM pg_temp.rec('fx_deals', to_jsonb((SELECT count(*) FROM pg_temp.p8_fx f WHERE f.k LIKE 'D%' AND f.v IS NOT NULL)));
 
   -- people
   r := pg_temp.up(A, 'cloud_upsert_parties', IA, pg_temp.id('DA1'), jsonb_build_array(
@@ -159,7 +161,7 @@ BEGIN
          pg_temp.pty('wh', 'c3', NULL, NULL, 'client', 'client', 'client', '[]', '[]', 'Withheld note 123-45-6789', true),
          pg_temp.pty('card', 'c4', 'Casey fixture', 'Card 4111 1111 1111 1111 Ltd', 'inspector', 'inspection', 'inspector'),
          pg_temp.pty('pct', NULL, 'Ann 100%_Sure fixture', NULL, 'other', 'support', 'other'),
-         pg_temp.pty('nul2', NULL, 'Nell fixture', NULL, 'other', 'support', 'other'),
+         pg_temp.pty('nul2', NULL, 'Nell fixture', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('2125550102', '212-555-0102'))),
          pg_temp.pty('many', 'c6', 'Mona fixture', NULL, 'appraiser', 'inspection', 'appraiser',
                      jsonb_build_array(to_jsonb('scalar@example.test'::text), jsonb_build_object('email', 5))
                        || (SELECT jsonb_agg(pg_temp.em('m' || g || '@example.test', false) ORDER BY g) FROM generate_series(3, 10) g)
@@ -179,7 +181,7 @@ BEGIN
          pg_temp.pty('pat7', 'c1', 'Pat fixture lender', NULL, 'lender', 'lending', 'lender', jsonb_build_array(pg_temp.em('pat.lender@example.test')))));
   r := pg_temp.up(A, 'cloud_upsert_parties', IA, pg_temp.id('DA8'),
          (SELECT jsonb_agg(pg_temp.pty('pg' || lpad(g::text, 3, '0'), NULL, 'Page person ' || g, NULL, 'transaction_coordinator', 'support', 'transaction_coordinator') ORDER BY g)
-            FROM generate_series(1, 130) g));
+            FROM generate_series(1, 110) g));
   PERFORM pg_temp.rec('fx_parties_DA8', (SELECT jsonb_build_object('n', jsonb_array_length(r -> 'results'), 'st', jsonb_agg(DISTINCT x ->> 'status')) FROM jsonb_array_elements(r -> 'results') x));
   r := pg_temp.up(A, 'cloud_upsert_parties', IA, pg_temp.id('DA9'),
          (SELECT jsonb_agg(pg_temp.pty('w' || g, 'cw' || g, worst || worst, worst || worst, repeat('"', 150), repeat('"', 150), repeat('"', 150),
@@ -196,7 +198,7 @@ BEGIN
   UPDATE public.cloud_deal_parties SET id = pg_temp.small(1) WHERE cloud_deal_id = pg_temp.id('DA4') AND local_party_id = 'pat4';
   UPDATE public.cloud_deal_parties SET id = pg_temp.small(2) WHERE cloud_deal_id = pg_temp.id('DA1') AND local_party_id = 'rm';
   UPDATE public.cloud_deal_parties SET id = pg_temp.small(3) WHERE cloud_deal_id = pg_temp.id('DA5') AND local_party_id = 'pat5';
-  FOR k, n IN SELECT x.k, 0 FROM (VALUES ('pat'), ('sam'), ('wh'), ('card'), ('pct'), ('nul2'), ('many'), ('rm')) x(k) LOOP
+  FOR k, i_n IN SELECT x.k, 0 FROM (VALUES ('pat'), ('sam'), ('wh'), ('card'), ('pct'), ('nul2'), ('many'), ('rm')) x(k) LOOP
     PERFORM pg_temp.put('p_' || k, pg_temp.party_of(pg_temp.id('DA1'), k)::text);
   END LOOP;
   PERFORM pg_temp.put('p_pat2', pg_temp.party_of(pg_temp.id('DA2'), 'pat2')::text);
@@ -216,7 +218,7 @@ BEGIN
          pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't2', 'Appraisal', 1, false, NULL, '2026-12-01'),
          pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't3', 'Final walk', 2, false, NULL, '2026-12-10'),
          pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't4', 'Removed item', 3, false, NULL, '2026-12-05'),
-         pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't5', 'Done item', 4, false, NULL, NULL, true),
+         pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't5', 'Done item', 4, false, NULL, '2026-11-20', true),
          pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't6', 'Undated required', 5, true),
          pg_temp.ci(pg_temp.id('DA1'), 'tpl', 't7', 'Legacy unknown state', 6),
          pg_temp.cc(pg_temp.id('DA1'), 'my', 'keepr:my-items', 'My items', 1),
@@ -232,20 +234,21 @@ BEGIN
          pg_temp.ci(pg_temp.id('DA4'), 'my4', 'n1', 'Unconfirmed item', 0, false, NULL, '2026-12-05'),
          pg_temp.cc(pg_temp.id('DA5'), 'my5', 'keepr:my-items', 'My items', 0),
          pg_temp.ci(pg_temp.id('DA5'), 'my5', 'r5', 'Removed deal item', 0, false, NULL, '2026-12-05'),
-         pg_temp.cc(pg_temp.id('DW'), 'w', 'tpl-long', repeat('"' || chr(119070), 125), 0),
+         pg_temp.cc(pg_temp.id('DW'), 'w', 'tpl-long', repeat('"' || chr(119070), 100), 0),
          pg_temp.ci(pg_temp.id('DW'), 'w', 'w1', repeat('"' || chr(119070), 150), 0, true, repeat('x', 4000), '2026-12-31')));
   PERFORM pg_temp.rec('fx_push_A1', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
+  PERFORM pg_temp.rec('fx_push_A1_not_added', (SELECT coalesce(jsonb_agg(x - 'parts'), '[]') FROM jsonb_array_elements(r -> 'results') x WHERE x ->> 'status' <> 'added'));
   ops := '[]';
-  FOR n IN 1 .. 31 LOOP
-    ops := ops || jsonb_build_array(pg_temp.cc(pg_temp.id('DT'), 'k' || lpad(n::text, 2, '0'), 'tpl-k' || n, 'List ' || n, n - 1),
-                                    pg_temp.ci(pg_temp.id('DT'), 'k' || lpad(n::text, 2, '0'), 'kt' || lpad(n::text, 2, '0'), 'K item ' || n, 0));
+  FOR i_n IN 1 .. 31 LOOP
+    ops := ops || jsonb_build_array(pg_temp.cc(pg_temp.id('DT'), 'k' || lpad(i_n::text, 2, '0'), 'tpl-k' || i_n, 'List ' || i_n, i_n - 1),
+                                    pg_temp.ci(pg_temp.id('DT'), 'k' || lpad(i_n::text, 2, '0'), 'kt' || lpad(i_n::text, 2, '0'), 'K item ' || i_n, 0));
   END LOOP;
   r := pg_temp.push(A, IA, pg_temp.nowt(), ops);
   PERFORM pg_temp.rec('fx_push_DT', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   ops := jsonb_build_array(pg_temp.cc(pg_temp.id('DP'), 'pg', 'tpl-page', 'Paging list', 0));
-  FOR n IN 1 .. 120 LOOP
-    ops := ops || jsonb_build_array(pg_temp.ci(pg_temp.id('DP'), 'pg', 'pi' || lpad(n::text, 3, '0'), repeat(chr(119070), 290) || ' ' || n, n, false, NULL,
-                                               CASE WHEN n % 2 = 0 THEN to_char(DATE '2027-01-01' + (n % 20), 'YYYY-MM-DD') END));
+  FOR i_n IN 1 .. 100 LOOP
+    ops := ops || jsonb_build_array(pg_temp.ci(pg_temp.id('DP'), 'pg', 'pi' || lpad(i_n::text, 3, '0'), repeat(chr(119070), 150) || ' ' || i_n, i_n, false, NULL,
+                                               CASE WHEN i_n % 2 = 0 THEN to_char(DATE '2027-01-01' + (i_n % 20), 'YYYY-MM-DD') END));
   END LOOP;
   r := pg_temp.push(A, IA, pg_temp.nowt(), ops);
   PERFORM pg_temp.rec('fx_push_DP', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));

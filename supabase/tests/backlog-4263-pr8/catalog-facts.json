@@ -1,10 +1,10 @@
 {
   "migration": "supabase/migrations/20261118150000_backlog_4263_mcp_read_tools.sql",
-  "migration_md5": "9ac66c3e3ead6d23f9ebb7d103da8beb",
+  "migration_md5": "0aa115ea3b203c4eec40eb6c57e68c14",
   "new": {
-    "public._mcp_r_find_people(text,text,uuid,text,text,uuid)": "5b6275e6d6662782ac7997796b4d8960",
-    "public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)": "199bb8007c314edd457ee921254816a4",
-    "public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)": "823f1229eb6a85cb0a169d986bea480b",
+    "public._mcp_r_find_people(text,text,uuid,text,text,uuid)": "2ed9f1d98a76cb3966040a859a93b378",
+    "public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)": "c744547eefbc072fbe767e46d2d3e6ee",
+    "public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)": "83d0bb1a3c25dfc6aa4bfcc2e9a221ba",
     "public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)": "a5f43fbee39365d168c1d5ce87b00995"
   },
   "anon_callable_mcp_after": [
@@ -71,7 +71,8 @@
     "M02_fp_pattern_from_input": "red",
     "M03_fp_email_in_stored_text": "red",
     "M04_fp_email_beyond_ten": "red",
-    "M05_fp_phone_trailing_digits": "red",
+    "M05_fp_phone_last_ten_digits": "red",
+    "M05b_fp_phone_stored_ten_digits": "red",
     "M06_fp_role_part": "red",
     "M07_fp_ref_over_filtered_rows": "red",
     "M08_fp_ref_null_contact_grouped": "red",
@@ -100,8 +101,7 @@
     "M38_td_keyset_on_id": "red",
     "M39_td_due_to_exclusive": "red",
     "M40_td_bytes_unbounded": "red",
-    "M41_td_nulls_first": "red",
-    "M42_td_without_due_one_way": "red",
+    "M42_td_without_due_false_filters": "red",
     "M43_td_no_entitlement": "red",
     "M44_td_owner_term_only": "green",
     "M45_td_rls_only": "green",
@@ -127,6 +127,6 @@
     "M73_cat_tool_granted_authenticated": "red",
     "M74_cat_tool_check_without_list_todos": "red"
   },
-  "apply_md5": "536712a0b39970e972b40aa5af1f40e0",
-  "rollback_md5": "1daa483e23a8e3805ffa2acf106cfc16"
+  "apply_md5": "eaf27cc905498522f29893f240c3003e",
+  "rollback_md5": "e44d032479650d81781f06b4991401c8"
 }

@@ -19,12 +19,14 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { getPrompt, PROMPTS } from './prompts';
 import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
 import { getDeal, GET_DEAL_TOOL, listAllDeals, LIST_ALL_DEALS_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
+import { findPeople, FIND_PEOPLE_TOOL } from './tools/people';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
 import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_WRITE, TOOL_MESSAGES } from './tools/text';
+import { listTodos, LIST_TODOS_TOOL } from './tools/todoList';
 import { addTodo, removeTodo, restoreTodo, updateTodo, WRITE_TOOLS } from './tools/todos';
 
 /** The read tools, in the order tools/list returns them. */
-export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL, LIST_ALL_DEALS_TOOL];
+export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL, LIST_ALL_DEALS_TOOL, FIND_PEOPLE_TOOL, LIST_TODOS_TOOL];
 
 /**
  * BACKLOG-4263 PR-5: the route asks the database once per request whether this token's connection can write
@@ -73,6 +75,8 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     [GET_DEAL_TOOL.name, (args) => getDeal(atDigest(), args)],
     [GET_DEAL_CHECKLISTS_TOOL.name, (args) => getDealChecklists(atDigest(), args)],
     [LIST_ALL_DEALS_TOOL.name, (args) => listAllDeals(atDigest(), args)],
+    [FIND_PEOPLE_TOOL.name, (args) => findPeople(atDigest(), args)],
+    [LIST_TODOS_TOOL.name, (args) => listTodos(atDigest(), args)],
     // write tools: the database refuses them (read_only) unless this connection may write
     ['update_todo', (args) => updateTodo(atDigest(), args)],
     ['add_todo', (args) => addTodo(atDigest(), args)],

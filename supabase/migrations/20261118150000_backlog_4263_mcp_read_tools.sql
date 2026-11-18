@@ -20,12 +20,14 @@
 --   role     2 to 40 characters: equal (case-insensitive) to role, role_category or specific_role as shown
 --   deal_id  one deal; a deal that is not the person's saved, confirmed, live deal answers not_found
 --   email    a whole address (one @, at most 320 characters): equal (case-insensitive) to one the answer shows
---   phone    10 to 15 digits: equal to the digits of an e164 number the answer shows; 10 digits also match +1
+--   phone    10 to 15 digits: the whole number, compared with the digits of each e164 value the answer shows; on
+--            both sides a 10-digit number is read with country code 1 (the desktop's rule); never a part of a number
 --   At least one of name, role, deal_id, email, phone. A person marked details_withheld is found by role or deal_id
 --   only. Calls per user per UTC day: at most 1000; the next call is refused with error 'day_limit' and logged as
 --   rate_limited. Page: at most 100 people and 60000 bytes.
 -- list_todos: the todos of every live checklist on the person's deals, in (due_date, todos without one last,
---   item_id) order. Columnar frame like list_all_deals. Page: at most 500 rows and 85000 bytes.
+--   item_id) order. Columnar frame like list_all_deals. Page: at most 500 rows and 85000 bytes. without_due_date true:
+--   only todos without a due date; false or absent: no filter.
 --   The checklist, deal and item terms are those of _mcp_r_deal_checklists (20261118130000), without its
 --   30-checklist and 500-item cuts.
 --
@@ -45,7 +47,7 @@ GRANT CREATE ON SCHEMA public TO mcp_reader;
 SET ROLE mcp_reader;
 
 -- find_people: p_name, p_role, p_email are already trimmed and lower-cased where the wrapper says so; p_phone is
--- digits only. Returns {"not_found":true} for a p_deal_id that is not the person's confirmed, live deal.
+-- digits only, with country code 1 added to a 10-digit number. Returns {"not_found":true} for a p_deal_id that is not the person's confirmed, live deal.
 CREATE OR REPLACE FUNCTION public._mcp_r_find_people(p_name text, p_role text, p_deal_id uuid, p_email text, p_phone text, p_after_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
 /*BODY:4263-8*/
@@ -114,8 +116,9 @@ BEGIN
        WHERE (p_name IS NULL OR strpos(lower(s.s_name), lower(p_name)) > 0 OR strpos(lower(s.s_company), lower(p_name)) > 0) /*MATCH:name*/
          AND (p_role IS NULL OR lower(btrim(s.s_role)) = p_role OR lower(btrim(s.s_role_category)) = p_role OR lower(btrim(s.s_specific_role)) = p_role) /*MATCH:role*/
          AND (p_email IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.s_emails) e WHERE lower(btrim(e ->> 'email')) = p_email)) /*MATCH:email*/
-         AND (p_phone IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.s_phones) e
-                                          WHERE regexp_replace(coalesce(e ->> 'e164', ''), '[^0-9]', '', 'g') IN (p_phone, CASE WHEN char_length(p_phone) = 10 THEN '1' || p_phone END))) /*MATCH:phone*/
+         AND (p_phone IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.s_phones) e,
+                                                       LATERAL (SELECT regexp_replace(coalesce(e ->> 'e164', ''), '[^0-9]', '', 'g') AS sd) z
+                                          WHERE CASE WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone)) /*MATCH:phone*/
        ORDER BY s.id /*ORDER:fp*/
        LIMIT 101),
     r AS (
@@ -199,7 +202,7 @@ BEGIN
          AND (p_only_required IS NOT TRUE OR t.is_required IS TRUE) /*ARG:required*/
          AND (p_due_from IS NULL OR t.due_date >= p_due_from) /*ARG:due_from*/
          AND (p_due_to IS NULL OR t.due_date <= p_due_to) /*ARG:due_to*/
-         AND (p_without_due IS NULL OR (t.due_date IS NULL) = p_without_due) /*ARG:without_due*/
+         AND (p_without_due IS NOT TRUE OR t.due_date IS NULL) /*ARG:without_due*/
          AND (p_after_id IS NULL OR (coalesce(t.due_date, DATE '9999-12-31'), t.id) > (p_after_key, p_after_id)) /*KEY:after*/
        ORDER BY coalesce(t.due_date, DATE '9999-12-31'), t.id /*ORDER:td*/
        LIMIT 501),
@@ -301,7 +304,8 @@ BEGIN
       PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', g.user_id, 'role', 'authenticated')::text, true);
       PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);
       PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
-      v_res := public._mcp_r_find_people(v_name, v_role, lower(p_deal_id)::uuid, v_email, v_phone, p_cursor::uuid);
+      v_res := public._mcp_r_find_people(v_name, v_role, lower(p_deal_id)::uuid, v_email,
+                                         CASE WHEN char_length(v_phone) = 10 THEN '1' || v_phone ELSE v_phone END, p_cursor::uuid);
       RAISE EXCEPTION USING ERRCODE = 'MC000', MESSAGE = 'mcp read block done';
     EXCEPTION
       WHEN SQLSTATE 'MC000' THEN NULL;

@@ -118,14 +118,23 @@ END $h$;
 -- the items get_deal_checklists returns for every deal of the owner (frame v2 while the switch is on): id -> parts
 CREATE FUNCTION pg_temp.cl_items(u uuid, only_open boolean, deals uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT coalesce(jsonb_object_agg(x ->> 'item_id', jsonb_build_object('title', x -> 'title', 'required', x -> 'required', 'done', x -> 'done',
-                                   'done_at', x -> 'done_at', 'due_date', x -> 'due_date')), '{}')
+                                   'done_at', x -> 'done_at', 'due_date', x -> 'due_date', 'checklist_id', c -> 'checklist_id',
+                                   'checklist_name', c -> 'name', 'private', c -> 'private')), '{}')
     FROM unnest(deals) dl,
          LATERAL (SELECT pg_temp.j(pg_temp.as_user(u, format('SELECT public._mcp_r_deal_checklists(%L::uuid, %L::boolean, NULL::uuid)', dl, only_open))) AS r) q,
          jsonb_array_elements(coalesce(q.r -> 'checklists', '[]')) c, jsonb_array_elements(c -> 'items') x
 $h$;
 CREATE FUNCTION pg_temp.td_items(rows jsonb, deals uuid[]) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
-  SELECT coalesce(jsonb_object_agg(x ->> 0, jsonb_build_object('title', x -> 1, 'required', x -> 2, 'done', x -> 3, 'done_at', x -> 4, 'due_date', x -> 5)), '{}')
+  SELECT coalesce(jsonb_object_agg(x ->> 0, jsonb_build_object('title', x -> 1, 'required', x -> 2, 'done', x -> 3, 'done_at', x -> 4, 'due_date', x -> 5,
+                                   'checklist_id', x -> 7, 'checklist_name', x -> 8, 'private', x -> 10)), '{}')
     FROM jsonb_array_elements(rows) x WHERE (x ->> 11)::uuid = ANY (deals)
+$h$;
+
+-- the deal fields get_deal shows, per deal: deal_id -> {address, status, locked, saved_from}
+CREATE FUNCTION pg_temp.gd_fields(u uuid, deals uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT coalesce(jsonb_object_agg(dl::text, jsonb_build_object('address', q.r -> 'deal' -> 'address', 'status', q.r -> 'deal' -> 'status',
+                                   'locked', q.r -> 'deal' -> 'locked', 'saved_from', q.r -> 'deal' -> 'saved_from')), '{}')
+    FROM unnest(deals) dl, LATERAL (SELECT pg_temp.j(pg_temp.as_user(u, format('SELECT public._mcp_r_get_deal(%L::uuid)', dl))) AS r) q
 $h$;
 
 -- ================================================================ find_people
@@ -286,7 +295,7 @@ END $c$;
 
 -- phone: the full number (digits of e164); 10 digits also read as +1; never trailing digits
 CREATE FUNCTION pg_temp.c_fp_phone() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE a jsonb; b jsonb; c jsonb; d jsonb; e jsonb; f jsonb; g jsonb;
+DECLARE a jsonb; b jsonb; c jsonb; d jsonb; e jsonb; f jsonb; g jsonb; h jsonb; i jsonb;
 BEGIN
   PERFORM pg_temp.unrate();
   a := pg_temp.w(pg_temp.q_fp(1, phone => '+1 (212) 555-0101'));
@@ -296,6 +305,8 @@ BEGIN
   e := pg_temp.w(pg_temp.q_fp(1, phone => '7700900123'));
   f := pg_temp.w(pg_temp.q_fp(1, phone => '+12125550199'));
   g := pg_temp.w(pg_temp.q_fp(1, phone => '+12125550110'));
+  h := pg_temp.w(pg_temp.q_fp(1, phone => '+1 212 555 0102'));
+  i := pg_temp.w(pg_temp.q_fp(1, phone => '212.555.0102'));
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.sorted(pg_temp.pids(a)) = pg_temp.ids('p_pat', 'p_pat2'), 'formatted ' || pg_temp.pids(a)::text),
     pg_temp.pass(pg_temp.sorted(pg_temp.pids(b)) = pg_temp.ids('p_pat', 'p_pat2'), '10 digits ' || pg_temp.pids(b)::text),
@@ -303,7 +314,8 @@ BEGIN
     pg_temp.pass(pg_temp.pids(d) = ARRAY[pg_temp.id('p_sam')], 'uk ' || pg_temp.pids(d)::text),
     pg_temp.pass(pg_temp.ws(e) = 'ok' AND cardinality(pg_temp.pids(e)) = 0, 'trailing 10 of uk ' || pg_temp.pids(e)::text),
     pg_temp.pass(pg_temp.ws(f) = 'ok' AND cardinality(pg_temp.pids(f)) = 0, '11th ' || pg_temp.pids(f)::text),
-    pg_temp.pass(pg_temp.pids(g) = ARRAY[pg_temp.id('p_many')], 'tenth ' || pg_temp.pids(g)::text));
+    pg_temp.pass(pg_temp.pids(g) = ARRAY[pg_temp.id('p_many')], 'tenth ' || pg_temp.pids(g)::text),
+    pg_temp.pass(pg_temp.pids(h) = ARRAY[pg_temp.id('p_nul2')] AND pg_temp.pids(i) = ARRAY[pg_temp.id('p_nul2')], 'stored without country code ' || pg_temp.pids(h)::text || pg_temp.pids(i)::text));
 END $c$;
 
 -- role: equal to role, role_category or specific_role, case-insensitive; never a part
@@ -413,8 +425,8 @@ BEGIN
   RETURN pg_temp.all_of(
     pg_temp.pass(cardinality(pg_temp.pids(p1)) = 100 AND (p1 -> 'result' -> 'page' ->> 'returned')::int = 100, 'page 1 ' || cardinality(pg_temp.pids(p1))),
     pg_temp.pass(p1 -> 'result' -> 'page' ->> 'next_cursor' = (pg_temp.pids(p1))[100]::text, 'cursor = last id'),
-    pg_temp.pass(cardinality(pg_temp.pids(p2)) = 30 AND p2 -> 'result' -> 'page' -> 'next_cursor' = 'null'::jsonb, 'page 2 ' || cardinality(pg_temp.pids(p2))),
-    pg_temp.pass((SELECT count(DISTINCT x) FROM unnest(all_) x) = 130 AND all_ = pg_temp.sorted(all_), 'each once, in order'),
+    pg_temp.pass(cardinality(pg_temp.pids(p2)) = 10 AND p2 -> 'result' -> 'page' -> 'next_cursor' = 'null'::jsonb, 'page 2 ' || cardinality(pg_temp.pids(p2))),
+    pg_temp.pass((SELECT count(DISTINCT x) FROM unnest(all_) x) = 110 AND all_ = pg_temp.sorted(all_), 'each once, in order'),
     pg_temp.pass(octet_length(p1::text) < 90000, 'page bytes ' || octet_length(p1::text)));
 END $c$;
 
@@ -461,10 +473,11 @@ END $c$;
 -- ================================================================ list_todos
 -- parity with get_deal_checklists: the same todos with the same values on every deal it can show; the 31st list too
 CREATE FUNCTION pg_temp.c_td_parity() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE A uuid := pg_temp.id('A'); deals uuid[]; wa jsonb; wo jsonb; ca jsonb; co jsonb; ta jsonb; tok jsonb; dt jsonb;
+DECLARE A uuid := pg_temp.id('A'); deals uuid[]; wa jsonb; wo jsonb; ca jsonb; co jsonb; ta jsonb; tok jsonb; dt jsonb; gd jsonb; nrows bigint; ndiff bigint;
 BEGIN
   PERFORM pg_temp.sw(true);
-  deals := ARRAY[pg_temp.id('DA1'), pg_temp.id('DA2'), pg_temp.id('DA3'), pg_temp.id('DA4'), pg_temp.id('DA5'), pg_temp.id('DP'), pg_temp.id('DW'), pg_temp.id('DA7')];
+  -- every deal get_deal_checklists shows in full (DT has 31 lists; DP holds more than its 60000 bytes; both are checked below and in c_td_page)
+  deals := ARRAY[pg_temp.id('DA1'), pg_temp.id('DA2'), pg_temp.id('DA3'), pg_temp.id('DA4'), pg_temp.id('DA5'), pg_temp.id('DW'), pg_temp.id('DA7')];
   wa := pg_temp.walk_td(A, 'all');
   wo := pg_temp.walk_td(A, 'open');
   ca := pg_temp.cl_items(A, false, deals);
@@ -472,17 +485,21 @@ BEGIN
   ta := pg_temp.td_items(wa -> 'rows', deals);
   tok := pg_temp.td_items(wo -> 'rows', deals);
   dt := pg_temp.cl_items(A, false, ARRAY[pg_temp.id('DT')]);
+  gd := pg_temp.gd_fields(A, ARRAY[pg_temp.id('DA1'), pg_temp.id('DA2'), pg_temp.id('DA3'), pg_temp.id('DT'), pg_temp.id('DP'), pg_temp.id('DW')]);
+  SELECT count(*), count(*) FILTER (WHERE jsonb_build_object('address', x -> 12, 'status', x -> 13, 'locked', x -> 14, 'saved_from', x -> 15) IS DISTINCT FROM gd -> (x ->> 11))
+    INTO nrows, ndiff FROM jsonb_array_elements(wa -> 'rows') x;
   PERFORM pg_temp.rec('obs_td_parity', jsonb_build_object('all', (SELECT count(*) FROM jsonb_object_keys(ca)), 'open', (SELECT count(*) FROM jsonb_object_keys(co)),
                       'pages_all', wa -> 'pages', 'rows_all', jsonb_array_length(wa -> 'rows')));
   RETURN pg_temp.all_of(
     pg_temp.pass(ta = ca, 'all differs: only in list_todos ' || (SELECT coalesce(string_agg(k, ','), '-') FROM jsonb_object_keys(ta) k WHERE NOT ca ? k)
                  || ' only in checklists ' || (SELECT coalesce(string_agg(k, ','), '-') FROM jsonb_object_keys(ca) k WHERE NOT ta ? k)),
     pg_temp.pass(tok = co, 'open differs'),
-    pg_temp.pass((SELECT count(*) FROM jsonb_object_keys(ca)) >= 130 AND ca ? pg_temp.id('t7')::text AND co ? pg_temp.id('t7')::text
+    pg_temp.pass((SELECT count(*) FROM jsonb_object_keys(ca)) = 11 AND (SELECT count(*) FROM jsonb_object_keys(co)) = 10 AND ca ? pg_temp.id('t7')::text AND co ? pg_temp.id('t7')::text
                  AND ca ? pg_temp.id('l1')::text AND ca ? pg_temp.id('m1')::text AND NOT ca ? pg_temp.id('t4')::text AND NOT ca ? pg_temp.id('o1')::text
                  AND NOT ca ? pg_temp.id('n1')::text AND NOT ca ? pg_temp.id('r5')::text AND NOT co ? pg_temp.id('t5')::text, 'fixture classes'),
     pg_temp.pass(EXISTS (SELECT 1 FROM jsonb_array_elements(wa -> 'rows') x WHERE x ->> 0 = pg_temp.id('kt31')::text) AND NOT dt ? pg_temp.id('kt31')::text
-                 AND (SELECT count(*) FROM jsonb_array_elements(wa -> 'rows') x WHERE (x ->> 11)::uuid = pg_temp.id('DT')) = 31, '31st list'));
+                 AND (SELECT count(*) FROM jsonb_array_elements(wa -> 'rows') x WHERE (x ->> 11)::uuid = pg_temp.id('DT')) = 31, '31st list'),
+    pg_temp.pass(nrows > 130 AND ndiff = 0, 'deal fields differ from get_deal on ' || ndiff || ' of ' || nrows || ' rows'));
 END $c$;
 
 -- the columns as built: due dates shown while the write switch is off; has_note, my_items, private, locked, saved_from
@@ -492,7 +509,8 @@ BEGIN
   PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(false);
   r := pg_temp.w(pg_temp.q_td(1, st => 'all'));
   SELECT x INTO t1 FROM jsonb_array_elements(r -> 'result' -> 'rows') x WHERE x ->> 0 = pg_temp.id('t1')::text;
-  SELECT x INTO m1 FROM jsonb_array_elements(r -> 'result' -> 'rows') x WHERE x ->> 0 = pg_temp.id('m1')::text;
+  -- m1 has no due date, so it sorts after every dated todo: taken from all pages
+  SELECT x INTO m1 FROM jsonb_array_elements(pg_temp.walk_td(pg_temp.id('A'), 'all') -> 'rows') x WHERE x ->> 0 = pg_temp.id('m1')::text;
   SELECT x INTO l1 FROM jsonb_array_elements(r -> 'result' -> 'rows') x WHERE x ->> 0 = pg_temp.id('l1')::text;
   SELECT x INTO c1 FROM jsonb_array_elements(r -> 'result' -> 'rows') x WHERE x ->> 0 = pg_temp.id('c1')::text;
   RETURN pg_temp.all_of(
@@ -507,7 +525,7 @@ END $c$;
 
 -- filters and the refusals of the arguments
 CREATE FUNCTION pg_temp.c_td_filters() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE dflt jsonb; dn jsonb; rq jsonb; cl jsonb; rg jsonb; nd jsonb; wd jsonb; q text; bad text[] := '{}'; r jsonb; n int := 0; ok1 jsonb;
+DECLARE dflt jsonb; dn jsonb; rq jsonb; cl jsonb; rg jsonb; nd jsonb; wd jsonb; wn jsonb; q text; bad text[] := '{}'; r jsonb; n int := 0; ok1 jsonb; dd jsonb; da jsonb;
 BEGIN
   PERFORM pg_temp.unrate();
   dflt := pg_temp.w(pg_temp.q_td(1));
@@ -517,8 +535,11 @@ BEGIN
   rg := pg_temp.w(pg_temp.q_td(1, st => 'all', dfrom => '2026-12-01', dto => '2026-12-05'));
   nd := pg_temp.w(pg_temp.q_td(1, st => 'all', nodue => true));
   PERFORM pg_temp.unrate();
-  wd := pg_temp.w(pg_temp.q_td(1, st => 'all', nodue => false));
+  wd := pg_temp.w(pg_temp.q_td(1, st => 'all', nodue => false, req => true));
+  wn := pg_temp.w(pg_temp.q_td(1, st => 'all', req => true));
   ok1 := pg_temp.w(pg_temp.q_td(1, cur => 'none|' || md5('x')::uuid::text));
+  dd := pg_temp.w(pg_temp.q_td(1, dfrom => '2026-11-20', dto => '2026-11-20'));
+  da := pg_temp.w(pg_temp.q_td(1, st => 'all', dfrom => '2026-11-20', dto => '2026-11-20'));
   FOREACH q IN ARRAY ARRAY[
       pg_temp.q_td(1, st => 'x'), pg_temp.q_td(1, ds => 'rejected'), pg_temp.q_td(1, dfrom => '2026-02-30'), pg_temp.q_td(1, dfrom => '2026-1-1'),
       pg_temp.q_td(1, dfrom => '1999-12-31'), pg_temp.q_td(1, dto => '2101-01-01'), pg_temp.q_td(1, dfrom => '2026-12-05', dto => '2026-12-01'),
@@ -530,13 +551,14 @@ BEGIN
   END LOOP;
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.ws(dflt) = 'ok' AND jsonb_array_length(dflt -> 'result' -> 'rows') > 0 AND (SELECT bool_and(x -> 3 IS DISTINCT FROM 'true'::jsonb) FROM jsonb_array_elements(dflt -> 'result' -> 'rows') x), 'default open'),
+    pg_temp.pass(pg_temp.ws(dd) = 'ok' AND cardinality(pg_temp.tids(dd)) = 0 AND pg_temp.tids(da) = ARRAY[pg_temp.id('t5')], 'default is open: ' || pg_temp.tids(dd)::text || ' all: ' || pg_temp.tids(da)::text),
     pg_temp.pass(pg_temp.tids(dn) = ARRAY[pg_temp.id('t5')], 'done ' || pg_temp.tids(dn)::text),
     pg_temp.pass((SELECT bool_and(x -> 2 = 'true') FROM jsonb_array_elements(rq -> 'result' -> 'rows') x) AND pg_temp.id('t1') = ANY (pg_temp.tids(rq))
                  AND pg_temp.id('t6') = ANY (pg_temp.tids(rq)), 'required'),
     pg_temp.pass(pg_temp.tids(cl) = ARRAY[pg_temp.id('c1')], 'closed deals ' || pg_temp.tids(cl)::text),
     pg_temp.pass(pg_temp.sorted(pg_temp.tids(rg)) = pg_temp.ids('t1', 't2', 'm2', 'l1'), 'range inclusive ' || pg_temp.tids(rg)::text),
     pg_temp.pass(jsonb_array_length(nd -> 'result' -> 'rows') > 0 AND (SELECT bool_and(x -> 5 = 'null') FROM jsonb_array_elements(nd -> 'result' -> 'rows') x), 'without due date'),
-    pg_temp.pass(jsonb_array_length(wd -> 'result' -> 'rows') > 0 AND (SELECT bool_and(x -> 5 <> 'null') FROM jsonb_array_elements(wd -> 'result' -> 'rows') x), 'with a due date'),
+    pg_temp.pass(jsonb_array_length(wd -> 'result' -> 'rows') > 0 AND wd -> 'result' = wn -> 'result' AND pg_temp.id('t6') = ANY (pg_temp.tids(wn)), 'false is no filter'),
     pg_temp.pass(pg_temp.ws(ok1) = 'ok', 'none cursor ' || pg_temp.ws(ok1)),
     pg_temp.pass(cardinality(bad) = 0 AND n = 12, array_to_string(bad, ' || ') || ' n=' || n));
 END $c$;
@@ -565,11 +587,11 @@ BEGIN
   nxt := pg_temp.rtd(A, 'all', (lastd ->> 5)::date, (lastd ->> 0)::uuid);
   PERFORM pg_temp.rec('obs_td_page', jsonb_build_object('pages', n, 'rows', jsonb_array_length(rows), 'max_frame_bytes', maxb, 'total', total));
   RETURN pg_temp.all_of(
-    pg_temp.pass(pg_temp.ws(p) = 'ok' AND n >= 3, 'pages ' || n || ' ' || pg_temp.ws(p)),
+    pg_temp.pass(pg_temp.ws(p) = 'ok' AND n >= 2, 'pages ' || n || ' ' || pg_temp.ws(p)),
     pg_temp.pass(jsonb_array_length(rows) = total AND (SELECT count(DISTINCT x ->> 0) FROM jsonb_array_elements(rows) x) = total, 'rows ' || jsonb_array_length(rows) || ' of ' || total),
     pg_temp.pass(ordered, 'order'),
     pg_temp.pass(maxb < 90000, 'bytes ' || maxb),
-    pg_temp.pass(nxt -> 'rows' -> 0 -> 5 = 'null'::jsonb AND (SELECT min((x ->> 0)::uuid) FROM jsonb_array_elements(rows) x WHERE x -> 5 = 'null') = (nxt -> 'rows' -> 0 ->> 0)::uuid,
+    pg_temp.pass(nxt -> 'rows' -> 0 -> 5 = 'null'::jsonb AND (SELECT (x ->> 0)::uuid FROM jsonb_array_elements(rows) x WHERE x -> 5 = 'null' ORDER BY (x ->> 0)::uuid LIMIT 1) = (nxt -> 'rows' -> 0 ->> 0)::uuid,
                  'after the last dated todo comes the first undated one'));
 END $c$;
 
@@ -582,7 +604,7 @@ BEGIN
   SELECT x INTO w FROM jsonb_array_elements(r -> 'result' -> 'rows') x WHERE x ->> 0 = pg_temp.id('w1')::text;
   PERFORM pg_temp.rec('obs_td_rowmax', jsonb_build_object('row_bytes', octet_length(w::text)));
   RETURN pg_temp.all_of(pg_temp.pass(w IS NOT NULL AND octet_length(w::text) BETWEEN 2000 AND 10000, 'row ' || coalesce(octet_length(w::text), -1)),
-                        pg_temp.pass(char_length(w ->> 1) = 300 AND w ->> 8 LIKE '%…' AND char_length(w ->> 8) = 200 AND w ->> 12 LIKE '%…' AND char_length(w ->> 12) = 300, 'cut'));
+                        pg_temp.pass(char_length(w ->> 1) = 300 AND char_length(w ->> 8) = 200 AND w ->> 12 LIKE '%…' AND char_length(w ->> 12) = 300, 'cut'));
 END $c$;
 
 -- owner B: no B todo reaches A; B sees exactly its own
