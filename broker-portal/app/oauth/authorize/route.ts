@@ -10,7 +10,7 @@
 
 import { bindingDigest, ipDigest, newBinding, toBytea } from '@/lib/mcp/oauth/crypto';
 import { bindingFromCookieHeader } from '@/lib/mcp/oauth/binding';
-import { clientIp } from '@/lib/mcp/oauth/clientIp';
+import { clientIp, rateLimitAddress } from '@/lib/mcp/oauth/clientIp';
 import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
 import { errorPage, found } from '@/lib/mcp/oauth/http';
 import { dbCode, errorNameTag } from '@/lib/mcp/oauth/log';
@@ -91,7 +91,7 @@ const route = withOAuthRoute(
         scope,
         state,
         bindingSha256: bindingDigest(binding),
-        ipSha256: toBytea(ipDigest(cfg.pepper, clientIp(req))),
+        ipSha256: toBytea(ipDigest(cfg.pepper, rateLimitAddress(clientIp(req)))),
       });
     const scope = normaliseScope(p.get('scope'));
     let result = await begin(scope);

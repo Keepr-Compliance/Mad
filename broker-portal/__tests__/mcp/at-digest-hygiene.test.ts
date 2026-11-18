@@ -34,7 +34,11 @@ jest.mock('@sentry/nextjs', () => {
 });
 
 import * as route from '@/app/api/mcp/route';
+import { mcpRateLimitKeysForTests, resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
 import * as serverModule from '@/lib/mcp/server';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const BASE = 'https://portal.test';
 const MCP_URL = `${BASE}/api/mcp`;
@@ -152,5 +156,15 @@ describe('A5: the access token digest and the raw token are never written', () =
     expect((await post(ACCESS_TOKEN)).status).toBe(503);
     expect(consoleLines().some((l) => l.startsWith('[mcp] request failed:'))).toBe(true);
     expectNoDigestOrToken();
+  });
+});
+
+describe('BACKLOG-4263 PR-10: the request limiter holds the digest, never the raw token', () => {
+  it('after a session, the only limiter key is the digest sent to the database', async () => {
+    mockRpc.mockImplementation(async (fn: string) => ({ data: fn === 'mcp_check_access' ? checkAccessOk() : getStatusOk(), error: null }));
+    await callStatus('legacy');
+    const keys = mcpRateLimitKeysForTests();
+    expect(keys).toEqual([expectedDigest(ACCESS_TOKEN)]);
+    for (const k of keys) for (const r of RAW) expect(k).not.toContain(r);
   });
 });

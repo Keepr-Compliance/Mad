@@ -8,6 +8,15 @@
  * anything else → 503) → SDK handler. Other methods: 404 when MCP is off,
  * else 405.
  *
+ * BACKLOG-4263 PR-10, between the token shape and mcp_check_access: the body
+ * is read once here (over 256 KiB → the SDK's 413), more than 4 JSON-RPC
+ * requests in one POST → 400, then the per-token request limits of
+ * lib/mcp/rateLimit.ts (60 JSON-RPC requests per 60 s, 4 in flight): a token
+ * that has counters is counted, or refused, before mcp_check_access; counters
+ * are created only for a token mcp_check_access accepted. The counters are in
+ * memory and count per server instance: they bound one instance's load from
+ * one connection, not a caller spread over many instances.
+ *
  * One log line per request: fixed outcome, status and duration. Never the
  * Authorization header, the token, its digest or the request body.
  */
@@ -26,6 +35,15 @@ import { dbCode, errorNameTag, logOutcome, type Outcome } from '@/lib/mcp/oauth/
 import { checkAccess, writeAccess } from '@/lib/mcp/oauth/rpc';
 import { isCredential } from '@/lib/mcp/oauth/validate';
 import { isOriginAllowed } from '@/lib/mcp/origin';
+import { admitKnownMcpRequest, admitMcpRequest, MCP_BATCH_LIMIT, type Refusal } from '@/lib/mcp/rateLimit';
+import {
+  mcpBatchTooLarge,
+  mcpBodyTooLarge,
+  mcpBodyUnreadable,
+  endSlotWithResponse,
+  mcpRateLimited,
+  readMcpBody,
+} from '@/lib/mcp/requestLimits';
 import { getMcpHandler } from '@/lib/mcp/server';
 
 export const runtime = 'nodejs';
@@ -61,23 +79,53 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const atDigest = digest(cfg.pepper, token);
+
+  const body = await readMcpBody(req);
+  if (body.kind === 'too_large') return done(mcpBodyTooLarge(), 'body_too_large');
+  if (body.kind === 'unreadable') return done(mcpBodyUnreadable(), 'body_unreadable');
+  const requests = body.kind === 'parsed' ? body.ids.length : 0;
+  if (requests > MCP_BATCH_LIMIT) return done(mcpBatchTooLarge(), 'batch_too_large');
+
+  // A POST counts its JSON-RPC requests toward both limits; a POST with none counts 1 toward the window only.
+  const windowCost = Math.max(1, requests);
+  const refuse = (reason: Refusal) => {
+    // A body that is not JSON has no request id to answer: one error with id null.
+    const answer = body.kind === 'parsed' ? mcpRateLimited(body.ids, body.batch) : mcpRateLimited([null], false);
+    return done(answer, reason === 'window' ? 'rate_limited' : 'rate_limited_inflight');
+  };
+  // A token that already has counters is counted (or refused) before the database; counters are created only for
+  // a token mcp_check_access accepted.
+  let admission = admitKnownMcpRequest(atDigest, windowCost, requests);
+  if (admission && !admission.ok) return refuse(admission.reason);
+
   const access = await checkAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
+  if (access.kind !== 'ok' && admission?.ok) admission.slot.release();
   if (access.kind === 'not_connected') {
     return done(mcpUnauthorized(resourceMetadataUrl(req), 'invalid_token'), 'not_connected');
   }
   if (access.kind !== 'ok') return done(mcpUnavailable(), 'unavailable', { error: dbCode(access.code) });
 
+  if (!admission) {
+    admission = admitMcpRequest(atDigest, windowCost, requests);
+    if (!admission.ok) return refuse(admission.reason);
+  }
+  const { slot } = admission;
+
   // BACKLOG-4263 PR-5: whether this token's connection can change todos (granted mcp:todos AND the database's write
   // switch on). Any other answer, an error or an older database included, is read-only: read tools, read-only texts.
-  const wa = await writeAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
-  const canWrite = wa.kind === 'ok' && wa.write === true;
-
   try {
-    const res = await getMcpHandler().fetch(req, {
-      authInfo: { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest, canWrite } },
-    });
-    return done(res, 'ok');
+    const wa = await writeAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
+    const canWrite = wa.kind === 'ok' && wa.write === true;
+    const authInfo = { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest, canWrite } };
+    // The SDK answers with a streamed body while the tools still run, so the in-flight slot ends with that body,
+    // not when fetch returns.
+    const res =
+      body.kind === 'parsed'
+        ? await getMcpHandler().fetch(req, { authInfo, parsedBody: body.parsed })
+        : await getMcpHandler().fetch(body.request, { authInfo });
+    return done(endSlotWithResponse(res, slot, req.signal), 'ok');
   } catch (err) {
+    slot.release();
     console.error('[mcp] request failed:', (err as Error).name);
     return done(mcpUnavailable(), 'error', { error: errorNameTag(err) });
   }

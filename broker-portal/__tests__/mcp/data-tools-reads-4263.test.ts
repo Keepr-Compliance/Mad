@@ -22,6 +22,7 @@ jest.mock('@supabase/supabase-js', () => ({
 }));
 
 import * as route from '@/app/api/mcp/route';
+import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
 import { isMcpPath } from '@/lib/mcp/sentryScrub';
 import { MAX_RESULT_CHARS } from '@/lib/mcp/tools/result';
 import { FOUND_PERSON_PROPS, PERSON_PROPS, TODO_LIST_COLUMNS } from '@/lib/mcp/tools/shapes';
@@ -30,6 +31,9 @@ import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { FIND_PEOPLE_TOOL } from '@/lib/mcp/tools/people';
 import { LIST_TODOS_TOOL } from '@/lib/mcp/tools/todoList';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, refusal } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const REPO = path.resolve(__dirname, '../../..');
 const MIGRATION_PATH = 'supabase/migrations/20261118150000_backlog_4263_mcp_read_tools.sql';

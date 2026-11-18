@@ -14,7 +14,11 @@ jest.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc: (...a: u
 
 import * as tokenRoute from '@/app/oauth/token/route';
 import * as mcpRoute from '@/app/api/mcp/route';
+import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
 import { CLIENT_ID, CODE, OAUTH_ENV, REDIRECT_URI, REFRESH, VERIFIER, blockNetwork, refusal, tokenOk } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const ENV = { ...process.env };
 blockNetwork();
