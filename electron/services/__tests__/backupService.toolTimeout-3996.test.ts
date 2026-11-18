@@ -183,15 +183,25 @@ describe("C8: the watchdog kills a STOPPED idevicebackup2 on macOS", () => {
     infoBehaviour = "off";
     const svc = newService();
     void svc.startBackup({ udid: UDID });
-    // Wait on the spawn itself, not a turn count: the pre-spawn async steps take a
-    // variable number of turns on a slow runner (Windows CI flaked at 10).
+    // BACKLOG-4125: wait on the spawn against a REAL wall-clock deadline, not a turn
+    // count. Before the spawn, startBackup does real file I/O on the temp userData dir
+    // (fs.mkdir at backupService.ts `await fs.mkdir(backupPath...)`, then fs.stat). 500
+    // idle setImmediate turns take ~8 ms, so any slow mkdir/stat (Windows CI) used to
+    // exhaust the cap. Date.now() is faked here, so the clock is jest.getRealSystemTime().
+    const SPAWN_DEADLINE_MS = 10_000;
+    const waitStart = jest.getRealSystemTime();
     let turns = 0;
-    while (of("idevicebackup2").length === 0 && turns < 500) {
+    while (of("idevicebackup2").length === 0 && jest.getRealSystemTime() - waitStart < SPAWN_DEADLINE_MS) {
       await flush();
       turns++;
     }
     const backup = of("idevicebackup2")[0];
-    if (!backup) throw new Error(`idevicebackup2 was never spawned after ${turns} event-loop turns`);
+    if (!backup) {
+      throw new Error(
+        `idevicebackup2 was never spawned within ${jest.getRealSystemTime() - waitStart} ms ` +
+          `(${turns} event-loop turns); spawned: [${spawned.map((s) => s.cmd).join(", ")}]`,
+      );
+    }
 
     // No output at all: step the clock until the watchdog fires (past the 30 min window).
     let waited = 0;
