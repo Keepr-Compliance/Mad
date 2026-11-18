@@ -35,6 +35,13 @@ export const CONSENT = {
     'Turning Keepr Cloud off deletes your online copy and disconnects every AI app. ' +
     'Signing out does not disconnect them, including "Sign out all devices".',
   signedInAs: (email: string) => `Signed in as ${email}`,
+  /** BACKLOG-4263 PR-10.5 (founder decision B): the request's age, as the database computed it. */
+  startedAgo: (seconds: number) => {
+    if (seconds === 0) return 'This request was started just now.';
+    if (seconds === 1) return 'This request was started 1 second ago.';
+    if (seconds > 180) return 'This request was started more than 3 minutes ago.';
+    return `This request was started ${seconds} seconds ago.`;
+  },
   /** BACKLOG-4263 PR-5 (founder decision Q4): the wording when approving grants 'mcp:todos'. */
   write: {
     lead: (provider: string) => `${provider} wants to use your Keepr data.`,

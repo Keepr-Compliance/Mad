@@ -3,7 +3,8 @@
  *
  * Envelope shapes are transcribed from the migration
  * supabase/migrations/20261112170000_backlog_4238_mcp_oauth_server.sql:
- * mcp_authorize_view :822-834 (replaces_existing, BACKLOG-4259), approve :903, deny :935, refusals via
+ * mcp_authorize_view :822-834 (replaces_existing, BACKLOG-4259; the current definition, with scope, is
+ * 20261118130000_backlog_4263_mcp_todo_write_tools.sql:785-797), approve :903, deny :935, refusals via
  * _mcp_refuse :198-201 ({ok:false, error}), list :951-960, disconnect :987,
  * disconnect_all_mine :1006. The timestamp text of consented_at / last_used_at
  * (timestamptz in jsonb) is not transcribed from a running database.

@@ -103,6 +103,7 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
         </p>
       )}
       <p>{CONSENT.onlyIf(provider)}</p>
+      {view.ageSeconds !== undefined && <p className="text-gray-600">{CONSENT.startedAgo(view.ageSeconds)}</p>}
       <p>{view.canChangeTodos ? CONSENT.write.scope : CONSENT.scope}</p>
       {view.canChangeTodos && <p>{CONSENT.write.changes}</p>}
       <p>{CONSENT.agreement(provider)}</p>

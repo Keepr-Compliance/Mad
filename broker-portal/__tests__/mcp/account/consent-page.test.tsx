@@ -381,3 +381,101 @@ describe('BACKLOG-4263 PR-5: the wording follows the scope the database would gr
     expect(buttons()).toHaveLength(0);
   });
 });
+
+describe('BACKLOG-4263 PR-10.5: the request age line', () => {
+  // sha256 of container.innerHTML for viewOk() (the 9-key answer), recorded against the page at
+  // 692793496, before the age line existed. The 9-key answer must keep rendering exactly that markup.
+  const OLD_SHAPE_MARKUP_SHA256 = '67d15e23dd9af57456f47a54c65f1d3a4335f3ab6327833c74b6145807342663';
+  const sha256 = (s: string) => (require('node:crypto') as typeof import('node:crypto')).createHash('sha256').update(s).digest('hex');
+  const AGE_PREFIX = 'This request was started';
+
+  it('the 9-key answer renders the markup the page rendered before the age line existed', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk(), error: null });
+    const { container } = await renderPage();
+    expect(sha256(container.innerHTML)).toBe(OLD_SHAPE_MARKUP_SHA256);
+    expect(container.textContent).not.toContain(AGE_PREFIX);
+  });
+
+  it('the 9-key answer with a write grant shows no age line either', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk({ scope: 'mcp:todos' }), error: null });
+    const { container } = await renderPage();
+    expect(screen.getByRole('button', { name: CONSENT.allow })).toBeInTheDocument();
+    expect(container.textContent).not.toContain(AGE_PREFIX);
+  });
+
+  it.each([
+    [0, 'This request was started just now.'],
+    [1, 'This request was started 1 second ago.'],
+    [2, 'This request was started 2 seconds ago.'],
+    [40, 'This request was started 40 seconds ago.'],
+    [179, 'This request was started 179 seconds ago.'],
+    [180, 'This request was started 180 seconds ago.'],
+    [181, 'This request was started more than 3 minutes ago.'],
+    [86400, 'This request was started more than 3 minutes ago.'],
+  ])('age_seconds %p → %p', async (age, sentence) => {
+    mockRpc.mockResolvedValue({ data: { ...viewOk(), age_seconds: age }, error: null });
+    const { container } = await renderPage();
+    const lines = Array.from(container.querySelectorAll('p')).filter((p) => (p.textContent ?? '').startsWith(AGE_PREFIX));
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe(sentence);
+    expect(CONSENT.startedAgo(age)).toBe(sentence);
+  });
+
+  it('the age line is a plain grey paragraph right after the "only continue" line, and the only change to the markup', async () => {
+    mockRpc.mockResolvedValue({ data: { ...viewOk(), age_seconds: 40 }, error: null });
+    const { container } = await renderPage();
+    const line = screen.getByText('This request was started 40 seconds ago.');
+    expect(line.tagName).toBe('P');
+    expect(line.className).toBe('text-gray-600');
+    expect(line.children).toHaveLength(0);
+    expect(line.previousElementSibling?.textContent).toBe(CONSENT.onlyIf('Claude (Anthropic)'));
+    const paragraphs = Array.from(container.querySelectorAll('p')).map((p) => p.textContent);
+    expect(paragraphs[paragraphs.length - 1]).toBe(CONSENT.signedInAs(EMAIL));
+    line.remove();
+    expect(sha256(container.innerHTML)).toBe(OLD_SHAPE_MARKUP_SHA256);
+  });
+
+  it('the age comes from the database answer, never from the portal clock', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2030-01-01T00:00:00Z'));
+    mockRpc.mockResolvedValue({ data: { ...viewOk(), age_seconds: 40 }, error: null });
+    const { container } = await renderPage();
+    expect(container.textContent).toContain('This request was started 40 seconds ago.');
+  });
+
+  it('the line is static server-rendered text: no timer is started', async () => {
+    const setInterval = jest.spyOn(global, 'setInterval');
+    mockRpc.mockResolvedValue({ data: { ...viewOk(), age_seconds: 40 }, error: null });
+    await renderPage();
+    expect(setInterval).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a string', '40'],
+    ['a fraction', 40.5],
+    ['negative', -1],
+    ['null', null],
+    ['too large', 1e12],
+    ['one over the limit', 86401],
+    ['NaN', Number.NaN],
+    ['a boolean', true],
+  ])('age_seconds as %s → fixed message, no buttons, no age line', async (_label, age) => {
+    mockRpc.mockResolvedValue({ data: { ...viewOk(), age_seconds: age }, error: null });
+    const { container } = await renderPage();
+    expect(screen.getByRole('alert')).toHaveTextContent(M_C.failed);
+    expect(buttons()).toEqual([]);
+    expect(container.textContent).not.toContain(AGE_PREFIX);
+  });
+
+  it.each([
+    ['the 9 keys plus another key', { ...viewOk(), extra: 'x' }],
+    ['the 9 keys, age_seconds and another key', { ...viewOk(), age_seconds: 40, extra: 'x' }],
+    ['age_seconds with an old key missing', (() => { const v: Record<string, unknown> = { ...viewOk(), age_seconds: 40 }; delete v.scope; return v; })()],
+    ['age_seconds in place of an old key', (() => { const v: Record<string, unknown> = { ...viewOk(), age_seconds: 40 }; delete v.replaces_existing; return v; })()],
+    ['started_at instead of age_seconds', { ...viewOk(), started_at: '2026-11-18T12:00:00+00:00' }],
+  ])('%s → fixed message, no buttons', async (_label, data) => {
+    mockRpc.mockResolvedValue({ data, error: null });
+    await renderPage();
+    expect(screen.getByRole('alert')).toHaveTextContent(M_C.failed);
+    expect(buttons()).toEqual([]);
+  });
+});
