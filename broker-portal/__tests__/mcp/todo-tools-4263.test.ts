@@ -19,6 +19,10 @@ jest.mock('@supabase/supabase-js', () => ({
 }));
 
 import * as route from '@/app/api/mcp/route';
+import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 import { checkDataToolEnvelope, checkWriteAccessEnvelope } from '@/lib/mcp/oauth/rpc';
 import { normaliseScope } from '@/lib/mcp/oauth/validate';
 import { CHECKLIST_ITEM_V2_KEYS, CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2, TODO_CHANGE_SHAPE, TODO_ITEM_KEYS, TODO_STATUSES } from '@/lib/mcp/tools/shapes';
