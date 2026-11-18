@@ -24,6 +24,7 @@ import { normaliseScope } from '@/lib/mcp/oauth/validate';
 import { CHECKLIST_ITEM_V2_KEYS, CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2, TODO_CHANGE_SHAPE, TODO_ITEM_KEYS, TODO_STATUSES } from '@/lib/mcp/tools/shapes';
 import { TOOLS } from '@/lib/mcp/server';
 import { WRITE_TOOLS } from '@/lib/mcp/tools/todos';
+import { GET_DEAL_CHECKLISTS_TOOL } from '@/lib/mcp/tools/checklists';
 import { TOOL_MESSAGES } from '@/lib/mcp/tools/text';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, refusal } from './oauth/fixtures';
 
@@ -103,7 +104,9 @@ describe('tools/list', () => {
   it('lists the four write tools after the read tools only for {ok:true, write:true}', async () => {
     expect(FX.FX_write_access_on).toEqual({ ok: true, write: true });
     expect(await listNames()).toEqual([...TOOLS.map((t) => t.name), ...WRITE_NAMES]);
-    expect(calls('mcp_write_access')).toHaveLength(1);
+    // asked once per HTTP request by the route (every request of the session), never per tool
+    expect(calls('mcp_write_access').length).toBeGreaterThan(0);
+    expect(calls('mcp_write_access').length).toBe(calls('mcp_check_access').length);
   });
 
   it.each([
@@ -136,7 +139,96 @@ describe('tools/list', () => {
 });
 
 // ---------------------------------------------------------------- calls: what reaches the database, and what the app is shown
+// ---------------------------------------------------------------- rule 3: with no write access the texts are the read-only build's
+const BASE_TEXTS = JSON.parse(readFileSync(path.join(__dirname, 'fixtures/read-only-texts-92743f3c2.json'), 'utf8')) as {
+  instructions: string;
+  prompts: Record<string, { message?: string; head?: string }>;
+};
+async function served() {
+  const client = await connect();
+  const instructions = client.getInstructions();
+  const { tools } = await client.listTools();
+  const plate = await client.getPrompt({ name: 'whats_on_my_plate' });
+  const week = await client.getPrompt({ name: 'due_this_week' });
+  const brief = await client.getPrompt({ name: 'brief_me_on_a_deal', arguments: { address: 'Main St' } });
+  await client.close();
+  const text = (p: { messages: Array<{ content: unknown }> }) => (p.messages[0].content as { text: string }).text;
+  return { instructions, tools: tools.map((t) => t.name), plate: text(plate), week: text(week), brief: text(brief) };
+}
+
+describe('read-only texts (the build before BACKLOG-4263 PR-5, transcribed in fixtures/read-only-texts-92743f3c2.json)', () => {
+  it.each([
+    ['the switch off (real answer)', () => clone(FX.FX_write_access_off)],
+    ['a read grant (real answer)', () => clone(FX.FX_write_access_read_grant)],
+    ['an older database without mcp_write_access', () => new Error('Could not find the function public.mcp_write_access')],
+  ])('with %s, instructions, prompts and tools/list are byte-identical to the read-only build', async (_l, a) => {
+    writeAnswer = a();
+    const s = await served();
+    expect(s.instructions).toBe(BASE_TEXTS.instructions);
+    expect(s.plate).toBe(BASE_TEXTS.prompts.whats_on_my_plate.message);
+    expect(s.week).toBe(BASE_TEXTS.prompts.due_this_week.message);
+    expect(s.brief).toBe(`${BASE_TEXTS.prompts.brief_me_on_a_deal.head}\n"Main St"`);
+    expect(s.tools).toEqual(TOOLS.map((t) => t.name));
+    for (const t of [s.instructions, s.plate, s.week, s.brief]) expect(t).not.toMatch(/update_todo|add_todo|remove_todo|restore_todo|unless I ask/);
+  });
+
+  it('with write access the instructions name the write tools and the prompts drop the read-only line', async () => {
+    const s = await served();
+    expect(s.instructions).toContain('You can change todos with update_todo, add_todo, remove_todo and restore_todo, only when the person asks.');
+    expect(s.instructions).not.toBe(BASE_TEXTS.instructions);
+    for (const t of [s.plate, s.week, s.brief]) {
+      expect(t).toContain('Do not change anything in Keepr unless I ask.');
+      expect(t).not.toContain('Keepr is read-only');
+    }
+  });
+});
+
+// ---------------------------------------------------------------- the declared output schema accepts both real frames
+describe('get_deal_checklists output schema', () => {
+  it.each(['FX_checklists_v1', 'FX_checklists_v2'])('an SDK client that listed the tools accepts the real %s answer against the declared schema', async (k) => {
+    toolAnswer = clone(FX[k]);
+    const client = await connect();
+    await client.listTools();
+    const r = (await client.callTool({ name: 'get_deal_checklists', arguments: { deal_id: fid(4) } })) as { isError?: boolean; structuredContent?: unknown };
+    await client.close();
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toEqual(FX[k].result);
+  });
+
+  it('declares v as 1 or 2 and the four v2 item keys as optional; a JSON Schema validator accepts both real frames and refuses v 3', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Ajv = require('ajv');
+    const schema = GET_DEAL_CHECKLISTS_TOOL.outputSchema as Record<string, any>;
+    expect(schema.properties.v).toEqual({ type: 'integer', enum: [1, 2] });
+    const item = schema.properties.checklists.items.properties.items.items;
+    for (const k of ['due_date', 'note_complete', 'editable_title', 'removable']) {
+      expect(item.properties).toHaveProperty(k);
+      expect(item.required).not.toContain(k);
+    }
+    const validate = new Ajv({ strict: false }).compile(schema);
+    expect([validate(FX.FX_checklists_v1.result), JSON.stringify(validate.errors)]).toEqual([true, 'null']);
+    expect([validate(FX.FX_checklists_v2.result), JSON.stringify(validate.errors)]).toEqual([true, 'null']);
+    expect(validate({ ...FX.FX_checklists_v2.result, v: 3 })).toBe(false);
+    for (const t of WRITE_TOOLS) expect(new Ajv({ strict: false }).compile(t.outputSchema as object)(FX.FX_update_applied.result)).toBe(true);
+  });
+});
+
 describe('update_todo', () => {
+  it.each([
+    [{ done: true }, { done: true }],
+    [{ done: false }, { done: false }],
+    [{ note: 'call back' }, { note: 'call back' }],
+    [{ note: null }, { note: null }],
+    [{ due_date: '2026-12-01' }, { due_date: '2026-12-01' }],
+    [{ due_date: null }, { due_date: null }],
+    [{ title: 'Order keys' }, { title: 'Order keys' }],
+  ])('%p sends exactly p_changes %p (a tick never clears the note or the due date)', async (given, sent) => {
+    await call('update_todo', { item_id: fid(1), ...given });
+    const [[, args]] = calls('mcp_update_todo');
+    expect(JSON.parse(JSON.stringify(args.p_changes))).toEqual(sent);
+    expect(Object.keys(args.p_changes as object)).toEqual(Object.keys(sent));
+  });
+
   it('sends only the parts given, as the migration names them, and shows the real answer', async () => {
     const r = await call('update_todo', { item_id: fid(1).toUpperCase(), done: true, note: null, request_id: 'r-1' });
     const [[, args]] = calls('mcp_update_todo');

@@ -21,7 +21,7 @@
  */
 
 import { ProtocolError, ProtocolErrorCode, type GetPromptResult, type Prompt } from '@modelcontextprotocol/server';
-import { PROMPT_ADDRESS_LIMITS, PROMPT_MESSAGES, PROMPT_TEXT } from './tools/text';
+import { PROMPT_ADDRESS_LIMITS, PROMPT_MESSAGES, PROMPT_TEXT, PROMPT_WRITE_LINES } from './tools/text';
 
 const { whats_on_my_plate: PLATE, due_this_week: WEEK, brief_me_on_a_deal: BRIEF } = PROMPT_TEXT;
 
@@ -54,6 +54,15 @@ export function cleanAddress(raw: unknown): string | null {
   return n >= PROMPT_ADDRESS_LIMITS.min && n <= PROMPT_ADDRESS_LIMITS.max ? cleaned : null;
 }
 
+/** BACKLOG-4263 PR-5: the read-only lines are kept for a connection that cannot change todos, swapped otherwise. */
+function forAccess(text: string, canWrite: boolean): string {
+  if (!canWrite) return text;
+  return text
+    .split('\n')
+    .map((line) => PROMPT_WRITE_LINES.find(([ro]) => ro === line)?.[1] ?? line)
+    .join('\n');
+}
+
 function userMessage(description: string, text: string): GetPromptResult {
   return { description, messages: [{ role: 'user', content: { type: 'text', text } }] };
 }
@@ -63,20 +72,20 @@ function argKeys(args: Record<string, string> | undefined): string[] {
   return args ? Object.keys(args) : [];
 }
 
-export function getPrompt(name: string, args: Record<string, string> | undefined): GetPromptResult {
+export function getPrompt(name: string, args: Record<string, string> | undefined, canWrite = false): GetPromptResult {
   switch (name) {
     case PLATE.name:
     case WEEK.name: {
       if (argKeys(args).length > 0) throw invalid();
       const p = name === PLATE.name ? PLATE : WEEK;
-      return userMessage(p.description, p.message);
+      return userMessage(p.description, forAccess(p.message, canWrite));
     }
     case BRIEF.name: {
       const keys = argKeys(args);
       if (keys.some((k) => k !== BRIEF.argument.name)) throw invalid();
       const address = cleanAddress(args?.[BRIEF.argument.name]);
       if (address === null) throw invalid();
-      return userMessage(BRIEF.description, `${BRIEF.head}\n"${address}"`);
+      return userMessage(BRIEF.description, `${forAccess(BRIEF.head, canWrite)}\n"${address}"`);
     }
     default:
       throw new ProtocolError(ProtocolErrorCode.InvalidParams, PROMPT_MESSAGES.unknown_prompt);

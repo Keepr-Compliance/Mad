@@ -183,7 +183,11 @@ describe('BACKLOG-4244 tools/list', () => {
       expect(objs.length).toBeGreaterThan(0);
       for (const o of objs) {
         expect(o).not.toHaveProperty('additionalProperties');
-        expect(o.required).toEqual(Object.keys(o.properties as object));
+        // BACKLOG-4263 PR-5: the four item keys of get_deal_checklists frame v2 are declared but not required, so a
+        // v1 answer (every connection while the write switch is off) still matches the declared schema
+        const optional = ['due_date', 'note_complete', 'editable_title', 'removable'];
+        const want = Object.keys(o.properties as object).filter((k) => !(t.name === 'get_deal_checklists' && optional.includes(k)));
+        expect(o.required).toEqual(want);
       }
     }
   });

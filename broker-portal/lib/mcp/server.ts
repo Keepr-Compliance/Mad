@@ -20,24 +20,22 @@ import { getPrompt, PROMPTS } from './prompts';
 import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
 import { getDeal, GET_DEAL_TOOL, listAllDeals, LIST_ALL_DEALS_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
-import { SERVER_INSTRUCTIONS, TOOL_MESSAGES } from './tools/text';
+import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_WRITE, TOOL_MESSAGES } from './tools/text';
 import { addTodo, removeTodo, restoreTodo, updateTodo, WRITE_TOOLS } from './tools/todos';
-import { writeAccess } from './oauth/rpc';
-import { accessFor } from './tools/result';
 
 /** The read tools, in the order tools/list returns them. */
 export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL, LIST_ALL_DEALS_TOOL];
 
 /**
- * BACKLOG-4263 PR-5: the write tools follow the read tools only when the database says this token's connection
- * can write (mcp_write_access: granted 'mcp:todos' AND the write switch on). Any other answer, an error or a
- * database without the function included, lists the read tools only.
+ * BACKLOG-4263 PR-5: the route asks the database once per request whether this token's connection can write
+ * (mcp_write_access: granted 'mcp:todos' AND the write switch on) and passes it as authInfo.extra.canWrite. Only
+ * exactly true lists the write tools and sends the write instructions and prompt lines; anything else is read-only.
  */
-export async function toolsFor(atDigest: unknown) {
-  const a = accessFor(atDigest);
-  if (!a) return TOOLS;
-  const res = await writeAccess(a.cfg, a.access);
-  return res.kind === 'ok' && res.write === true ? [...TOOLS, ...WRITE_TOOLS] : TOOLS;
+export function canWriteOf(ctx: McpRequestContext): boolean {
+  return ctx.authInfo?.extra?.canWrite === true;
+}
+export function toolsFor(canWrite: boolean) {
+  return canWrite ? [...TOOLS, ...WRITE_TOOLS] : TOOLS;
 }
 
 export const MCP_SERVER_NAME = 'keepr';
@@ -59,14 +57,14 @@ export function createMcpServer(ctx: McpRequestContext): Server {
   // asks for the low-level one so tool registration stays explicit.
   const server = new Server(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
-    { capabilities: { tools: {}, prompts: {} }, instructions: SERVER_INSTRUCTIONS }
+    { capabilities: { tools: {}, prompts: {} }, instructions: canWriteOf(ctx) ? SERVER_INSTRUCTIONS_WRITE : SERVER_INSTRUCTIONS }
   );
 
-  server.setRequestHandler('tools/list', async () => ({ tools: await toolsFor(ctx.authInfo?.extra?.atDigest) }));
+  server.setRequestHandler('tools/list', async () => ({ tools: toolsFor(canWriteOf(ctx)) }));
 
   // Prompts are text only: no tool and no database call (lib/mcp/prompts.ts).
   server.setRequestHandler('prompts/list', async () => ({ prompts: PROMPTS }));
-  server.setRequestHandler('prompts/get', async (request) => getPrompt(request.params.name, request.params.arguments));
+  server.setRequestHandler('prompts/get', async (request) => getPrompt(request.params.name, request.params.arguments, canWriteOf(ctx)));
 
   const atDigest = () => ctx.authInfo?.extra?.atDigest;
   const calls = new Map<string, (_args: unknown) => Promise<CallToolResult>>([

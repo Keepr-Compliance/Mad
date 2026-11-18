@@ -1,6 +1,6 @@
 {
   "migration": "supabase/migrations/20261118130000_backlog_4263_mcp_todo_write_tools.sql",
-  "migration_md5": "2a5612b5494442c5d4e257e0e9838036",
+  "migration_md5": "8477ae9a6f07260f802a7334aeeca90d",
   "replaced": {
     "public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)": {
       "old": "bf7192517604c2db532312a7e071a751",
@@ -8,7 +8,7 @@
     },
     "public.mcp_authorize_view(text,bytea)": {
       "old": "879b6c01072494b931e782a6f07b463d",
-      "new": "8e6dc7162dedefd9f8ced48fc26fc8c1"
+      "new": "a9b5a3de003671600e0033d7d952d804"
     },
     "public.mcp_authorize_approve(text,bytea,text,bytea)": {
       "old": "90eac2594c015edc44b3fecc9ec0209b",
@@ -32,7 +32,8 @@
     "public._mcp_granted_scope(text)": "4f7bb0215e9cab1bc998eeedd017bd3d",
     "public._mcp_conn_can_write(uuid)": "b5ca801bf23e9cc20046c36b82efe416",
     "public._mcp_todo_item_out(uuid,uuid)": "66ed6c0f610df5b910586b618ad14b8f",
-    "public._mcp_todo_call(text,bytea,text,text,jsonb)": "6d430071334ed44dffdbb9ff0c4c6588",
+    "public._mcp_bump_n(text,interval,integer,integer)": "ee9a6777820f6fc4433ef97660a1b701",
+    "public._mcp_todo_call(text,bytea,text,text,jsonb)": "4523f7f6e3520281c2826128fb1a79b7",
     "public.mcp_write_access(text,bytea,text)": "7729e001d5bcfec47fba3abf79897d24",
     "public.mcp_update_todo(text,bytea,text,text,jsonb,text)": "6e1b1653dea3374900d9a1cf8587323b",
     "public.mcp_add_todo(text,bytea,text,text,text,text,text,text)": "95e1d7688be6adbfdf2d15a2d65a46af",
@@ -56,6 +57,6 @@
     "mcp_update_todo(text,bytea,text,text,jsonb,text)",
     "mcp_write_access(text,bytea,text)"
   ],
-  "apply_md5": "21e5bed7916e181ce9e849a92bfd0b19",
-  "rollback_md5": "f66c8162f8961eab976fa8447b272b55"
+  "apply_md5": "d0061bf60ea548efc034ca9485baa371",
+  "rollback_md5": "37c49014a06b0a5b214e1acb819ddc28"
 }

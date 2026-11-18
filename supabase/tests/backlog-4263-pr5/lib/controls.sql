@@ -8,6 +8,10 @@ BEGIN
   PERFORM pg_temp.conn('KA_todos', pg_temp.id('A'), 11, 'mcp:todos', 'anthropic', 'Fixture Evil Name');
   PERFORM pg_temp.conn('KB_todos', pg_temp.id('B'), 12, 'mcp:todos', 'openai');
   PERFORM pg_temp.conn('KA_exp', pg_temp.id('A'), 13, 'mcp:todos', 'openai');
+  PERFORM pg_temp.conn('KA_todos2', pg_temp.id('A'), 14, 'mcp:todos', 'openai');
+  -- owner B: one removed item (B's own desktop removal) and one purged item (purged_at, as the purge sets it)
+  PERFORM pg_temp.push(pg_temp.id('B'), pg_temp.id('IB'), pg_temp.nowt(), jsonb_build_array(pg_temp.op('remove', 'item', pg_temp.id('b2'))));
+  UPDATE public.cloud_deal_checklist_items SET purged_at = now() WHERE id = pg_temp.id('b3');
   UPDATE public.mcp_tokens SET issued_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
    WHERE connection_id = pg_temp.id('KA_exp') AND kind = 'access';
 END
@@ -152,6 +156,35 @@ BEGIN
 END $c$;
 
 -- ---------------------------------------------------------------- consent: the scope granted follows the switch, never upgraded
+-- steps: 'v' = view (keeps the latest nonce), 'on' / 'off' = the switch; then approve with the latest nonce, exchange
+-- (token digest dn), and the write access of that token
+CREATE FUNCTION pg_temp.consent_steps(k text, ask text, steps text[], dn int, old_nonce boolean DEFAULT false) RETURNS jsonb LANGUAGE plpgsql AS $c$
+DECLARE A uuid := pg_temp.id('A'); ver text := 'v' || md5(k) || md5(k || 'x'); bind bytea := sha256(convert_to('p5-bind-' || k, 'UTF8'));
+        cd bytea := sha256(convert_to('p5-code-' || k, 'UTF8')); b jsonb; v jsonb; first_nonce text; views jsonb := '[]'; ap jsonb; ex jsonb; wa jsonb;
+        rid text; sc text; st text;
+BEGIN
+  b := pg_temp.w(format('SELECT public.mcp_authorize_begin(%L, %L, %L, %L, %L, %L, %L, NULL, %L::bytea, %L::bytea)', pg_temp.secret(), pg_temp.client(),
+         'https://claude.ai/api/mcp/auth_callback', public._mcp_b64url(sha256(convert_to(ver, 'UTF8'))), 'S256', pg_temp.res(), ask,
+         '\x' || encode(bind, 'hex'), '\x' || encode(sha256(convert_to('p5-ip-' || k, 'UTF8')), 'hex')));
+  rid := b ->> 'request_id';
+  IF rid IS NULL THEN RETURN jsonb_build_object('begin', b); END IF;
+  FOREACH st IN ARRAY steps LOOP
+    IF st = 'on' THEN PERFORM pg_temp.sw(true);
+    ELSIF st = 'off' THEN PERFORM pg_temp.sw(false);
+    ELSE
+      v := pg_temp.rpc(A, format('SELECT public.mcp_authorize_view(%L, %L::bytea)', rid, '\x' || encode(bind, 'hex')));
+      first_nonce := coalesce(first_nonce, v ->> 'nonce');
+      views := views || jsonb_build_array(v -> 'scope');
+    END IF;
+  END LOOP;
+  ap := pg_temp.rpc(A, format('SELECT public.mcp_authorize_approve(%L, %L::bytea, %L, %L::bytea)', rid, '\x' || encode(bind, 'hex'),
+          CASE WHEN old_nonce THEN first_nonce ELSE v ->> 'nonce' END, '\x' || encode(cd, 'hex')));
+  SELECT c.scope INTO sc FROM public.mcp_authorization_codes x JOIN public.mcp_connections c ON c.id = x.connection_id WHERE x.code_sha256 = sha256(cd);
+  ex := pg_temp.w(format('SELECT public.mcp_exchange_code(%L, %L::bytea, %L, %L, %L, %L, %L::bytea, %L::bytea)', pg_temp.secret(), '\x' || encode(cd, 'hex'),
+          ver, pg_temp.client(), 'https://claude.ai/api/mcp/auth_callback', pg_temp.res(), pg_temp.dgl(dn), pg_temp.dgl(dn + 500)));
+  wa := pg_temp.w(pg_temp.q_wa(dn));
+  RETURN jsonb_build_object('views', views, 'approve', coalesce(ap ->> 'error', ap ->> 'ok'), 'granted', sc, 'token_scope', ex -> 'scope', 'write_access', wa -> 'write');
+END $c$;
 CREATE FUNCTION pg_temp.consent(k text, ask text, flip_before_view boolean, flip_to boolean) RETURNS jsonb LANGUAGE plpgsql AS $c$
 DECLARE A uuid := pg_temp.id('A'); ver text := 'v' || md5(k) || md5(k || 'x'); bind bytea := sha256(convert_to('p5-bind-' || k, 'UTF8'));
         cd bytea := sha256(convert_to('p5-code-' || k, 'UTF8')); b jsonb; v jsonb; ap jsonb; ex jsonb; rid text; sc text; reqsc text;
@@ -172,7 +205,7 @@ BEGIN
                             'granted', sc, 'token_scope', ex -> 'scope', 'exchange_ok', ex -> 'ok');
 END $c$;
 CREATE FUNCTION pg_temp.c_consent() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE off_ jsonb; on_ jsonb; on_off jsonb; off_on jsonb; ask_todos jsonb; bad jsonb; on_read jsonb;
+DECLARE off_ jsonb; on_ jsonb; on_off jsonb; off_on jsonb; ask_todos jsonb; bad jsonb; on_read jsonb; f1 jsonb; f2 jsonb; f3 jsonb; f4 jsonb; f5 jsonb; f6 jsonb;
 BEGIN
   PERFORM pg_temp.unrate();
   PERFORM pg_temp.sw(false);
@@ -186,7 +219,26 @@ BEGIN
   on_ := pg_temp.consent('on', 'mcp:todos', false, false);
   on_read := pg_temp.consent('on_read', 'mcp:read', false, false);
   on_off := pg_temp.consent('on_then_off', 'mcp:todos', true, false);
+  -- the page's scope is what approve grants at most (reviewer R1): flips between view and approve, both ways
+  PERFORM pg_temp.sw(true);
+  f1 := pg_temp.consent_steps('flip_off_on', 'mcp:todos', ARRAY['off', 'v', 'on'], 51);
+  PERFORM pg_temp.sw(true);
+  f2 := pg_temp.consent_steps('flip_on_off', 'mcp:todos', ARRAY['v', 'off'], 52);
+  PERFORM pg_temp.sw(true);
+  f3 := pg_temp.consent_steps('views_down_up', 'mcp:todos', ARRAY['v', 'off', 'v', 'on', 'v'], 53);
+  PERFORM pg_temp.sw(true);
+  f4 := pg_temp.consent_steps('old_page', 'mcp:todos', ARRAY['v', 'off', 'v', 'on'], 54, true);
+  PERFORM pg_temp.sw(false);
+  f5 := pg_temp.consent_steps('asked_write_while_off', 'mcp:todos', ARRAY['v'], 55);
+  PERFORM pg_temp.sw(true);
+  f6 := pg_temp.consent_steps('write_on', 'mcp:todos', ARRAY['v'], 56);
   RETURN pg_temp.all_of(
+    pg_temp.pass(f1 = '{"views":["mcp:read"],"approve":"true","granted":"mcp:read","token_scope":"mcp:read","write_access":false}'::jsonb, 'read page, switch on at approve ' || f1::text),
+    pg_temp.pass(f2 = '{"views":["mcp:todos"],"approve":"true","granted":"mcp:read","token_scope":"mcp:read","write_access":false}'::jsonb, 'write page, switch off at approve ' || f2::text),
+    pg_temp.pass(f3 = '{"views":["mcp:todos","mcp:read","mcp:read"],"approve":"true","granted":"mcp:read","token_scope":"mcp:read","write_access":false}'::jsonb, 'a read page is never followed by a write page ' || f3::text),
+    pg_temp.pass(f4 ->> 'approve' = 'request_invalid' AND f4 -> 'granted' = 'null'::jsonb, 'an earlier page cannot be approved ' || f4::text),
+    pg_temp.pass(f5 = '{"views":["mcp:read"],"approve":"true","granted":"mcp:read","token_scope":"mcp:read","write_access":false}'::jsonb, 'write asked while off: read grant, read page, no write tools ' || f5::text),
+    pg_temp.pass(f6 = '{"views":["mcp:todos"],"approve":"true","granted":"mcp:todos","token_scope":"mcp:todos","write_access":true}'::jsonb, 'write page, switch on ' || f6::text),
     pg_temp.pass(off_ ->> 'request_scope' = 'mcp:read' AND off_ ->> 'view_scope' = 'mcp:read' AND off_ ->> 'granted' = 'mcp:read' AND off_ ->> 'token_scope' = 'mcp:read', 'off ' || off_::text),
     pg_temp.pass(ask_todos ->> 'granted' = 'mcp:read' AND ask_todos ->> 'view_scope' = 'mcp:read', 'asked todos while off ' || ask_todos::text),
     pg_temp.pass(off_on ->> 'request_scope' = 'mcp:read' AND off_on ->> 'view_scope' = 'mcp:read' AND off_on ->> 'granted' = 'mcp:read', 'write asked while off, approved on ' || off_on::text),
@@ -372,6 +424,45 @@ BEGIN
     -- the same request_id with other arguments is a new change
     pg_temp.pass(pg_temp.ws(r3) = 'applied' AND (pg_temp.it(m)).note = 'second', 'new args ' || r3::text));
 END $c$;
+-- a request_id is a retry key of one connection and one tool only (reviewer C-R4, C-R5)
+CREATE FUNCTION pg_temp.c_replay_scope() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE A uuid := pg_temp.id('A'); m uuid := pg_temp.id('m1'); m2 uuid := pg_temp.id('m2'); r1 jsonb; r2 jsonb; l0 bigint; l1 bigint; l2 bigint; t1 jsonb; t2 jsonb; rm2 timestamptz;
+BEGIN
+  PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(true);
+  l0 := (SELECT count(*) FROM public.cloud_todo_ops WHERE owner_user_id = A);
+  r1 := pg_temp.w(pg_temp.q_upd(11, m, '{"note":"xconn"}', 'same-key'));
+  l1 := (SELECT count(*) FROM public.cloud_todo_ops WHERE owner_user_id = A);
+  r2 := pg_temp.w(pg_temp.q_upd(14, m, '{"note":"xconn"}', 'same-key'));
+  l2 := (SELECT count(*) FROM public.cloud_todo_ops WHERE owner_user_id = A);
+  t1 := pg_temp.w(pg_temp.q_rm(11, m2, 'same-tool-key'));
+  t2 := pg_temp.w(pg_temp.q_rs(11, m2, 'same-tool-key'));
+  rm2 := (pg_temp.it(m2)).removed_at;
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.ws(r1) = 'applied' AND pg_temp.ws(r2) = 'unchanged' AND l1 = l0 + 1 AND l2 = l1 + 1,
+      'another connection, same key ' || jsonb_build_object('r1', pg_temp.ws(r1), 'r2', pg_temp.ws(r2), 'ledger', jsonb_build_array(l0, l1, l2))::text),
+    pg_temp.pass(pg_temp.ws(t1) = 'removed' AND pg_temp.ws(t2) = 'restored' AND rm2 IS NULL, 'another tool, same key ' || pg_temp.ws(t1) || '/' || pg_temp.ws(t2)));
+END $c$;
+
+-- another owner's ids (live, removed, purged), an unconfirmed deal's and a random id: one identical answer, every tool
+CREATE FUNCTION pg_temp.c_enum() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE x uuid := md5('p5-nothing')::uuid; a jsonb; id_ uuid; k text; nf jsonb := '{"ok":false,"error":"not_found"}'; sb text;
+BEGIN
+  PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(true);
+  sb := pg_temp.state(pg_temp.id('B'));
+  a := jsonb_build_object('add_B', pg_temp.w(pg_temp.q_add(11, pg_temp.id('DB1'), 'x')), 'add_x', pg_temp.w(pg_temp.q_add(11, x, 'x')),
+                          'add_unconfirmed', pg_temp.w(pg_temp.q_add(11, pg_temp.id('DA4'), 'x')));
+  FOREACH k IN ARRAY ARRAY['b1', 'b2', 'b3', 'x', 'n1'] LOOP
+    id_ := CASE WHEN k = 'x' THEN x ELSE pg_temp.id(k) END;
+    PERFORM pg_temp.unrate();
+    a := a || jsonb_build_object('upd_' || k, pg_temp.w(pg_temp.q_upd(11, id_, '{"note":"x"}')),
+                                 'rm_' || k, pg_temp.w(pg_temp.q_rm(11, id_)), 'rs_' || k, pg_temp.w(pg_temp.q_rs(11, id_)));
+  END LOOP;
+  RETURN pg_temp.all_of(
+    pg_temp.pass((SELECT count(*) FROM jsonb_each(a) WHERE value <> nf) = 0 AND (SELECT count(*) FROM jsonb_each(a)) = 18,
+      (SELECT jsonb_object_agg(key, value::text) FROM jsonb_each(a) WHERE value <> nf)::text),
+    pg_temp.pass(pg_temp.state(pg_temp.id('B')) = sb, 'B changed'));
+END $c$;
+
 CREATE FUNCTION pg_temp.c_replay_add() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE A uuid := pg_temp.id('A'); a1 jsonb; a2 jsonb; a3 jsonb; n0 bigint;
 BEGIN
@@ -469,15 +560,25 @@ END $c$;
 
 -- ---------------------------------------------------------------- 500 writes a day per user
 CREATE FUNCTION pg_temp.c_rate() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE A uuid := pg_temp.id('A'); s0 text; r jsonb;
+DECLARE A uuid := pg_temp.id('A'); s0 text; s1 text; r jsonb; r4 jsonb; r3 jsonb; s4 text; c4 int; c3 int;
 BEGIN
   PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(true);
   INSERT INTO public.mcp_rate_counters (bucket, window_start, count) VALUES ('todo_write_user:' || A::text, public._mcp_window(interval '1 day'), 500);
   s0 := pg_temp.state(A);
   r := pg_temp.w(pg_temp.q_upd(11, pg_temp.id('m1'), '{"done":true}'));
+  s1 := pg_temp.state(A);
+  -- parts count: 497 used, a four-part update does not fit (nothing added, nothing written), a three-part one does
+  UPDATE public.mcp_rate_counters SET count = 497 WHERE bucket = 'todo_write_user:' || A::text;
+  r4 := pg_temp.w(pg_temp.q_upd(11, pg_temp.id('m1'), '{"done":true,"title":"Four","note":"four","due_date":"2026-12-01"}'));
+  s4 := pg_temp.state(A);
+  c4 := (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'todo_write_user:' || A::text);
+  r3 := pg_temp.w(pg_temp.q_upd(11, pg_temp.id('m1'), '{"done":true,"title":"Three","note":"three"}'));
+  c3 := (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'todo_write_user:' || A::text);
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.ws(r) = 'E:rate_limited', 'status ' || r::text),
-    pg_temp.pass(pg_temp.state(A) = s0, 'state changed'),
+    pg_temp.pass(s1 = s0, 'state changed'),
+    pg_temp.pass(pg_temp.ws(r4) = 'E:rate_limited' AND s4 = s0 AND c4 = 497, 'four parts at 497 ' || r4::text || ' count ' || c4),
+    pg_temp.pass(pg_temp.ws(r3) = 'applied' AND c3 = 500, 'three parts at 497 ' || r3::text || ' count ' || coalesce(c3::text, 'null')),
     pg_temp.pass(pg_temp.ws(pg_temp.w(pg_temp.q_upd(12, pg_temp.id('b1'), '{"done":true}'))) = 'applied', 'other user unaffected'));
 END $c$;
 
@@ -577,10 +678,11 @@ END $c$;
 
 -- ---------------------------------------------------------------- write access answer
 CREATE FUNCTION pg_temp.c_write_access() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE l0 bigint := (SELECT count(*) FROM public.mcp_call_log); a jsonb; b jsonb; c jsonb; d jsonb; e jsonb;
+DECLARE l0 bigint := (SELECT count(*) FROM public.mcp_call_log); a jsonb; b jsonb; c jsonb; d jsonb; e jsonb; f jsonb;
 BEGIN
   PERFORM pg_temp.sw(true);
   a := pg_temp.w(pg_temp.q_wa(11)); b := pg_temp.w(pg_temp.q_wa(1)); c := pg_temp.w(pg_temp.q_wa(13)); d := pg_temp.w(pg_temp.q_wa(11, 'wrong-secret'));
+  f := pg_temp.w(format('SELECT public.mcp_write_access(%L, %L::bytea, %L)', pg_temp.secret(), pg_temp.dgl(11), 'https://other-portal.example.test/api/mcp'));
   PERFORM pg_temp.sw(false);
   e := pg_temp.w(pg_temp.q_wa(11));
   RETURN pg_temp.all_of(
@@ -589,6 +691,7 @@ BEGIN
     pg_temp.pass(c = '{"ok":false,"error":"not_connected"}'::jsonb, 'expired ' || c::text),
     pg_temp.pass(d = '{"ok":false,"error":"not_connected"}'::jsonb, 'secret ' || d::text),
     pg_temp.pass(e = '{"ok":true,"write":false}'::jsonb, 'todos off ' || e::text),
+    pg_temp.pass(f = '{"ok":false,"error":"not_connected"}'::jsonb, 'another resource ' || f::text),
     pg_temp.pass((SELECT count(*) FROM public.mcp_call_log) = l0, 'logged'));
 END $c$;
 

@@ -845,6 +845,8 @@ export class FakeServer {
    * (migration 20261118130000, _mcp_todo_call ADD:order): the next free place on the live list, max + 1 over its live
    * items, 0 for an empty list. Observed on the real functions (harness-5.sql c_order): live My items 0, 1, 2 and a
    * removed one at 3 -> 3; a new list -> 0. Pass null for a create without sort_order (the core's own default).
+   * The SQL takes the max over the deal's live My items lists; the server keeps at most one live list per deal
+   * (partial unique index, migration 20261118110000), so that is this one list.
    */
   aiAdd(checklist: FakeTodo, title: string, atMs: number = this.serverNow(), sortOrder?: number | null): FakeTodo {
     const live = this.todos.filter((x) => x.entity === "item" && x.checklistId === checklist.id && !x.removed).map((x) => x.parts.order.value);

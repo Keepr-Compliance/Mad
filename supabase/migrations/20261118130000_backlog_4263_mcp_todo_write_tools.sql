@@ -13,14 +13,14 @@
 --   anon       mcp_authorize_begin   accepts 'mcp:todos'; records it only when asked for AND the switch is on
 --              mcp_exchange_code     answers the connection's scope
 --              mcp_refresh           answers the connection's scope
---   signed in  mcp_authorize_view    scope = what approve would grant now
---              mcp_authorize_approve grants 'mcp:todos' only when the request asked for it and the switch is on
+--   signed in  mcp_authorize_view    stores and shows the scope it can grant now (never more than the request held)
+--              mcp_authorize_approve grants 'mcp:todos' only when the last page showed it and the switch is still on
 --   reader     _mcp_r_deal_checklists (owner mcp_reader) frame v2 while the switch is on: due_date, note_complete,
 --              editable_title, removable on each item; frame v1, byte for byte, while it is off
 -- New:
 --   anon       mcp_write_access, mcp_update_todo, mcp_add_todo, mcp_remove_todo, mcp_restore_todo
 --              (each takes the portal secret and the access token digest; intentionally callable by anon)
---   internal   _mcp_writes_on (SECURITY DEFINER, EXECUTE mcp_reader only), _mcp_granted_scope,
+--   internal   _mcp_writes_on (SECURITY DEFINER, EXECUTE mcp_reader only), _mcp_granted_scope, _mcp_bump_n,
 --              _mcp_conn_can_write, _mcp_todo_item_out, _mcp_todo_call (no API role)
 --   checks     mcp_call_log tool and outcome CHECKs widened (found by column, as 20261114110000 does)
 -- Writes: every write tool is one call of _cloud_todo_apply (20261118110000) with actor
@@ -164,6 +164,34 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $fn$
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_todo_item_out(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
 
+-- Adds p_n to a rate counter only when the total stays within p_limit: 'ok', 'rate_limited' (nothing added) or 'busy'
+-- (row lock not obtained within 1 s). Same buckets and windows as _mcp_bump.
+CREATE OR REPLACE FUNCTION public._mcp_bump_n(p_bucket text, p_window interval, p_limit integer, p_n integer)
+RETURNS text LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = '' AS $fn$
+DECLARE
+  v_n   integer;
+  v_old text := current_setting('lock_timeout');
+BEGIN
+  IF p_n IS NULL OR p_n < 1 OR p_n > p_limit THEN
+    RETURN 'rate_limited';
+  END IF;
+  PERFORM set_config('lock_timeout', '1000ms', true);
+  BEGIN
+    INSERT INTO public.mcp_rate_counters AS rc (bucket, window_start, count)
+    VALUES (p_bucket, public._mcp_window(p_window), p_n)
+    ON CONFLICT (bucket, window_start) DO UPDATE SET count = rc.count + p_n
+     WHERE rc.count + p_n <= p_limit                                                              /*BUMP:within*/
+    RETURNING rc.count INTO v_n;
+  EXCEPTION WHEN lock_not_available THEN
+    PERFORM set_config('lock_timeout', v_old, true);
+    RETURN 'busy';
+  END;
+  PERFORM set_config('lock_timeout', v_old, true);
+  RETURN CASE WHEN v_n IS NULL THEN 'rate_limited' ELSE 'ok' END;
+END
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_bump_n(text, interval, integer, integer) FROM PUBLIC, anon, authenticated, service_role;
+
 -- The body of the four write tools. a: {item_id, changes, request_id} (update_todo), {deal_id, title, note,
 -- due_date, request_id} (add_todo), {item_id, request_id} (remove_todo, restore_todo).
 -- Returns {ok:true, result:{kind:'keepr.todo_change', v:1, about, status, item}}
@@ -172,8 +200,9 @@ REVOKE ALL ON FUNCTION public._mcp_todo_item_out(uuid, uuid) FROM PUBLIC, anon, 
 --           (refused; nothing written)
 -- or {ok:false, error}: not_connected | disabled | rate_limited | busy | read_only | not_entitled | invalid_input |
 --   not_found | timeout | error
--- Order: secret, token (_mcp_enter: connection, rate per connection and per user, call log row), write gate
--- (switch and scope), 500 writes per user per day, arguments, then the inner block.
+-- Order: secret, the owner's settings row FOR SHARE (lock order, see below), token (_mcp_enter: connection, rate per
+-- connection and per user, call log row), the same owner, write gate (switch and scope), arguments, 500 changes per
+-- user per day (an update counts its parts), then the inner block.
 -- request_id: a retried call with the same request_id and the same arguments gets the same op ids, so the core's
 -- ledger answers it with the stored result and writes nothing.
 CREATE OR REPLACE FUNCTION public._mcp_todo_call(p_secret text, p_at_digest bytea, p_resource text, p_tool text, a jsonb)
@@ -205,22 +234,52 @@ DECLARE
   v_order integer;
   v_out   text;
   v_frame jsonb;
+  v_uid   uuid;
+  v_n     integer;
 BEGIN
   IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
     RETURN public._mcp_refuse('not_connected');
+  END IF;
+  -- which of the three claim settings PostgREST set on entry, as three booleans (no value is logged)
+  RAISE LOG 'mcp_todo_call claims_on_entry claims=% sub=% role=%',                                 /*CLAIMS:observe*/
+    current_setting('request.jwt.claims', true) IS NOT NULL, current_setting('request.jwt.claim.sub', true) IS NOT NULL,
+    current_setting('request.jwt.claim.role', true) IS NOT NULL;
+  -- Lock order: the owner's settings row FOR SHARE first, before _mcp_enter locks the connection row, as every
+  -- other writer takes settings first (turn-off: settings, head, rows, then the connections). The owner is read
+  -- here without a lock and checked again against _mcp_enter's answer.
+  SELECT c.user_id INTO v_uid
+    FROM public.mcp_tokens t
+    JOIN public.mcp_connections c ON c.id = t.connection_id
+    JOIN public.mcp_settings s ON s.id
+   WHERE t.token_sha256 = sha256(p_at_digest)
+     AND octet_length(p_at_digest) = 32
+     AND t.kind = 'access'
+     AND t.expires_at > now()
+     AND t.pepper_version = s.pepper_version
+     AND c.status = 'active'
+     AND c.resource = p_resource;
+  IF v_uid IS NOT NULL THEN
+    v_lt0 := current_setting('lock_timeout');
+    PERFORM set_config('lock_timeout', '2s', true);
+    BEGIN
+      PERFORM 1 FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR SHARE;           /*LOCK:settings_first*/
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM set_config('lock_timeout', v_lt0, true);
+      RETURN public._mcp_refuse('busy');
+    END;
+    PERFORM set_config('lock_timeout', v_lt0, true);
   END IF;
   g := public._mcp_enter(p_at_digest, p_resource, p_tool);
   IF g.outcome IS DISTINCT FROM 'ok' THEN
     RETURN public._mcp_refuse(g.outcome);
   END IF;
+  IF g.user_id IS DISTINCT FROM v_uid THEN                                                         /*LOCK:same_user*/
+    PERFORM public._mcp_finish(g.call_id, 'not_connected', 0, v_t0);
+    RETURN public._mcp_refuse('not_connected');
+  END IF;
   IF public._mcp_conn_can_write(g.connection_id) IS NOT TRUE THEN                                  /*WRITE:gate*/
     PERFORM public._mcp_finish(g.call_id, 'read_only', 0, v_t0);
     RETURN public._mcp_refuse('read_only');
-  END IF;
-  v_b := public._mcp_bump('todo_write_user:' || g.user_id::text, interval '1 day', 500);          /*WRITE:day*/
-  IF v_b IS DISTINCT FROM 'ok' THEN
-    PERFORM public._mcp_finish(g.call_id, coalesce(v_b, 'busy'), 0, v_t0);
-    RETURN public._mcp_refuse(coalesce(v_b, 'busy'));
   END IF;
 
   -- ---------------------------------------------------------------- arguments
@@ -262,6 +321,13 @@ BEGIN
   IF v_first IS NOT NULL THEN
     PERFORM public._mcp_finish(g.call_id, v_first, 0, v_t0);
     RETURN public._mcp_refuse(v_first);
+  END IF;
+  -- 500 changes a day per user: each part of an update counts, one for every other tool
+  v_n := CASE WHEN p_tool = 'update_todo' THEN (SELECT count(*) FROM jsonb_object_keys(v_ch))::integer ELSE 1 END;   /*WRITE:day_parts*/
+  v_b := public._mcp_bump_n('todo_write_user:' || g.user_id::text, interval '1 day', 500, v_n);   /*WRITE:day*/
+  IF v_b IS DISTINCT FROM 'ok' THEN
+    PERFORM public._mcp_finish(g.call_id, coalesce(v_b, 'busy'), 0, v_t0);
+    RETURN public._mcp_refuse(coalesce(v_b, 'busy'));
   END IF;
 
   -- ---------------------------------------------------------------- ops (op ids from request_id when given)
@@ -356,8 +422,6 @@ BEGIN
     -- a failed block is rolled back with its claim settings; v_first says why
     WHEN SQLSTATE 'MC002' THEN NULL;
     WHEN lock_not_available THEN v_first := 'busy';
-    -- _mcp_enter holds this connection's row; a turn-off holding the settings row then waits on it to disconnect
-    -- the app. The write is the one that waited first, so it is the one refused; nothing of it is kept.
     WHEN deadlock_detected THEN v_first := 'busy';
     WHEN query_canceled THEN v_first := 'timeout';
     WHEN OTHERS THEN v_first := 'error';
@@ -684,7 +748,8 @@ $fn$;
 REVOKE ALL ON FUNCTION public.mcp_refresh(text, bytea, text, text, bytea, bytea) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.mcp_refresh(text, bytea, text, text, bytea, bytea) TO anon;
 
--- 4263 PR-5: scope is what mcp_authorize_approve would grant now, so the page shows the wording for it.
+-- 4263 PR-5: the page's scope is stored on the request: the scope it can grant now, never more than the request
+-- held. Each view takes a new nonce, so only the latest page can be approved, and approve grants at most what it showed.
 CREATE OR REPLACE FUNCTION public.mcp_authorize_view(p_request_id text, p_browser_binding_sha256 bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
 DECLARE
@@ -706,7 +771,8 @@ BEGIN
   v_nonce := public._mcp_b64url(uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid()));
   UPDATE public.mcp_authorization_requests r
      SET claimed_by = v_uid,
-         consent_nonce_sha256 = sha256(convert_to(v_nonce, 'UTF8'))
+         consent_nonce_sha256 = sha256(convert_to(v_nonce, 'UTF8')),
+         scope = public._mcp_granted_scope(r.scope)                                              /*SCOPE:view_store*/
    WHERE r.id = p_request_id
      AND r.status = 'pending'
      AND r.expires_at > now()
@@ -722,7 +788,7 @@ BEGIN
            'client_name', c.client_name,
            'provider', a.provider,
            'redirect_host', substring(v_req.redirect_uri FROM '^https://([^/]+)'),
-           'scope', public._mcp_granted_scope(v_req.scope),                                     /*SCOPE:view*/
+           'scope', v_req.scope,                                                                  /*SCOPE:view*/
            'notice_version', s.notice_version,
            'nonce', v_nonce,
            'replaces_existing', EXISTS (SELECT 1 FROM public.mcp_connections x

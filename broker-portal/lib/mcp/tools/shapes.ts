@@ -158,6 +158,19 @@ const checklistsFrame = (item: Record<string, Shape>, v: number): Shape =>
 export const CHECKLISTS_SHAPE = checklistsFrame(CHECKLIST_ITEM_V1, 1);
 export const CHECKLISTS_SHAPE_V2 = checklistsFrame(CHECKLIST_ITEM_V2, 2);
 export const CHECKLIST_ITEM_V2_KEYS: readonly string[] = Object.keys(CHECKLIST_ITEM_V2);
+const V2_ONLY_KEYS = Object.keys(CHECKLIST_ITEM_V2).filter((k) => !(k in CHECKLIST_ITEM_V1));
+
+/**
+ * The declared outputSchema of get_deal_checklists: one schema both frames satisfy. v is 1 or 2; the four item keys
+ * v2 adds are declared but not required (a v1 answer has none of them).
+ */
+export function checklistsOutputSchema(): Record<string, unknown> {
+  const schema = toJsonSchema(CHECKLISTS_SHAPE_V2) as Record<string, any>;
+  schema.properties.v = { type: 'integer', enum: [1, 2] };
+  const item = schema.properties.checklists.items.properties.items.items;
+  item.required = (item.required as string[]).filter((k) => !V2_ONLY_KEYS.includes(k));
+  return schema;
+}
 
 /** Statuses of keepr.todo_change; the last five mean nothing was changed. */
 export const TODO_STATUSES = [

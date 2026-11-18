@@ -35,6 +35,7 @@ SIG = {
     '_mcp_conn_can_write': 'public._mcp_conn_can_write(uuid)',
     '_mcp_todo_item_out': 'public._mcp_todo_item_out(uuid,uuid)',
     '_mcp_todo_call': 'public._mcp_todo_call(text,bytea,text,text,jsonb)',
+    '_mcp_bump_n': 'public._mcp_bump_n(text,interval,integer,integer)',
     'mcp_write_access': 'public.mcp_write_access(text,bytea,text)',
     'mcp_update_todo': 'public.mcp_update_todo(text,bytea,text,text,jsonb,text)',
     'mcp_add_todo': 'public.mcp_add_todo(text,bytea,text,text,text,text,text,text)',
@@ -43,7 +44,7 @@ SIG = {
     '_cloud_todo_apply_op': 'public._cloud_todo_apply_op(uuid,jsonb,text,uuid,jsonb,timestamp with time zone)',
 }
 REPLACED = ['mcp_authorize_begin', 'mcp_authorize_view', 'mcp_authorize_approve', 'mcp_exchange_code', 'mcp_refresh', '_mcp_r_deal_checklists']
-NEW = ['_mcp_writes_on', '_mcp_granted_scope', '_mcp_conn_can_write', '_mcp_todo_item_out', '_mcp_todo_call',
+NEW = ['_mcp_writes_on', '_mcp_granted_scope', '_mcp_conn_can_write', '_mcp_todo_item_out', '_mcp_bump_n', '_mcp_todo_call',
        'mcp_write_access', 'mcp_update_todo', 'mcp_add_todo', 'mcp_remove_todo', 'mcp_restore_todo']
 ANON_NEW = ['mcp_write_access', 'mcp_update_todo', 'mcp_add_todo', 'mcp_remove_todo', 'mcp_restore_todo']
 ANON_OLD = ['mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', 'mcp_check_access(text,bytea,text)',
@@ -115,16 +116,26 @@ MUTS = [
     ('M17_core_ai_on_removed', '_cloud_todo_apply_op', 'f', "    IF v_on_removed AND NOT v_desk THEN", '    IF false THEN', 'c_removed'),
     ('M18_frame_v2_always', '_mcp_r_deal_checklists', 'fn', "v_v2  boolean := public._mcp_writes_on() IS TRUE;", 'v_v2  boolean := true;', 'c_frame'),
     ('M19_write_access_always', 'mcp_write_access', 'fn', "'write', public._mcp_conn_can_write(v_conn) IS TRUE", "'write', true", 'c_write_access'),
-    ('M20_no_day_cap', '_mcp_todo_call', 'fn', "interval '1 day', 500);", "interval '1 day', 1000000);", 'c_rate'),
+    ('M20_no_day_cap', '_mcp_todo_call', 'fn', "interval '1 day', 500, v_n);", "interval '1 day', 1000000, v_n);", 'c_rate'),
+    ('M20b_day_counts_calls', '_mcp_todo_call', 'fn', "v_n := CASE WHEN p_tool = 'update_todo' THEN (SELECT count(*) FROM jsonb_object_keys(v_ch))::integer ELSE 1 END;", 'v_n := 1;', 'c_rate'),
+    ('M20c_bump_adds_when_over', '_mcp_bump_n', 'fn', "     WHERE rc.count + p_n <= p_limit                                                              /*BUMP:within*/\n", '', 'c_rate'),
+    ('S1_view_does_not_store', 'mcp_authorize_view', 'fn', [",\n         scope = public._mcp_granted_scope(r.scope)                                              /*SCOPE:view_store*/", "'scope', v_req.scope,"],
+     ['', "'scope', public._mcp_granted_scope(v_req.scope),"], 'c_consent'),
+    ('X2_op_id_without_connection', '_mcp_todo_call', 'fn', ["md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, v_key, a::text))", "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, a::text))"],
+     ["md5(concat_ws('|', 'mcp-todo', p_tool, v_key, a::text))", "md5(concat_ws('|', 'mcp-todo', p_tool, a::text))"], 'c_replay_scope'),
+    ('X3_op_id_without_tool', '_mcp_todo_call', 'fn', "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, a::text))", "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, a::text))", 'c_replay_scope'),
+    ('X5_write_access_any_resource', 'mcp_write_access', 'fn', "     AND c.status = 'active'\n     AND c.resource = p_resource;", "     AND c.status = 'active';", 'c_write_access'),
+    ('E1_core_item_path_any_owner', '_cloud_todo_apply_op', 'f', ["     WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/\n       AND (x.id = v_tid", "SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;"],
+     ["     WHERE (x.id = v_tid", "SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id;"], 'c_enum'),
     ('M21_core_unconfirmed_create', '_cloud_todo_apply_op', 'f', "IF d.id IS NULL OR (v_ai AND d.is_confirmed IS NOT TRUE) THEN", 'IF d.id IS NULL THEN', 'c_cross_owner'),
     ('M22_exchange_scope_constant', 'mcp_exchange_code', 'fn', "'scope', v_scope);   /*SCOPE:exchange*/", "'scope', 'mcp:read');", 'c_consent'),
     ('M23_refresh_upgrades', 'mcp_refresh', 'fn', "'scope', v_scope);   /*SCOPE:refresh*/", "'scope', 'mcp:todos');", 'c_old_grant'),
-    ('M24_view_shows_request', 'mcp_authorize_view', 'fn', "public._mcp_granted_scope(v_req.scope),", 'v_req.scope,', 'c_consent'),
+    ('M24_view_stores_request_scope', 'mcp_authorize_view', 'fn', "scope = public._mcp_granted_scope(r.scope)", 'scope = r.scope', 'c_consent'),
     ('M25_core_no_template_remove_rule', '_cloud_todo_apply_op', 'f', "    IF (NOT v_desk AND (ent = 'checklist' OR NOT v_my))", "    IF (NOT v_desk AND (ent = 'checklist'))", 'c_template'),
     ('M26_core_ai_restore_template', '_cloud_todo_apply_op', 'f', "v_ai_restore_template boolean := false;", 'v_ai_restore_template boolean := true;', 'c_template'),
 ]
 CONTROLS = ['c_switch_default', 'c_old_grant', 'c_consent', 'c_write_ok', 'c_template', 'c_all_or_nothing', 'c_lock', 'c_removed',
-            'c_cross_owner', 'c_replay', 'c_replay_add', 'c_note', 'c_order', 'c_input', 'c_rate', 'c_access', 'c_turn_off',
+            'c_cross_owner', 'c_enum', 'c_replay', 'c_replay_scope', 'c_replay_add', 'c_note', 'c_order', 'c_input', 'c_rate', 'c_access', 'c_turn_off',
             'c_claims', 'c_second_actor', 'c_write_access', 'c_frame', 'c_catalog']
 assert {m[5] for m in MUTS} <= set(CONTROLS)
 

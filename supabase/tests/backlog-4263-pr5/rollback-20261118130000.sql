@@ -6,7 +6,7 @@
 DO $pre4263p5r$
 DECLARE r record; v_md5 text;
 BEGIN
-  FOR r IN SELECT * FROM (VALUES ('public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', '98521f85e9e1d42c38f3f2e4f5fa743b'), ('public.mcp_authorize_view(text,bytea)', '8e6dc7162dedefd9f8ced48fc26fc8c1'), ('public.mcp_authorize_approve(text,bytea,text,bytea)', 'bddeb78139828a444715cc77d4482d78'), ('public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'ab6a9345c55ab69c77347d9b37e92e9d'), ('public.mcp_refresh(text,bytea,text,text,bytea,bytea)', 'a7797a967b1952dec493c48c62328530'), ('public._mcp_r_deal_checklists(uuid,boolean,uuid)', 'c8b91cac998caf8b9774f8970188574d')) x(sig, md5) LOOP
+  FOR r IN SELECT * FROM (VALUES ('public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', '98521f85e9e1d42c38f3f2e4f5fa743b'), ('public.mcp_authorize_view(text,bytea)', 'a9b5a3de003671600e0033d7d952d804'), ('public.mcp_authorize_approve(text,bytea,text,bytea)', 'bddeb78139828a444715cc77d4482d78'), ('public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'ab6a9345c55ab69c77347d9b37e92e9d'), ('public.mcp_refresh(text,bytea,text,text,bytea,bytea)', 'a7797a967b1952dec493c48c62328530'), ('public._mcp_r_deal_checklists(uuid,boolean,uuid)', 'c8b91cac998caf8b9774f8970188574d')) x(sig, md5) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS DISTINCT FROM r.md5 THEN RAISE EXCEPTION 'ROLLBACK 20261118130000: % is not at the body 20261118130000 wrote (md5 %)', r.sig, coalesce(v_md5, 'missing'); END IF;
   END LOOP;
@@ -435,6 +435,7 @@ DROP FUNCTION IF EXISTS public.mcp_add_todo(text,bytea,text,text,text,text,text,
 DROP FUNCTION IF EXISTS public.mcp_update_todo(text,bytea,text,text,jsonb,text);
 DROP FUNCTION IF EXISTS public.mcp_write_access(text,bytea,text);
 DROP FUNCTION IF EXISTS public._mcp_todo_call(text,bytea,text,text,jsonb);
+DROP FUNCTION IF EXISTS public._mcp_bump_n(text,interval,integer,integer);
 DROP FUNCTION IF EXISTS public._mcp_todo_item_out(uuid,uuid);
 DROP FUNCTION IF EXISTS public._mcp_conn_can_write(uuid);
 DROP FUNCTION IF EXISTS public._mcp_granted_scope(text);
@@ -460,7 +461,7 @@ BEGIN
   SELECT jsonb_build_object(
     'bodies', (SELECT coalesce(jsonb_object_agg(x.sig, coalesce(md5(p.prosrc), 'missing')), '{}') FROM (VALUES ('public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', 'bf7192517604c2db532312a7e071a751'), ('public.mcp_authorize_view(text,bytea)', '879b6c01072494b931e782a6f07b463d'), ('public.mcp_authorize_approve(text,bytea,text,bytea)', '90eac2594c015edc44b3fecc9ec0209b'), ('public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'cfb0787d8601435bbe47a575155866b8'), ('public.mcp_refresh(text,bytea,text,text,bytea,bytea)', 'b6ccefaa100e0b69df3e16e0a407d740'), ('public._mcp_r_deal_checklists(uuid,boolean,uuid)', 'f6a9f0336a1a070adcf66778afecbce7')) x(sig, want)
                 LEFT JOIN pg_proc p ON p.oid = to_regprocedure(x.sig) WHERE p.oid IS NULL OR md5(p.prosrc) <> x.want),
-    'new_left', (SELECT count(*) FROM unnest(ARRAY['public._mcp_writes_on()', 'public._mcp_granted_scope(text)', 'public._mcp_conn_can_write(uuid)', 'public._mcp_todo_item_out(uuid,uuid)', 'public._mcp_todo_call(text,bytea,text,text,jsonb)', 'public.mcp_write_access(text,bytea,text)', 'public.mcp_update_todo(text,bytea,text,text,jsonb,text)', 'public.mcp_add_todo(text,bytea,text,text,text,text,text,text)', 'public.mcp_remove_todo(text,bytea,text,text,text)', 'public.mcp_restore_todo(text,bytea,text,text,text)']) s WHERE to_regprocedure(s) IS NOT NULL),
+    'new_left', (SELECT count(*) FROM unnest(ARRAY['public._mcp_writes_on()', 'public._mcp_granted_scope(text)', 'public._mcp_conn_can_write(uuid)', 'public._mcp_todo_item_out(uuid,uuid)', 'public._mcp_bump_n(text,interval,integer,integer)', 'public._mcp_todo_call(text,bytea,text,text,jsonb)', 'public.mcp_write_access(text,bytea,text)', 'public.mcp_update_todo(text,bytea,text,text,jsonb,text)', 'public.mcp_add_todo(text,bytea,text,text,text,text,text,text)', 'public.mcp_remove_todo(text,bytea,text,text,text)', 'public.mcp_restore_todo(text,bytea,text,text,text)']) s WHERE to_regprocedure(s) IS NOT NULL),
     'anon_mcp', (SELECT coalesce(array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text), '{}') FROM pg_proc p
         WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_' AND has_function_privilege('anon', p.oid, 'EXECUTE'))
         = (SELECT array_agg(x ORDER BY x) FROM unnest(ARRAY['mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)', 'mcp_check_access(text,bytea,text)', 'mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)', 'mcp_get_deal(text,bytea,text,text)', 'mcp_get_deal_checklists(text,bytea,text,text,boolean,text)', 'mcp_get_status(text,bytea,text)', 'mcp_list_all_deals(text,bytea,text,text,text,text,text)', 'mcp_list_deals(text,bytea,text,text,text,integer,text)', 'mcp_refresh(text,bytea,text,text,bytea,bytea)', 'mcp_register_client(text,text,text,text[],bytea)']::text[]) x),

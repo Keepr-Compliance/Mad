@@ -125,10 +125,12 @@ BEGIN
   PERFORM pg_temp.rec('fx_push_A', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   r := pg_temp.push(B, IB, pg_temp.nowt(), jsonb_build_array(
          pg_temp.cc(pg_temp.id('DB1'), 'b1-my', 'keepr:my-items', 'My items', 0),
-         pg_temp.ci(pg_temp.id('DB1'), 'b1-my', 'b1', 'Owner B item', 0)));
+         pg_temp.ci(pg_temp.id('DB1'), 'b1-my', 'b1', 'Owner B item', 0),
+         pg_temp.ci(pg_temp.id('DB1'), 'b1-my', 'b2', 'Owner B removed item', 1),
+         pg_temp.ci(pg_temp.id('DB1'), 'b1-my', 'b3', 'Owner B purged item', 2)));
   PERFORM pg_temp.rec('fx_push_B', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   FOR k, d IN SELECT x.k, y.d FROM (VALUES ('t1', 'DA1'), ('t2', 'DA1'), ('m1', 'DA1'), ('m2', 'DA1'), ('m3', 'DA1'), ('m4', 'DA1'),
-                                           ('u1', 'DA2'), ('l1', 'DA3'), ('l2', 'DA3'), ('n1', 'DA4'), ('r1', 'DA5'), ('s1', 'DA6'), ('b1', 'DB1')) x(k, d0)
+                                           ('u1', 'DA2'), ('l1', 'DA3'), ('l2', 'DA3'), ('n1', 'DA4'), ('r1', 'DA5'), ('s1', 'DA6'), ('b1', 'DB1'), ('b2', 'DB1'), ('b3', 'DB1')) x(k, d0)
                                    CROSS JOIN LATERAL (SELECT pg_temp.id(x.d0) AS d) y LOOP
     PERFORM pg_temp.put(k, pg_temp.item_of(d, k)::text);
   END LOOP;

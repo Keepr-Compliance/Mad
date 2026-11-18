@@ -23,7 +23,7 @@ import {
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { digest } from '@/lib/mcp/oauth/crypto';
 import { dbCode, errorNameTag, logOutcome, type Outcome } from '@/lib/mcp/oauth/log';
-import { checkAccess } from '@/lib/mcp/oauth/rpc';
+import { checkAccess, writeAccess } from '@/lib/mcp/oauth/rpc';
 import { isCredential } from '@/lib/mcp/oauth/validate';
 import { isOriginAllowed } from '@/lib/mcp/origin';
 import { getMcpHandler } from '@/lib/mcp/server';
@@ -67,9 +67,14 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (access.kind !== 'ok') return done(mcpUnavailable(), 'unavailable', { error: dbCode(access.code) });
 
+  // BACKLOG-4263 PR-5: whether this token's connection can change todos (granted mcp:todos AND the database's write
+  // switch on). Any other answer, an error or an older database included, is read-only: read tools, read-only texts.
+  const wa = await writeAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
+  const canWrite = wa.kind === 'ok' && wa.write === true;
+
   try {
     const res = await getMcpHandler().fetch(req, {
-      authInfo: { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest } },
+      authInfo: { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest, canWrite } },
     });
     return done(res, 'ok');
   } catch (err) {
