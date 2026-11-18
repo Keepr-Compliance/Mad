@@ -439,6 +439,37 @@ describe('L4: at most 4 JSON-RPC requests in flight per token', () => {
     await Promise.all(pending);
   });
 
+  it('a POST with no JSON-RPC request takes one in-flight slot', async () => {
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const pending = await startPending(4);
+    const checks = accessChecks();
+    const refused = await rawPost(note);
+    expect(refused.status).toBe(202);
+    expect(await refused.text()).toBe('');
+    expect(accessChecks()).toBe(checks);
+    deferred[0]();
+    await expectServed(await pending[0], [1]);
+    expect((await rawPost(note)).status).toBe(202);
+    expect(accessChecks()).toBe(checks + 1);
+    for (const r of deferred.slice(1)) r();
+    await Promise.all(pending.slice(1));
+  });
+
+  it('a token with counters: 10 notification-only POSTs sent together make at most 4 access checks', async () => {
+    await useWindow(1);
+    const before = accessChecks();
+    deferAccess = true;
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const all = Array.from({ length: 10 }, () => rawPost(note));
+    await until(() => deferredAccess.length === 4);
+    for (let i = 0; i < 5; i++) await tick();
+    expect(accessChecks() - before).toBe(4);
+    for (const r of deferredAccess) r();
+    for (const r of await Promise.all(all)) expect(r.status).toBe(202);
+    // 1 earlier request + the 4 admitted; the 6 refused use nothing.
+    expect(mcpRateLimitStateForTests(KNOWN[0])).toEqual({ count: 5, inFlight: 0 });
+  });
+
   it('an abandoned slot is held longer than the database call timeout', () => {
     expect(MCP_SLOT_ABANDON_MS).toBeGreaterThan(RPC_TIMEOUT_MS);
   });
