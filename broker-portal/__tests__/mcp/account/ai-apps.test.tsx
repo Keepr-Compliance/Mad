@@ -149,6 +149,35 @@ describe('the list', () => {
     expect(screen.getByRole('button', { name: AI_APPS.disconnectAll })).toBeInTheDocument();
   });
 
+  // BACKLOG-4263 PR-6: migration 20261118140000 adds `scope` (the stored grant); the answer without it stays valid
+  it('a connection granted mcp:todos says it can change todos; one granted mcp:read says read only', async () => {
+    mockRpc.mockResolvedValue(
+      listOk([connectionRow({ scope: 'mcp:todos' }), connectionRow({ id: CONNECTION_ID_2, provider: 'openai', client_name: 'ChatGPT', scope: 'mcp:read' })])
+    );
+    await renderPage();
+    const [a, b] = rows();
+    expect(within(a).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals and change your todos.');
+    expect(within(b).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals.');
+    expect(within(a).getByTestId('ai-app-allowed').className).toBe('text-gray-600');
+  });
+
+  it('an answer without scope (before 20261118140000, or after its rollback): the rows show, with no Allowed line', async () => {
+    mockRpc.mockResolvedValue(listOk([connectionRow()]));
+    await renderPage();
+    expect(rows()).toHaveLength(1);
+    expect(screen.queryByTestId('ai-app-allowed')).toBeNull();
+  });
+
+  it.each([['an unknown scope', 'mcp:admin'], ['a null scope', null], ['a scope that is not text', 1]])(
+    'one row with %s -> the whole list is the load-failure message',
+    async (_l, scope) => {
+      mockRpc.mockResolvedValue(listOk([connectionRow({ scope })]));
+      await renderPage();
+      expect(screen.getByRole('alert')).toHaveTextContent(M_A.loadFailed);
+      expect(rows()).toEqual([]);
+    }
+  );
+
   it('the app name is literal text inside <bdi>, after the provider and the return host', async () => {
     const name = '‮ppa <script>x</script>';
     mockRpc.mockResolvedValue(listOk([connectionRow({ client_name: name })]));

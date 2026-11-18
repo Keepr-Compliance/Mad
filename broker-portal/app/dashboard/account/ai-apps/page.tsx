@@ -80,6 +80,7 @@ export default async function AiAppsPage() {
     sendsBackTo: AI_APPS.sendsBackTo(c.redirectHost),
     connected: AI_APPS.connected(formatDateTime(c.consentedAt)),
     lastUsed: c.lastUsedAt === null ? AI_APPS.notUsed : AI_APPS.lastUsed(formatDate(c.lastUsedAt)),
+    allowed: c.canChangeTodos === null ? null : c.canChangeTodos ? AI_APPS.allowedTodos : AI_APPS.allowedRead,
   }));
   return (
     <Shell email={email}>

@@ -217,6 +217,11 @@ export async function denyRequest(
 // ---------------------------------------------------------------------------
 
 const CONNECTION_KEYS = ['id', 'client_name', 'provider', 'redirect_host', 'consented_at', 'last_used_at'];
+/**
+ * BACKLOG-4263 PR-6: migration 20261118140000 adds `scope` (the stored grant, 'mcp:read' or 'mcp:todos'). Both
+ * shapes are accepted, so this portal can be deployed before that migration is applied (and after a rollback).
+ */
+const CONNECTION_KEYS_WITH_SCOPE = [...CONNECTION_KEYS, 'scope'];
 
 interface Connection {
   id: string;
@@ -225,12 +230,15 @@ interface Connection {
   redirectHost: string;
   consentedAt: string;
   lastUsedAt: string | null;
+  /** BACKLOG-4263 PR-6: granted 'mcp:todos'; null when the database does not say (before 20261118140000). */
+  canChangeTodos: boolean | null;
 }
 
 type ListResult = { kind: 'ok'; connections: Connection[] } | Refused<'not_signed_in'> | Transport;
 
 function checkConnection(v: unknown): Connection | null {
-  if (!isObject(v) || !hasExactKeys(v, CONNECTION_KEYS)) return null;
+  if (!isObject(v) || !(hasExactKeys(v, CONNECTION_KEYS) || hasExactKeys(v, CONNECTION_KEYS_WITH_SCOPE))) return null;
+  if ('scope' in v && v.scope !== 'mcp:read' && v.scope !== 'mcp:todos') return null;
   if (
     !isConnectionId(v.id) ||
     !isClientName(v.client_name) ||
@@ -248,6 +256,7 @@ function checkConnection(v: unknown): Connection | null {
     redirectHost: v.redirect_host,
     consentedAt: v.consented_at,
     lastUsedAt: v.last_used_at as string | null,
+    canChangeTodos: 'scope' in v ? v.scope === 'mcp:todos' : null,
   };
 }
 
