@@ -66,6 +66,9 @@ let deferTools = false;
 /** Access checks answered later by the test. */
 let deferredAccess: Array<() => void> = [];
 let deferAccess = false;
+/** Write-access lookups answered later by the test. */
+let deferredWrite: Array<() => void> = [];
+let deferWrite = false;
 
 function dbAnswer(fn: string, args: Record<string, unknown>) {
   const known = args.p_secret === PORTAL_SECRET && KNOWN.includes(args.p_at_digest as string) && args.p_resource === RESOURCE;
@@ -97,10 +100,13 @@ beforeEach(() => {
   deferTools = false;
   deferredAccess = [];
   deferAccess = false;
+  deferredWrite = [];
+  deferWrite = false;
   mockRpc.mockReset();
   mockRpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
     const answer = dbAnswer(fn, args);
     if (deferAccess && fn === 'mcp_check_access') await new Promise<void>((resolve) => deferredAccess.push(resolve));
+    if (deferWrite && fn === 'mcp_write_access') await new Promise<void>((resolve) => deferredWrite.push(resolve));
     if (deferTools && fn !== 'mcp_check_access' && fn !== 'mcp_write_access') {
       await new Promise<void>((resolve) => deferred.push(resolve));
     }
@@ -437,6 +443,54 @@ describe('L4: at most 4 JSON-RPC requests in flight per token', () => {
     await expectServed(await rawPost(JSON.stringify([call('d'), call('e')])), ['d', 'e']);
     for (const r of deferred) r();
     await Promise.all(pending);
+  });
+
+  it('a POST with no JSON-RPC request takes one in-flight slot', async () => {
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const pending = await startPending(4);
+    const checks = accessChecks();
+    const refused = await rawPost(note);
+    expect(refused.status).toBe(202);
+    expect(await refused.text()).toBe('');
+    expect(accessChecks()).toBe(checks);
+    deferred[0]();
+    await expectServed(await pending[0], [1]);
+    expect((await rawPost(note)).status).toBe(202);
+    expect(accessChecks()).toBe(checks + 1);
+    for (const r of deferred.slice(1)) r();
+    await Promise.all(pending.slice(1));
+  });
+
+  it('a token with counters: 10 notification-only POSTs sent together make at most 4 access checks', async () => {
+    await useWindow(1);
+    const before = accessChecks();
+    deferAccess = true;
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const all = Array.from({ length: 10 }, () => rawPost(note));
+    await until(() => deferredAccess.length === 4);
+    for (let i = 0; i < 5; i++) await tick();
+    expect(accessChecks() - before).toBe(4);
+    for (const r of deferredAccess) r();
+    for (const r of await Promise.all(all)) expect(r.status).toBe(202);
+    // 1 earlier request + the 4 admitted; the 6 refused use nothing.
+    expect(mcpRateLimitStateForTests(KNOWN[0])).toEqual({ count: 5, inFlight: 0 });
+  });
+
+  it('a token with no counters: 10 notification-only POSTs sent together, at most 4 pass the access check into the handler', async () => {
+    deferAccess = true;
+    deferWrite = true;
+    const note = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const all = Array.from({ length: 10 }, () => rawPost(note));
+    await until(() => deferredAccess.length === 10);
+    for (const r of deferredAccess) r();
+    for (let i = 0; i < 10; i++) await tick();
+    expect(rpcCalls('mcp_write_access')).toBe(4);
+    for (const r of deferredWrite) r();
+    for (const r of await Promise.all(all)) {
+      expect(r.status).toBe(202);
+      expect(await r.text()).toBe('');
+    }
+    expect(rpcCalls('mcp_write_access')).toBe(4);
   });
 
   it('an abandoned slot is held longer than the database call timeout', () => {
