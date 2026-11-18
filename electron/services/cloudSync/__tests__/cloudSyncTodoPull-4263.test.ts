@@ -454,6 +454,48 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     });
   });
 
+  describe("PC: the confirm of a held op on a deal locked here (PR-6)", () => {
+    it("a held op that loses to another side's later change does not write that change into the locked deal; this computer's value is sent back held and wins", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      // second actor: the owner online (cloud_user) changes the note while the deal is locked here
+      e.server.aiSet(onlineItem(e, I1), "note", "online one");
+      let block = true;
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_push" && block
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((o) => ({ op_id: o.op_id, status: "locked" })) }, error: null, status: 200 }
+          : undefined;
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
+      // a later change online, then the held op is answered (it loses on time)
+      e.server.aiSet(onlineItem(e, I1), "note", "online two", Date.now() + 60_000);
+      block = false;
+      e.server.override = null;
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(onlineItem(e, I1).parts.note.value).toBeNull();
+      expect(outbox(db)).toEqual([]);
+      // unlocked: another side's change applies again
+      db.prepare("UPDATE transactions SET submission_status = 'not_submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "after unlock");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("after unlock");
+    });
+
+    it("on a deal that is not locked, the same losing answer writes the winner locally (unchanged rule)", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "online, newer");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("online, newer");
+    });
+  });
+
   // ================================================================ EVT
   describe("EVT: conflict events", () => {
     it("a conflict event becomes one notice; a re-delivered pull adds none", async () => {
