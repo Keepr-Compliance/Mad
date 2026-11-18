@@ -11,9 +11,11 @@ import {
   CHECKLISTS_SHAPE,
   CHECKLISTS_SHAPE_V2,
   checkShape,
+  FIND_PEOPLE_SHAPE,
   GET_DEAL_SHAPE,
   LIST_ALL_DEALS_SHAPE,
   LIST_DEALS_SHAPE,
+  LIST_TODOS_SHAPE,
   TODO_CHANGE_SHAPE,
   type Shape,
 } from '@/lib/mcp/tools/shapes';
@@ -480,6 +482,76 @@ export async function getDealChecklistsFor(cfg: ClientConfig, a: GetDealChecklis
   });
   if ('kind' in res) return res;
   return checkDataToolEnvelope(res.data, [CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2]);
+}
+
+// ---------------------------------------------------------------------------
+// Read tools find_people and list_todos (BACKLOG-4263 PR-8), supabase/migrations/20261118150000_backlog_4263_mcp_read_tools.sql
+// mcp_find_people(p_secret text, p_at_digest bytea, p_resource text, p_name text, p_role text, p_deal_id text,
+//                 p_email text, p_phone text, p_cursor text)
+//   -> {ok:true, result:<keepr.find_people v1>} | {ok:false, error:<DATA_TOOL_ERRORS | 'day_limit'>}
+// mcp_list_todos(p_secret text, p_at_digest bytea, p_resource text, p_state text, p_deal_status text, p_due_from text,
+//                p_due_to text, p_without_due_date boolean, p_only_required boolean, p_cursor text)
+//   -> {ok:true, result:<keepr.list_todos v1>} | {ok:false, error:<DATA_TOOL_ERRORS>}
+// ---------------------------------------------------------------------------
+
+export interface FindPeopleArgs extends AccessArgs {
+  name: string | null;
+  role: string | null;
+  dealId: string | null;
+  email: string | null;
+  phone: string | null;
+  cursor: string | null;
+}
+
+/** find_people only: the day cap answers 'day_limit', which no other tool sends. */
+export type FindPeopleResult = DataToolResult | { kind: 'day_limit' };
+
+export function checkFindPeopleEnvelope(v: unknown): FindPeopleResult {
+  if (isObject(v) && hasExactKeys(v, ['ok', 'error']) && refusal(v, ['day_limit'] as const)) return { kind: 'day_limit' };
+  return checkDataToolEnvelope(v, FIND_PEOPLE_SHAPE);
+}
+
+export async function findPeopleFor(cfg: ClientConfig, a: FindPeopleArgs): Promise<FindPeopleResult> {
+  const res = await call(cfg, 'mcp_find_people', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_name: a.name,
+    p_role: a.role,
+    p_deal_id: a.dealId,
+    p_email: a.email,
+    p_phone: a.phone,
+    p_cursor: a.cursor,
+  });
+  if ('kind' in res) return res;
+  return checkFindPeopleEnvelope(res.data);
+}
+
+export interface ListTodosArgs extends AccessArgs {
+  state: string | null;
+  dealStatus: string | null;
+  dueFrom: string | null;
+  dueTo: string | null;
+  withoutDueDate: boolean | null;
+  onlyRequired: boolean | null;
+  cursor: string | null;
+}
+
+export async function listTodosFor(cfg: ClientConfig, a: ListTodosArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_list_todos', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_state: a.state,
+    p_deal_status: a.dealStatus,
+    p_due_from: a.dueFrom,
+    p_due_to: a.dueTo,
+    p_without_due_date: a.withoutDueDate,
+    p_only_required: a.onlyRequired,
+    p_cursor: a.cursor,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, LIST_TODOS_SHAPE);
 }
 
 // ---------------------------------------------------------------------------

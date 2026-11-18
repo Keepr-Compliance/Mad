@@ -22,7 +22,7 @@ import * as route from '@/app/api/mcp/route';
 import { checkDataToolEnvelope, checkWriteAccessEnvelope } from '@/lib/mcp/oauth/rpc';
 import { normaliseScope } from '@/lib/mcp/oauth/validate';
 import { CHECKLIST_ITEM_V2_KEYS, CHECKLISTS_SHAPE, CHECKLISTS_SHAPE_V2, TODO_CHANGE_SHAPE, TODO_ITEM_KEYS, TODO_STATUSES } from '@/lib/mcp/tools/shapes';
-import { canWriteOf, TOOLS, toolsFor } from '@/lib/mcp/server';
+import { canWriteOf, toolsFor } from '@/lib/mcp/server';
 import type { McpRequestContext } from '@modelcontextprotocol/server';
 import { WRITE_TOOLS } from '@/lib/mcp/tools/todos';
 import { GET_DEAL_CHECKLISTS_TOOL } from '@/lib/mcp/tools/checklists';
@@ -42,6 +42,8 @@ const ENV = { ...process.env };
 const realFetch = global.fetch;
 const KNOWN_DIGEST = expectedDigest(ACCESS_TOKEN);
 const WRITE_NAMES = ['update_todo', 'add_todo', 'remove_todo', 'restore_todo'];
+/** The read tools, written out (BACKLOG-4263 PR-8: 5 + find_people, list_todos); listed for every connection. */
+const READ_NAMES = ['get_status', 'list_deals', 'get_deal', 'get_deal_checklists', 'list_all_deals', 'find_people', 'list_todos'];
 
 let writeAnswer: unknown;
 let toolAnswer: unknown;
@@ -104,7 +106,7 @@ afterEach(() => jest.restoreAllMocks());
 describe('tools/list', () => {
   it('lists the four write tools after the read tools only for {ok:true, write:true}', async () => {
     expect(FX.FX_write_access_on).toEqual({ ok: true, write: true });
-    expect(await listNames()).toEqual([...TOOLS.map((t) => t.name), ...WRITE_NAMES]);
+    expect(await listNames()).toEqual([...READ_NAMES, ...WRITE_NAMES]);
     // asked once per HTTP request by the route (every request of the session), never per tool
     expect(calls('mcp_write_access').length).toBeGreaterThan(0);
     expect(calls('mcp_write_access').length).toBe(calls('mcp_check_access').length);
@@ -120,7 +122,7 @@ describe('tools/list', () => {
     ['null', () => null],
   ])('lists the read tools only for %s', async (_l, a) => {
     writeAnswer = a();
-    expect(await listNames()).toEqual(TOOLS.map((t) => t.name));
+    expect(await listNames()).toEqual(READ_NAMES);
   });
 
   it('the write tools are not read-only, only remove_todo is destructive, none reaches outside Keepr', () => {
@@ -169,7 +171,7 @@ describe('read-only texts (the build before BACKLOG-4263 PR-5, transcribed in fi
     expect(s.plate).toBe(BASE_TEXTS.prompts.whats_on_my_plate.message);
     expect(s.week).toBe(BASE_TEXTS.prompts.due_this_week.message);
     expect(s.brief).toBe(`${BASE_TEXTS.prompts.brief_me_on_a_deal.head}\n"Main St"`);
-    expect(s.tools).toEqual(TOOLS.map((t) => t.name));
+    expect(s.tools).toEqual(READ_NAMES);
     for (const t of [s.instructions, s.plate, s.week, s.brief]) expect(t).not.toMatch(/update_todo|add_todo|remove_todo|restore_todo|unless I ask/);
   });
 
@@ -190,12 +192,12 @@ describe('canWriteOf', () => {
     (extra) => {
       const ctx = { authInfo: extra === undefined ? undefined : { token: '', clientId: '', scopes: ['mcp:read'], extra } } as unknown as McpRequestContext;
       expect(canWriteOf(ctx)).toBe(false);
-      expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
+      expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual(READ_NAMES);
     }
   );
   it('only canWrite exactly true lists the write tools', () => {
     const ctx = { authInfo: { token: '', clientId: '', scopes: ['mcp:read'], extra: { canWrite: true } } } as unknown as McpRequestContext;
-    expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual([...TOOLS.map((t) => t.name), ...WRITE_NAMES]);
+    expect(toolsFor(canWriteOf(ctx)).map((t) => t.name)).toEqual([...READ_NAMES, ...WRITE_NAMES]);
   });
 });
 

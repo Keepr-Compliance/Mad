@@ -232,6 +232,55 @@ export const LIST_ALL_DEALS_SHAPE = frame('keepr.list_all_deals', {
   page: obj({ returned: int(), next_cursor: { t: 'string', pattern: UUID, nullable: true } }),
 });
 
+/**
+ * find_people (BACKLOG-4263 PR-8, supabase/migrations/20261118150000_backlog_4263_mcp_read_tools.sql). One row per person
+ * per deal: PERSON_PROPS computed as get_deal computes them, plus contact_ref (null for a withheld person) and the deal's
+ * deal_id, address, status (deal_status) and saved_from.
+ */
+export const FOUND_PERSON_PROPS = {
+  ...PERSON_PROPS,
+  contact_ref: { t: 'string', pattern: UUID, nullable: true } as Shape,
+  deal_id: id(),
+  address: str(true),
+  deal_status: str(true),
+  saved_from: int(true),
+};
+export const FIND_PEOPLE_SHAPE = frame('keepr.find_people', {
+  people: arr(obj(FOUND_PERSON_PROPS)),
+  page: obj({ returned: int(), next_cursor: { t: 'string', pattern: UUID, nullable: true } }),
+});
+
+/**
+ * list_todos (BACKLOG-4263 PR-8). Columnar like list_all_deals: `columns` is exactly TODO_LIST_COLUMNS in this order.
+ * next_cursor is '<due date YYYY-MM-DD or none>|<item_id>'.
+ */
+const TODO_LIST_ROW: Array<[string, Shape]> = [
+  ['item_id', id()],
+  ['title', str(true)],
+  ['required', bool(true)],
+  ['done', bool(true)],
+  ['done_at', instant(true)],
+  ['due_date', day()],
+  ['has_note', bool()],
+  ['checklist_id', id()],
+  ['checklist_name', str(true)],
+  ['my_items', bool()],
+  ['private', bool()],
+  ['deal_id', id()],
+  ['address', str(true)],
+  ['deal_status', str(true)],
+  ['locked', str(true)],
+  ['saved_from', int(true)],
+];
+export const TODO_LIST_COLUMNS: readonly string[] = TODO_LIST_ROW.map(([k]) => k);
+export const TODO_CURSOR = /^(\d{4}-\d{2}-\d{2}|none)\|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export const LIST_TODOS_SHAPE = frame('keepr.list_todos', {
+  columns: { t: 'tuple', items: TODO_LIST_COLUMNS.map((k) => oneOf([k])) },
+  rows: arr({ t: 'tuple', items: TODO_LIST_ROW.map(([, sh]) => sh) }),
+  page: obj({ returned: int(), next_cursor: { t: 'string', pattern: TODO_CURSOR, nullable: true } }),
+});
+
 export const STATUS_SHAPE = obj({
   connected: bool(),
   provider: oneOf(['anthropic', 'openai']),
