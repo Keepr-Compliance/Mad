@@ -153,8 +153,8 @@ describe('mcp_authorize_view return keys parity with the newest migration', () =
       replaces_existing: false,
       age_seconds: 40,
     };
-    for (const k of keys) if (!(k in sample)) throw new Error(`the SQL returns ${k}, which this test has no sample value for`);
-    const answer = Object.fromEntries(keys.map((k) => [k, sample[k]]));
+    // A key the portal does not know gets a placeholder value; viewRequest must then refuse the answer.
+    const answer = Object.fromEntries(keys.map((k) => [k, k in sample ? sample[k] : 'unknown']));
     mockRpc.mockReset();
     mockRpc.mockResolvedValue({ data: answer, error: null });
     const res = await viewRequest('A'.repeat(22), '\\x00');
