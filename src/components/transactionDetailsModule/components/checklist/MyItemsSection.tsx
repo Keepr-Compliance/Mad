@@ -37,6 +37,7 @@ import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments
 import type { EmailThread } from "../EmailThreadCard";
 import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistItemRow } from "./ChecklistItemRow";
+import { useCloudMenu } from "./cloud/CloudTodoRowParts";
 
 /** `MyItemTitleSchema` (electron/schemas/checklist.ts) refuses longer titles. */
 export const MY_ITEM_TITLE_MAX_LENGTH = 300;
@@ -426,6 +427,8 @@ export function MyItemsSection({
                         >
                           Move down
                         </MenuButton>
+                        {/* BACKLOG-4263 PR-6: Due date… and History (Keepr Cloud users only) */}
+                        <CloudMenuEntries item={item} onClose={() => setMenuId(null)} />
                         <MenuButton
                           onClick={() => {
                             setMenuId(null);
@@ -512,6 +515,27 @@ export function MyItemsSection({
       </div>
       )}
     </Card>
+  );
+}
+
+function CloudMenuEntries({ item, onClose }: { item: ChecklistItem; onClose: () => void }): React.ReactElement | null {
+  const entries = useCloudMenu(item);
+  if (!entries) return null;
+  return (
+    <>
+      {entries.map((e) => (
+        <MenuButton
+          key={e.key}
+          onClick={() => {
+            onClose();
+            e.onSelect();
+          }}
+          testId={`my-item-${e.key}-${item.id}`}
+        >
+          {e.label}
+        </MenuButton>
+      ))}
+    </>
   );
 }
 

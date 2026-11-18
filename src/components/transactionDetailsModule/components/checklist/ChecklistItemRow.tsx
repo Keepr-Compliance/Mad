@@ -22,6 +22,7 @@ import { ChecklistCheckbox } from "./ChecklistCheckbox";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
 import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
+import { CloudDueChip, CloudMarker, CloudRowPanels, CloudTemplateMenu } from "./cloud/CloudTodoRowParts";
 
 /** `ChecklistNoteSchema` (electron/schemas/checklist.ts) refuses longer notes. */
 export const CHECKLIST_NOTE_MAX_LENGTH = 4000;
@@ -142,6 +143,8 @@ export function ChecklistItemRow({
                 {item.isRequired ? "Required" : "Optional"}
               </span>
             )}
+            {/* BACKLOG-4263 PR-6: "Due Nov 20" (Keepr Cloud users only) */}
+            <CloudDueChip item={item} />
           </div>
           {!readOnly && (
             <div className="flex items-center flex-wrap gap-3 justify-end ml-auto flex-shrink-0 max-sm:w-full max-sm:justify-start">
@@ -169,10 +172,12 @@ export function ChecklistItemRow({
                   Add note
                 </button>
               )}
-              {controls}
+              {/* BACKLOG-4263 PR-6: a template row's ⋯ with only Due date… and History (Keepr Cloud users only) */}
+              {controls ?? <CloudTemplateMenu item={item} readOnly={readOnly} />}
             </div>
           )}
         </div>
+        <CloudMarker item={item} />
 
         {links.length > 0 && (
           <div className="flex flex-col gap-2 mt-2.5">
@@ -246,6 +251,7 @@ export function ChecklistItemRow({
             </div>
           )
         )}
+        <CloudRowPanels item={item} readOnly={readOnly} />
       </div>
     </div>
   );
