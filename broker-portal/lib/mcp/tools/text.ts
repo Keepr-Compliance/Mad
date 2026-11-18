@@ -96,7 +96,7 @@ export const ARG_TEXT = {
   fp_role: "The person's role, matched whole, not case sensitive (for example lender, inspector, client, agent).",
   fp_deal_id: 'Only people on this deal (deal_id from list_deals).',
   fp_email: 'A whole email address, not case sensitive.',
-  fp_phone: 'A whole phone number with its country code, 10 to 15 digits; a 10-digit number is read as +1.',
+  fp_phone: 'A whole phone number, 10 to 15 digits. Starting with + it is read as written, country code included; without +, a 10-digit number is read as +1.',
   fp_cursor: 'next_cursor from the previous page of find_people.',
   td_state: 'open (the default), done or all.',
   td_deal_status: 'Only todos on deals with this status.',

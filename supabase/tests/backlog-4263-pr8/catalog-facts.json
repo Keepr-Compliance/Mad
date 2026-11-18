@@ -1,10 +1,10 @@
 {
   "migration": "supabase/migrations/20261118150000_backlog_4263_mcp_read_tools.sql",
-  "migration_md5": "0aa115ea3b203c4eec40eb6c57e68c14",
+  "migration_md5": "ec235ccf2d5bde6ca4c2367ef3df6786",
   "new": {
-    "public._mcp_r_find_people(text,text,uuid,text,text,uuid)": "2ed9f1d98a76cb3966040a859a93b378",
+    "public._mcp_r_find_people(text,text,uuid,text,text,uuid)": "fbfb9203340e58aad51894e5165aab4e",
     "public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)": "c744547eefbc072fbe767e46d2d3e6ee",
-    "public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)": "83d0bb1a3c25dfc6aa4bfcc2e9a221ba",
+    "public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)": "b4d00d31eb7521a2853a7a52cd73329a",
     "public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)": "a5f43fbee39365d168c1d5ce87b00995"
   },
   "anon_callable_mcp_after": [
@@ -50,6 +50,7 @@
     "c_fp_email",
     "c_fp_phone",
     "c_fp_role",
+    "c_fp_phone_table",
     "c_fp_ref",
     "c_fp_input",
     "c_fp_day",
@@ -73,6 +74,9 @@
     "M04_fp_email_beyond_ten": "red",
     "M05_fp_phone_last_ten_digits": "red",
     "M05b_fp_phone_stored_ten_digits": "red",
+    "M05c_fp_phone_plus_ignored_both": "red",
+    "M05d_fp_phone_plus_ignored_stored": "red",
+    "M05e_fp_phone_plus_ignored_input": "red",
     "M06_fp_role_part": "red",
     "M07_fp_ref_over_filtered_rows": "red",
     "M08_fp_ref_null_contact_grouped": "red",
@@ -127,6 +131,6 @@
     "M73_cat_tool_granted_authenticated": "red",
     "M74_cat_tool_check_without_list_todos": "red"
   },
-  "apply_md5": "eaf27cc905498522f29893f240c3003e",
-  "rollback_md5": "e44d032479650d81781f06b4991401c8"
+  "apply_md5": "3e764320d5459ae11989added7e2ae0b",
+  "rollback_md5": "57c086cfed680253bacbca2e4c3d40db"
 }

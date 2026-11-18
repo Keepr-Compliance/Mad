@@ -8,7 +8,7 @@
 DO $pre4263p8r$
 DECLARE r record; v_md5 text;
 BEGIN
-  FOR r IN SELECT * FROM (VALUES ('public._mcp_r_find_people(text,text,uuid,text,text,uuid)', '2ed9f1d98a76cb3966040a859a93b378'), ('public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)', 'c744547eefbc072fbe767e46d2d3e6ee'), ('public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)', '83d0bb1a3c25dfc6aa4bfcc2e9a221ba'), ('public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)', 'a5f43fbee39365d168c1d5ce87b00995')) x(sig, md5) LOOP
+  FOR r IN SELECT * FROM (VALUES ('public._mcp_r_find_people(text,text,uuid,text,text,uuid)', 'fbfb9203340e58aad51894e5165aab4e'), ('public._mcp_r_list_todos(text,text,date,date,boolean,boolean,date,uuid)', 'c744547eefbc072fbe767e46d2d3e6ee'), ('public.mcp_find_people(text,bytea,text,text,text,text,text,text,text)', 'b4d00d31eb7521a2853a7a52cd73329a'), ('public.mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)', 'a5f43fbee39365d168c1d5ce87b00995')) x(sig, md5) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS DISTINCT FROM r.md5 THEN RAISE EXCEPTION 'ROLLBACK 20261118150000: % is not at the body 20261118150000 wrote (md5 %)', r.sig, coalesce(v_md5, 'missing'); END IF;
   END LOOP;

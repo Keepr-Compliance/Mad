@@ -270,6 +270,9 @@ describe('BACKLOG-4263 PR-8: arguments are checked before any database call', ()
     [{ phone: '212555010' }],
     [{ phone: '1234567890123456' }],
     [{ phone: '212-abc-0101' }],
+    [{ phone: ' +12125550101' }],
+    [{ phone: '1+2125550101' }],
+    [{ phone: '++12125550101' }],
     [{ name: 'pat', cursor: 'nope' }],
     [{ name: 'pat', extra: 1 }],
   ])('find_people %j -> invalid_input, no database call', async (args) => {

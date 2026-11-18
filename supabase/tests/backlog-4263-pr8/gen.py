@@ -79,8 +79,13 @@ MUTS = [
         "(SELECT x.emails::text FROM public.cloud_deal_parties x WHERE x.id = s.id) ILIKE '%' || p_email || '%'")], 'c_fp_email', 'red', None),
     ('M04_fp_email_beyond_ten', '_mcp_r_find_people', [("WHERE o <= 10 AND jsonb_typeof(el) = 'object'), '[]'::jsonb) END AS s_emails",
         "WHERE jsonb_typeof(el) = 'object'), '[]'::jsonb) END AS s_emails")], 'c_fp_email', 'red', None),
-    ('M05_fp_phone_last_ten_digits', '_mcp_r_find_people', [("CASE WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone", "right(z.sd, 10) = right(p_phone, 10)")], 'c_fp_phone', 'red', None),
-    ('M05b_fp_phone_stored_ten_digits', '_mcp_r_find_people', [("CASE WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone", "z.sd = p_phone")], 'c_fp_phone', 'red', None),
+    ('M05_fp_phone_last_ten_digits', '_mcp_r_find_people', [("CASE WHEN z.plus THEN z.sd WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone", "right(z.sd, 10) = right(p_phone, 10)")], 'c_fp_phone', 'red', None),
+    ('M05b_fp_phone_stored_ten_digits', '_mcp_r_find_people', [("CASE WHEN z.plus THEN z.sd WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone", "z.sd = p_phone")], 'c_fp_phone', 'red', None),
+    # the rule before the + fix, on both sides at once (reader and tool)
+    ('M05c_fp_phone_plus_ignored_both', '_mcp_r_find_people', [("CASE WHEN z.plus THEN z.sd WHEN char_length(z.sd) = 10", "CASE WHEN char_length(z.sd) = 10")], 'c_fp_phone_table', 'red', None,
+     ('mcp_find_people', [("CASE WHEN left(p_phone, 1) = '+' THEN v_phone WHEN char_length(v_phone) = 10", "CASE WHEN char_length(v_phone) = 10")])),
+    ('M05d_fp_phone_plus_ignored_stored', '_mcp_r_find_people', [("CASE WHEN z.plus THEN z.sd WHEN char_length(z.sd) = 10", "CASE WHEN char_length(z.sd) = 10")], 'c_fp_phone_table', 'red', None),
+    ('M05e_fp_phone_plus_ignored_input', 'mcp_find_people', [("CASE WHEN left(p_phone, 1) = '+' THEN v_phone WHEN char_length(v_phone) = 10", "CASE WHEN char_length(v_phone) = 10")], 'c_fp_phone_table', 'red', None),
     ('M06_fp_role_part', '_mcp_r_find_people', [("lower(btrim(s.s_role_category)) = p_role", "strpos(lower(s.s_role_category), p_role) > 0")], 'c_fp_role', 'red', None),
     ('M07_fp_ref_over_filtered_rows', '_mcp_r_find_people', [("        FROM live l),\n    shown AS (",
         "        FROM live l WHERE (p_deal_id IS NULL OR l.cloud_deal_id = p_deal_id)),\n    shown AS (")], 'c_fp_ref', 'red', None),
@@ -154,7 +159,7 @@ DDL_MUTS = [
 ]
 
 CONTROLS = ['c_fp_basic', 'c_fp_parity', 'c_fp_isolation', 'c_fp_not_found', 'c_fp_scope', 'c_fp_clean', 'c_fp_withheld', 'c_fp_email', 'c_fp_phone',
-            'c_fp_role', 'c_fp_ref', 'c_fp_input', 'c_fp_day', 'c_fp_page', 'c_fp_rowmax', 'c_fp_entitled', 'c_secret',
+            'c_fp_role', 'c_fp_phone_table', 'c_fp_ref', 'c_fp_input', 'c_fp_day', 'c_fp_page', 'c_fp_rowmax', 'c_fp_entitled', 'c_secret',
             'c_td_parity', 'c_td_columns', 'c_td_filters', 'c_td_page', 'c_td_rowmax', 'c_td_isolation', 'c_claims', 'c_catalog']
 assert {m[3] for m in MUTS} <= set(CONTROLS) and {m[3] for m in DDL_MUTS} <= set(CONTROLS)
 assert len({m[0] for m in MUTS} | {m[0] for m in DDL_MUTS}) == len(MUTS) + len(DDL_MUTS)
@@ -174,7 +179,7 @@ def rls_proof(tables):
 
 
 mut_sql, mut_report, WANT = [], [], {}
-for mid, fn, reps, ctl, want, rls in MUTS:
+for mid, fn, reps, ctl, want, rls, *more in MUTS:
     WANT[mid] = want
     proof, pre, post = [], '', ''
     if rls:
@@ -197,6 +202,15 @@ for mid, fn, reps, ctl, want, rls in MUTS:
         if reader:
             pre += "    EXECUTE 'RESET ROLE';\n"
         proof.append(f"(SELECT md5(p.prosrc) = '{md5(body(mc))}' FROM pg_proc p WHERE p.oid = to_regprocedure('{SIG[fn]}'))")
+    for fn2, reps2 in more:
+        mc2 = c2 = create_only(NEWS[fn2])
+        for o_, n_ in reps2:
+            assert mc2.count(o_) == 1, (mid, o_, mc2.count(o_))
+            mc2 = mc2.replace(o_, n_)
+        assert mc2 != c2 and fn2 not in READERS, mid
+        mut_report.append(f'MUTATION APPLIED {mid} ({fn2}): {reps2[0][1][:150]}')
+        pre += f"    EXECUTE {q(mc2)};\n"
+        proof.append(f"(SELECT md5(p.prosrc) = '{md5(body(mc2))}' FROM pg_proc p WHERE p.oid = to_regprocedure('{SIG[fn2]}'))")
     mut_sql.append(f"""DO $m_{mid}$
 DECLARE v text; ok boolean;
 BEGIN

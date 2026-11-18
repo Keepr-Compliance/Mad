@@ -20,8 +20,10 @@
 --   role     2 to 40 characters: equal (case-insensitive) to role, role_category or specific_role as shown
 --   deal_id  one deal; a deal that is not the person's saved, confirmed, live deal answers not_found
 --   email    a whole address (one @, at most 320 characters): equal (case-insensitive) to one the answer shows
---   phone    10 to 15 digits: the whole number, compared with the digits of each e164 value the answer shows; on
---            both sides a 10-digit number is read with country code 1 (the desktop's rule); never a part of a number
+--   phone    10 to 15 digits: the whole number, compared with the digits of each e164 value the answer shows. On each
+--            side on its own: a value starting with + is compared as written (digits only); a value without + that
+--            has exactly 10 digits is read with country code 1 (the desktop's rule); any other value as written.
+--            Never a part of a number.
 --   At least one of name, role, deal_id, email, phone. A person marked details_withheld is found by role or deal_id
 --   only. Calls per user per UTC day: at most 1000; the next call is refused with error 'day_limit' and logged as
 --   rate_limited. Page: at most 100 people and 60000 bytes.
@@ -47,7 +49,7 @@ GRANT CREATE ON SCHEMA public TO mcp_reader;
 SET ROLE mcp_reader;
 
 -- find_people: p_name, p_role, p_email are already trimmed and lower-cased where the wrapper says so; p_phone is
--- digits only, with country code 1 added to a 10-digit number. Returns {"not_found":true} for a p_deal_id that is not the person's confirmed, live deal.
+-- digits only, already read by the phone rule above (country code 1 added only to a 10-digit number without +). Returns {"not_found":true} for a p_deal_id that is not the person's confirmed, live deal.
 CREATE OR REPLACE FUNCTION public._mcp_r_find_people(p_name text, p_role text, p_deal_id uuid, p_email text, p_phone text, p_after_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
 /*BODY:4263-8*/
@@ -117,8 +119,9 @@ BEGIN
          AND (p_role IS NULL OR lower(btrim(s.s_role)) = p_role OR lower(btrim(s.s_role_category)) = p_role OR lower(btrim(s.s_specific_role)) = p_role) /*MATCH:role*/
          AND (p_email IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.s_emails) e WHERE lower(btrim(e ->> 'email')) = p_email)) /*MATCH:email*/
          AND (p_phone IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.s_phones) e,
-                                                       LATERAL (SELECT regexp_replace(coalesce(e ->> 'e164', ''), '[^0-9]', '', 'g') AS sd) z
-                                          WHERE CASE WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone)) /*MATCH:phone*/
+                                                       LATERAL (SELECT regexp_replace(coalesce(e ->> 'e164', ''), '[^0-9]', '', 'g') AS sd,
+                                                                       left(btrim(coalesce(e ->> 'e164', '')), 1) = '+' AS plus) z
+                                          WHERE CASE WHEN z.plus THEN z.sd WHEN char_length(z.sd) = 10 THEN '1' || z.sd ELSE z.sd END = p_phone)) /*MATCH:phone*/
        ORDER BY s.id /*ORDER:fp*/
        LIMIT 101),
     r AS (
@@ -305,7 +308,8 @@ BEGIN
       PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);
       PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
       v_res := public._mcp_r_find_people(v_name, v_role, lower(p_deal_id)::uuid, v_email,
-                                         CASE WHEN char_length(v_phone) = 10 THEN '1' || v_phone ELSE v_phone END, p_cursor::uuid);
+                                         CASE WHEN left(p_phone, 1) = '+' THEN v_phone WHEN char_length(v_phone) = 10 THEN '1' || v_phone ELSE v_phone END /*PHONE:input*/,
+                                         p_cursor::uuid);
       RAISE EXCEPTION USING ERRCODE = 'MC000', MESSAGE = 'mcp read block done';
     EXCEPTION
       WHEN SQLSTATE 'MC000' THEN NULL;

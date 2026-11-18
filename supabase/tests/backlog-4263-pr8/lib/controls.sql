@@ -318,6 +318,33 @@ BEGIN
     pg_temp.pass(pg_temp.pids(h) = ARRAY[pg_temp.id('p_nul2')] AND pg_temp.pids(i) = ARRAY[pg_temp.id('p_nul2')], 'stored without country code ' || pg_temp.pids(h)::text || pg_temp.pids(i)::text));
 END $c$;
 
+-- the phone rule, every row of the table: (input with / without +) x (10 / 11 / 12 digits) x (stored with / without +).
+-- A side with + is compared as written; a side without + and with exactly 10 digits gets country code 1.
+CREATE FUNCTION pg_temp.c_fp_phone_table() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE r record; got uuid[]; want uuid[]; bad text[] := '{}'; n int := 0;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      -- stored +12125550121 (+, 11)
+      ('(212) 555-0121', 's1'), ('+1 212 555 0121', 's1'), ('12125550121', 's1'), ('+2125550121', ''),
+      -- stored 2125550122 (no +, 10)
+      ('212.555.0122', 's2'), ('+12125550122', 's2'), ('12125550122', 's2'), ('+2125550122', ''),
+      -- stored +2125550123 (+, 10)
+      ('+2125550123', 's3'), ('2125550123', ''), ('+12125550123', ''), ('12125550123', ''),
+      -- stored 12125550124 (no +, 11)
+      ('12125550124', 's4'), ('2125550124', 's4'), ('+12125550124', 's4'), ('+2125550124', ''),
+      -- stored +442125550125 (+, 12)
+      ('+442125550125', 's5'), ('442125550125', 's5'), ('2125550125', ''), ('+12125550125', ''),
+      -- stored 442125550126 (no +, 12)
+      ('+44 212 555 0126', 's6'), ('442125550126', 's6'), ('2125550126', '')) t(input, who) LOOP
+    IF n % 12 = 0 THEN PERFORM pg_temp.unrate(); END IF;
+    got := pg_temp.pids(pg_temp.w(pg_temp.q_fp(1, phone => r.input, deal => pg_temp.id('DPH')::text)));
+    want := CASE WHEN r.who = '' THEN '{}'::uuid[] ELSE ARRAY[pg_temp.id('p_' || r.who)] END;
+    n := n + 1;
+    IF got IS DISTINCT FROM want THEN bad := bad || (r.input || ' -> ' || coalesce(got::text, 'null') || ' want ' || coalesce(nullif(r.who, ''), 'none')); END IF;
+  END LOOP;
+  RETURN pg_temp.pass(cardinality(bad) = 0 AND n = 23, array_to_string(bad, ' | ') || ' n=' || n);
+END $c$;
+
 -- role: equal to role, role_category or specific_role, case-insensitive; never a part
 CREATE FUNCTION pg_temp.c_fp_role() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE a jsonb; b jsonb; c jsonb; d jsonb;
@@ -369,7 +396,7 @@ BEGIN
       pg_temp.q_fp(1, email => 'example.test'), pg_temp.q_fp(1, email => 'a@b@c'), pg_temp.q_fp(1, email => 'a b@c'),
       pg_temp.q_fp(1, email => repeat('a', 320) || '@b'),
       pg_temp.q_fp(1, phone => '212555010'), pg_temp.q_fp(1, phone => '1234567890123456'), pg_temp.q_fp(1, phone => '212-abc-0101x'),
-      pg_temp.q_fp(1, phone => repeat(' ', 30) || '2125550101' || repeat(' ', 10)),
+      pg_temp.q_fp(1, phone => repeat(' ', 30) || '2125550101' || repeat(' ', 10)), pg_temp.q_fp(1, phone => ' +12125550101'), pg_temp.q_fp(1, phone => '1+2125550101'),
       pg_temp.q_fp(1, deal => 'nope'), pg_temp.q_fp(1, cur => 'nope', name => 'pat'), pg_temp.q_fp(1, cur => upper(md5('x')::uuid::text), name => 'pat'),
       pg_temp.q_fp(1)] LOOP
     PERFORM pg_temp.unrate_minute();
@@ -379,11 +406,11 @@ BEGIN
   ok1 := pg_temp.w(pg_temp.q_fp(1, name => 'ab'));
   ok2 := pg_temp.w(pg_temp.q_fp(1, name => ' pat fixture ', deal => upper(pg_temp.id('DA1')::text)));
   RETURN pg_temp.all_of(
-    pg_temp.pass(cardinality(bad) = 0 AND n = 20, array_to_string(bad, ' || ') || ' n=' || n),
+    pg_temp.pass(cardinality(bad) = 0 AND n = 22, array_to_string(bad, ' || ') || ' n=' || n),
     pg_temp.pass(pg_temp.day_count(pg_temp.id('A')) - d0 = 2, 'day counter moved by ' || (pg_temp.day_count(pg_temp.id('A')) - d0)),
     pg_temp.pass(pg_temp.ws(ok1) = 'ok', 'two characters ' || pg_temp.ws(ok1)),
     pg_temp.pass(pg_temp.pids(ok2) = ARRAY[pg_temp.id('p_pat')], 'trimmed name, upper-case deal id ' || pg_temp.pids(ok2)::text),
-    pg_temp.pass((SELECT count(*) FROM public.mcp_call_log WHERE connection_id = pg_temp.id('KA') AND tool = 'find_people' AND outcome = 'invalid_input') = 20, 'logged'));
+    pg_temp.pass((SELECT count(*) FROM public.mcp_call_log WHERE connection_id = pg_temp.id('KA') AND tool = 'find_people' AND outcome = 'invalid_input') = 22, 'logged'));
 END $c$;
 
 -- the day cap: 1000 calls per user per UTC day; call 1001 is refused and counted; refused calls keep counting

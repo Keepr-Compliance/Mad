@@ -32,6 +32,7 @@ export const FIND_PEOPLE_TOOL: Tool = {
 };
 
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
+/** an optional leading + (the number then carries its country code), then digits and separators only */
 const PHONE = /^\+?[0-9 ().-]+$/;
 
 export async function findPeople(atDigest: unknown, rawArgs: unknown): Promise<CallToolResult> {

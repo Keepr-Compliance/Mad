@@ -140,8 +140,9 @@ BEGIN
   PERFORM pg_temp.put('IA', IA::text); PERFORM pg_temp.put('IB', IB::text); PERFORM pg_temp.put('IA2', IA2::text);
 
   -- deals of A: DA1 live, DA2 closed, DA3 locked later, DA4 not confirmed, DA5 removed later, DA8 many people,
-  -- DA9 longest people, DT 31 checklists, DP many long todos, DW longest todo; DA7 from a second computer (IA2)
-  FOREACH k IN ARRAY ARRAY['DA1', 'DA2', 'DA3', 'DA4', 'DA5', 'DA8', 'DA9', 'DT', 'DP', 'DW'] LOOP
+  -- DA9 longest people, DT 31 checklists, DP many long todos, DW longest todo, DPH one person per stored phone form;
+  -- DA7 from a second computer (IA2)
+  FOREACH k IN ARRAY ARRAY['DA1', 'DA2', 'DA3', 'DA4', 'DA5', 'DA8', 'DA9', 'DT', 'DP', 'DW', 'DPH'] LOOP
     r := pg_temp.deal(A, pg_temp.dp(IA, lower(k), CASE k WHEN 'DA4' THEN '{"detection_status":"rejected"}'::jsonb
                                                         WHEN 'DA2' THEN '{"status":"closed"}'::jsonb
                                                         WHEN 'DW' THEN jsonb_build_object('property_address', worst || worst || worst)
@@ -188,6 +189,18 @@ BEGIN
                     (SELECT jsonb_agg(jsonb_build_object('email', repeat(chr(119070), 400), 'is_primary', false, 'label', repeat('"', 80))) FROM generate_series(1, 10)),
                     (SELECT jsonb_agg(jsonb_build_object('e164', repeat(chr(119070), 60), 'display', repeat(chr(119070), 60), 'is_primary', false, 'label', repeat('"', 80))) FROM generate_series(1, 10)),
                     repeat('"' || chr(119070), 800)) ORDER BY g) FROM generate_series(1, 3) g));
+  -- one person per stored phone form: with or without +, 10, 11 or 12 digits
+  r := pg_temp.up(A, 'cloud_upsert_parties', IA, pg_temp.id('DPH'), jsonb_build_array(
+         pg_temp.pty('s1', NULL, 'Phone fixture one', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('+12125550121', NULL))),
+         pg_temp.pty('s2', NULL, 'Phone fixture two', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('2125550122', NULL))),
+         pg_temp.pty('s3', NULL, 'Phone fixture three', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('+2125550123', NULL))),
+         pg_temp.pty('s4', NULL, 'Phone fixture four', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('12125550124', NULL))),
+         pg_temp.pty('s5', NULL, 'Phone fixture five', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('+442125550125', NULL))),
+         pg_temp.pty('s6', NULL, 'Phone fixture six', NULL, 'other', 'support', 'other', '[]', jsonb_build_array(pg_temp.ph('442125550126', NULL)))));
+  PERFORM pg_temp.rec('fx_parties_DPH', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
+  FOR k IN SELECT unnest(ARRAY['s1', 's2', 's3', 's4', 's5', 's6']) LOOP
+    PERFORM pg_temp.put('p_' || k, pg_temp.party_of(pg_temp.id('DPH'), k)::text);
+  END LOOP;
   PERFORM pg_temp.rec('fx_parties_DA9', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   r := pg_temp.up(B, 'cloud_upsert_parties', IB, pg_temp.id('DB1'), jsonb_build_array(
          pg_temp.pty('patb', 'c1', 'Pat fixture lender', 'First fixture bank', 'lender', 'lending', 'lender',
