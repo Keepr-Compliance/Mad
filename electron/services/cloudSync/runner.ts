@@ -54,10 +54,19 @@ export interface OnlineRow {
 export interface ReconcileSummary {
   /** Online deals of this install with no local record of uploading them (shown, never auto-deleted). */
   orphanDeals: number;
+  /**
+   * BACKLOG-4263 PR-6: of those, the ones the owner restored online (Settings "Online only"): their latest deal
+   * history row is `restored` by `cloud_user`. Not in orphanDeals; never deleted by "Delete them".
+   */
+  restoredOnlineOnly?: number;
+  /** PR-6: their online ids (at most RESTORED_CHECK_CAP), so "Delete them" spends no check on them again. */
+  restoredOnlineIds?: string[];
   deletesDeferred: number;
   marked: number;
 }
 export const RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** BACKLOG-4263 PR-6: at most this many deal history reads per "restored online" check. */
+export const RESTORED_CHECK_CAP = 20;
 export const RECONCILE_RETRY_MS = 15 * 60 * 1000;
 export const RECONCILE_PAGE_SIZE = 1000;
 export const RECONCILE_MAX_PAGES = 1000;
@@ -226,15 +235,27 @@ export class CloudSyncRunner {
         );
         // Read again at click time: a deal on this computer is never deleted from here.
         const here = store.readEligibleDealIds(db, userId);
-        for (const [localId, on] of deals) {
-          // BACKLOG-4263 PR-4b: a deal removed online (kept 30 days, restorable) is not an orphan.
-          if (on.removed || recorded.has(on.cloudId) || here.has(localId)) continue;
+        const candidates = [...deals].filter(([localId, on]) => !(on.removed || recorded.has(on.cloudId) || here.has(localId)));
+        // BACKLOG-4263 PR-6: a deal the owner restored online is kept ("Online only"); one that could not be checked
+        // (a failed read, or past the check cap) is kept too: never deleted without that answer. Deals the last
+        // reconcile already found restored are kept without spending a check, so the checks go to the others.
+        const known = new Set(store.lastRestoredOnlineIds(db, this.deps.projectRef, userId));
+        const toCheck = candidates.filter(([, on]) => !known.has(on.cloudId)).map(([, on]) => on.cloudId);
+        const checked = await this.restoredOnlineByOwner(pinned, toCheck);
+        const restored = new Set([...checked.restored, ...candidates.map(([, on]) => on.cloudId).filter((id) => known.has(id))]);
+        const unchecked = checked.unchecked;
+        let kept = 0;
+        for (const [, on] of candidates) {
+          if (restored.has(on.cloudId) || unchecked.has(on.cloudId)) {
+            kept++;
+            continue;
+          }
           this.guard(pinned);
           const res = await this.deps.client.deleteDeal(userId, on.cloudId);
           this.stopOn(res);
           if (!(res.kind === "ok" || (res.kind === "refused" && res.code === "not_found"))) return { ok: false, code: res.code };
         }
-        store.setOrphanCount(db, this.deps.projectRef, userId, 0);
+        store.setOrphanCount(db, this.deps.projectRef, userId, kept - restored.size, restored.size, [...restored]);
         return { ok: true, code: "" };
       } catch (error) {
         if (error instanceof StopPass) return { ok: false, code: error.outcome };
@@ -765,6 +786,32 @@ export class CloudSyncRunner {
   }
 
   /**
+   * BACKLOG-4263 PR-6: which of these online deals the owner restored online. Read through `cloud_todo_history`
+   * (`entity = 'deal'`, limit 1): restored when the latest row has `outcome = 'restored'` and `actor_kind =
+   * 'cloud_user'` (`_cloud_todo_unremove_deal`, migration 20261118110000 :507, as cloud_todo_restore's actor). At most
+   * RESTORED_CHECK_CAP calls; the rest, and any id whose read fails, are `unchecked` (callers never delete those).
+   */
+  async restoredOnlineByOwner(pinned: SessionUser, cloudIds: string[]): Promise<{ restored: Set<string>; unchecked: Set<string> }> {
+    const restored = new Set<string>();
+    const unchecked = new Set<string>();
+    for (const [i, id] of cloudIds.entries()) {
+      if (i >= RESTORED_CHECK_CAP) {
+        unchecked.add(id);
+        continue;
+      }
+      this.guard(pinned);
+      const res = await this.deps.client.todoHistory(pinned.userId, "deal", id, 1);
+      if (res.kind !== "ok" || !Array.isArray(res.body.rows)) {
+        unchecked.add(id);
+        continue;
+      }
+      const top = (res.body.rows as Array<Record<string, unknown>>)[0];
+      if (top && top.outcome === "restored" && top.actor_kind === "cloud_user") restored.add(id);
+    }
+    return { restored, unchecked };
+  }
+
+  /**
    * Compares this install's online rows with this database's records and the
    * local rows, then, in ONE local transaction: forgets recorded hashes that no
    * longer match what is online (marking alone would be cleared by the
@@ -847,6 +894,7 @@ export class CloudSyncRunner {
     }
 
     let orphanDeals = 0;
+    const orphanCloudIds: string[] = [];
     // An online deal of this install with no local record:
     // - its deal is on this computer and eligible (a first upload that crashed before the local
     //   record): ADOPT it. The server keys a deal by (owner, install, local id), so the next
@@ -865,11 +913,16 @@ export class CloudSyncRunner {
         }
         continue;
       }
-      orphanDeals++;
+      orphanCloudIds.push(on.cloudId);
     }
+    // BACKLOG-4263 PR-6: deals the owner restored online are counted on their own line, not as orphans.
+    const { restored } = await this.restoredOnlineByOwner(pinned, orphanCloudIds);
+    orphanDeals = orphanCloudIds.length - restored.size;
 
     const summary: ReconcileSummary = {
       orphanDeals,
+      restoredOnlineOnly: restored.size,
+      restoredOnlineIds: [...restored],
       deletesDeferred: deleteCandidates.length - toDelete.length,
       marked: mark.size,
     };

@@ -221,6 +221,22 @@ export const checklistService = {
   },
 
   /**
+   * BACKLOG-4263 PR-6: set or clear one item's due date (YYYY-MM-DD). Keepr Cloud users only; main refuses
+   * `cloud_off` for anyone else.
+   */
+  async setItemDueDate(itemId: string, dueDate: string | null): Promise<ChecklistWriteApiResult<boolean>> {
+    try {
+      const result = await window.api.checklists.setItemDueDate({ itemId, dueDate });
+      if (result.success) {
+        return { success: true, data: !!result.changed };
+      }
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
    * Attach evidence to an item as one group. All-or-nothing: if any target is
    * not on the transaction, nothing is written.
    */

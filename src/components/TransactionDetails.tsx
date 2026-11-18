@@ -1694,6 +1694,7 @@ function TransactionDetails({
               onShowError={showError}
               nameMap={emailNameMap}
               lockedTooltip={editLockedTooltip}
+              transactionId={transaction.id}
             />
           )}
         </div>

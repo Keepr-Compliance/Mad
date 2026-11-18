@@ -294,6 +294,21 @@ const EDITS: Edit[] = [
     after: "Received",
   },
   {
+    // BACKLOG-4263 PR-6: a Keepr Cloud user's due date (the settings row is what makes it allowed at all)
+    name: "set a due date (set-item-due-date, Keepr Cloud on)",
+    channel: "checklists:set-item-due-date",
+    payload: () => {
+      mockDb!
+        .prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('ref-3910d', ?, 1)")
+        .run(USER);
+      return { itemId: ITEM, dueDate: "2026-11-20" };
+    },
+    refusedEdit: "edit-checklist-due-date",
+    observe: () => one("SELECT due_date FROM transaction_checklist_items WHERE id = ?", ITEM).due_date,
+    before: null,
+    after: "2026-11-20",
+  },
+  {
     name: "link evidence to an item (add-link)",
     channel: "checklists:add-link",
     payload: () => ({ itemId: ITEM, kind: "email", targetIds: [EMAIL_FREE] }),
@@ -471,6 +486,28 @@ describe("BACKLOG-3910 slice d: a locked deal refuses every checklist write", ()
       }
     });
   }
+
+  it("BACKLOG-4263 PR-6: a due date is refused cloud_off for a user who has Keepr Cloud off, and nothing is written", async () => {
+    mockDb = buildDb("not_submitted");
+    const res = await invoke("checklists:set-item-due-date", { itemId: ITEM, dueDate: "2026-11-20" });
+    expect(res).toEqual({ success: false, error: "cloud_off" });
+    expect(one("SELECT due_date FROM transaction_checklist_items WHERE id = ?", ITEM).due_date).toBeNull();
+    mockDb.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('ref-3910d', ?, 0)").run(USER);
+    expect(await invoke("checklists:set-item-due-date", { itemId: ITEM, dueDate: "2026-11-20" })).toEqual({ success: false, error: "cloud_off" });
+  });
+
+  it("BACKLOG-4263 PR-6: a due date that is not a real day between 2000 and 2100 is refused before anything is read", async () => {
+    mockDb = buildDb("not_submitted");
+    mockDb.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('ref-3910d', ?, 1)").run(USER);
+    for (const bad of ["2026-02-30", "1999-12-31", "2101-01-01", "2026-1-5", "20261120", ""]) {
+      const res = await invoke("checklists:set-item-due-date", { itemId: ITEM, dueDate: bad });
+      expect([bad, res.success]).toEqual([bad, false]);
+    }
+    expect(one("SELECT due_date FROM transaction_checklist_items WHERE id = ?", ITEM).due_date).toBeNull();
+    expect(await invoke("checklists:set-item-due-date", { itemId: ITEM, dueDate: "2100-12-31" })).toMatchObject({ success: true, changed: true });
+    expect(await invoke("checklists:set-item-due-date", { itemId: ITEM, dueDate: null })).toMatchObject({ success: true, changed: true });
+    expect(one("SELECT due_date FROM transaction_checklist_items WHERE id = ?", ITEM).due_date).toBeNull();
+  });
 
   it("an item or group id with no row writes nothing (no deal to check, no row to change)", async () => {
     mockDb = buildDb("submitted");

@@ -102,6 +102,8 @@ import {
   selectChecklistTemplateSync,
   setChecklistItemChecked,
   setChecklistItemNote,
+  setChecklistItemDueDate,
+  checklistItemOwnerHasCloudOn,
   setChecklistLinkIncludeOutsideDates,
 } from "../services/db/checklistDbService";
 import logService from "../services/logService";
@@ -122,6 +124,7 @@ import {
   SelectChecklistTemplateArgsSchema,
   SetChecklistItemCheckedArgsSchema,
   SetChecklistItemNoteArgsSchema,
+  SetChecklistItemDueDateArgsSchema,
 } from "../schemas/checklist";
 import { safeValidate } from "../schemas/validate";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -599,6 +602,29 @@ export function registerChecklistHandlers(): void {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
         const changed = await setChecklistItemNote(args.itemId, args.note);
+        return { success: true, changed };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-4263 PR-6 (Q2): a todo's due date. Keepr Cloud users only (the field is not shown to anyone else, and
+   * main refuses it here too); refused on a locked deal like every other checklist edit.
+   */
+  ipcMain.handle(
+    "checklists:set-item-due-date",
+    wrapHandler(
+      async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
+        const args = parseArgs(SetChecklistItemDueDateArgsSchema, payload, "payload");
+        const scope = getChecklistItemScope(args.itemId);
+        const lockedRefusal = refuseIfChecklistDealLocked(scope, "edit-checklist-due-date");
+        if (lockedRefusal) return lockedRefusal;
+        if (!(await planAllowsChecklistTarget(scope))) {
+          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
+        }
+        if (!checklistItemOwnerHasCloudOn(args.itemId)) return { success: false, error: "cloud_off" };
+        const changed = await setChecklistItemDueDate(args.itemId, args.dueDate);
         return { success: true, changed };
       },
       { module: "Checklists" },

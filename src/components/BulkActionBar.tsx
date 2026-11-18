@@ -4,6 +4,8 @@
  * Provides bulk actions like delete, export, and status change
  */
 import React, { useState, useMemo } from "react";
+import { useKeeprCloudOnHere } from "../hooks/useKeeprCloudOnHere";
+import { CLOUD_DELETE_COPY } from "./transactionDetailsModule/components/modals/DeleteConfirmModal";
 import { ResponsiveModal } from "./common/ResponsiveModal";
 
 interface SelectedTransaction {
@@ -431,6 +433,7 @@ export function BulkDeleteConfirmModal({
   onCancel,
   isDeleting = false,
 }: BulkDeleteConfirmModalProps) {
+  const cloudOn = useKeeprCloudOnHere();
   return (
     <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
         <div className="flex items-center gap-3 mb-3">
@@ -450,9 +453,19 @@ export function BulkDeleteConfirmModal({
             </svg>
           </div>
           <h3 className="text-lg font-bold text-gray-900">
-            Delete {selectedCount} Transaction{selectedCount > 1 ? "s" : ""}?
+            {cloudOn
+              ? selectedCount > 1
+                ? CLOUD_DELETE_COPY.manyTitle(selectedCount)
+                : CLOUD_DELETE_COPY.oneTitle
+              : `Delete ${selectedCount} Transaction${selectedCount > 1 ? "s" : ""}?`}
           </h3>
         </div>
+        {cloudOn ? (
+          <p className="text-sm text-gray-600 mb-6" data-testid="bulk-delete-cloud-text">
+            {selectedCount > 1 ? CLOUD_DELETE_COPY.many : CLOUD_DELETE_COPY.one}
+          </p>
+        ) : (
+        <>
         <p className="text-sm text-gray-600 mb-2">
           Are you sure you want to delete {selectedCount} selected transaction
           {selectedCount > 1 ? "s" : ""}? This will permanently remove:
@@ -465,6 +478,8 @@ export function BulkDeleteConfirmModal({
         <p className="text-sm text-red-600 font-semibold mb-6">
           This action cannot be undone.
         </p>
+        </>
+        )}
         <div className="flex items-center gap-3 justify-end">
           <button
             onClick={onCancel}
@@ -475,7 +490,7 @@ export function BulkDeleteConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            disabled={isDeleting}
+            disabled={isDeleting || cloudOn === null}
             data-testid="bulk-delete-confirm"
             className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all disabled:opacity-50 flex items-center gap-2"
           >

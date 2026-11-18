@@ -44,9 +44,13 @@ export interface CloudSyncView {
   aiAppsAvailable: boolean;
   /**
    * BACKLOG-4263 PR-4b: this computer's online copy was removed from another computer; nothing is saved until
-   * the user chooses to save this computer's deals again (`reclaimInstall`). No screen shows it yet (PR-6).
+   * the user chooses to save this computer's deals again (`reclaimInstall`). Settings › Keepr Cloud shows it (PR-6).
    */
   installRemoved?: boolean;
+  /** BACKLOG-4263 PR-6: changes from other devices or AI apps not applied here yet (locked deal / anything else). */
+  parked?: { locked: number; other: number };
+  /** BACKLOG-4263 PR-6: online deals of this install the owner restored online ("Online only"), from the last check. */
+  restoredOnlineOnly?: number;
 }
 
 export interface CloudSyncResult {
@@ -87,6 +91,8 @@ export interface CloudSyncDeleteForGoodResult extends CloudSyncResult {
   status?: "done" | "pending" | "restored_elsewhere";
 }
 
+import type { CloudSyncRemovedOnlineDeal, CloudTodoResult } from "./window-api-cloud-todos";
+
 export interface WindowApiCloudSync {
   getView: () => Promise<CloudSyncView>;
   turnOn: (args: { noticeVersion: number }) => Promise<CloudSyncResult>;
@@ -99,10 +105,16 @@ export interface WindowApiCloudSync {
   deleteOldInstalls: () => Promise<CloudSyncResult>;
   /** BACKLOG-4263 PR-4b: "Save this computer's deals again" after its online copy was removed elsewhere. */
   reclaimInstall: () => Promise<CloudSyncResult>;
-  /** BACKLOG-4263 PR-4c: this user's deals deleted on this computer in the last 30 days. No screen yet (PR-6). */
+  /** BACKLOG-4263 PR-4c: this user's deals deleted on this computer in the last 30 days (Settings › Keepr Cloud › Removed). */
   listRemovedDeals: () => Promise<CloudSyncRemovedDeal[]>;
-  /** BACKLOG-4263 PR-4c: restore one of them on this computer. No screen yet (PR-6). */
+  /** BACKLOG-4263 PR-4c: restore one of them on this computer. Settings › Keepr Cloud › Removed. */
   restoreDeal: (args: { transactionId: string }) => Promise<CloudSyncRestoreResult>;
-  /** BACKLOG-4263 PR-4c (Q8): erase one of them now, online and here. No screen yet (PR-6). */
+  /** BACKLOG-4263 PR-4c (Q8): erase one of them now, online and here. Settings › Keepr Cloud › Removed. */
   deleteDealForGood: (args: { transactionId: string }) => Promise<CloudSyncDeleteForGoodResult>;
+  /** BACKLOG-4263 PR-6: local only: Keepr Cloud is on for this user here; this computer is online. */
+  localState: () => Promise<{ on: boolean; online: boolean }>;
+  /** BACKLOG-4263 PR-6: deals removed online in the last 30 days with no archive here (Settings › Removed). */
+  listRemovedOnline: () => Promise<{ success: boolean; error?: string; deals: CloudSyncRemovedOnlineDeal[] }>;
+  /** BACKLOG-4263 PR-6: make one of them live online again ("Online only"). */
+  restoreOnlineDeal: (args: { cloudId: string }) => Promise<CloudTodoResult>;
 }

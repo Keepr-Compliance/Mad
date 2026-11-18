@@ -74,6 +74,9 @@ export const AI_APPS = {
   connected: (date: string) => `Approved ${date} UTC`,
   lastUsed: (date: string) => `Last used ${date}`,
   notUsed: 'Not used yet',
+  // BACKLOG-4263 PR-6: what the connection was granted (the write switch decides separately whether writes run)
+  allowedTodos: 'Allowed: read your deals and change your todos.',
+  allowedRead: 'Allowed: read your deals.',
   disconnect: 'Disconnect',
   disconnectAll: 'Disconnect all AI apps',
   confirmAll: 'Disconnect every AI app? They lose access right away. What they already received is not deleted.',

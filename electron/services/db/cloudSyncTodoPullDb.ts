@@ -73,6 +73,8 @@ export interface PulledPart {
   rev: number;
   value: JsonValue;
   by: string | null;
+  /** The part's effective time as the server feed sent it (PR-6: the AI-app marker). */
+  at?: string | null;
 }
 
 export interface PullPage {
@@ -114,6 +116,9 @@ export interface PullCtx {
 
 type Row = Record<string, unknown>;
 
+/** PR-6: an AI app's actor as the server writes it (`ai_app:` + the connection id). Anything else is not a marker. */
+export const AI_BY = /^ai_app:[0-9A-Za-z-]{1,64}$/;
+
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -134,7 +139,7 @@ function pulledParts(row: Row): Partial<Record<StatePart, PulledPart>> {
     const v = obj(parts[p]);
     const rev = v ? num(v.rev) : null;
     if (!v || rev === null) continue;
-    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by) };
+    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by), at: str(v.at) };
   }
   return out;
 }
@@ -192,6 +197,12 @@ class Page {
     private readonly full: boolean,
     /** A full pull in which the cloud's value always wins (owed after a backup restore or a resync). */
     private readonly cloudWins: boolean,
+    /**
+     * PR-6: a full pull after this user's todo records were cleared (turn-on, reclaim, an account reset: kind NULL
+     * or 'behind'). Its conflict events are history this computer already saw or never needs; they are stored
+     * already dismissed, so old conflicts do not come back as notices.
+     */
+    private readonly eventsSeen: boolean = false,
   ) {
     this.by = `desktop:${ctx.installId}`;
     this.at = ctx.now.toISOString();
@@ -333,6 +344,35 @@ class Page {
         ...cols.map((c) => next[c] as string | number | null),
         this.at,
       );
+  }
+
+  /**
+   * PR-6 (v84): the AI-app marker. The ONLY writer of `changed_json` other than the confirm path's clear. Values come
+   * from the server feed only: a written part's `by` (kept only when it is `ai_app:<id>` with a plain id) and `at`.
+   * The latest such part becomes `{"part", "by", "at"}`; a later write of that part by any other side clears it.
+   */
+  private markChanged(localId: string, written: Array<{ part: TodoPart | "create"; pulled: PulledPart | undefined }>): void {
+    if (written.length === 0) return;
+    const cur = this.db
+      .prepare("SELECT changed_json FROM cloud_sync_todo_state WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+      .get(this.ctx.projectRef, this.ctx.userId, localId) as { changed_json: string | null } | undefined;
+    if (!cur) return;
+    const prev = obj(parseJson(cur.changed_json));
+    let next: Record<string, string> | null = prev ? (prev as Record<string, string>) : null;
+    let best: { part: string; by: string; at: string } | null = null;
+    for (const w of written) {
+      const by = w.pulled?.by ?? null;
+      const at = w.pulled?.at ?? null;
+      if (by && AI_BY.test(by) && at && !Number.isNaN(Date.parse(at))) {
+        if (!best || Date.parse(at) >= Date.parse(best.at)) best = { part: w.part, by, at: new Date(Date.parse(at)).toISOString() };
+      } else if (next && next.part === w.part) next = null;
+    }
+    if (best) next = best;
+    const text = next ? JSON.stringify({ part: next.part, by: next.by, at: next.at }) : null;
+    if (text === cur.changed_json) return;
+    this.db
+      .prepare("UPDATE cloud_sync_todo_state SET changed_json = ? WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+      .run(text, this.ctx.projectRef, this.ctx.userId, localId);
   }
 
   private writeLocal(
@@ -537,8 +577,8 @@ class Page {
     };
     this.db
       .prepare(
-        `INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, transaction_id, other_json, actor_kind, actor_label, change_seq, created_at)
-         VALUES (?, ?, ?, ?, ?, 'conflict', ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, transaction_id, other_json, actor_kind, actor_label, change_seq, created_at, dismissed_at)
+         VALUES (?, ?, ?, ?, ?, 'conflict', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         this.ctx.projectRef,
@@ -552,6 +592,7 @@ class Page {
         str(row.label),
         seq,
         this.at,
+        this.eventsSeen ? this.at : null,
       );
     this.counts.events++;
   }
@@ -713,6 +754,7 @@ class Page {
       }
       this.writeShadow(entity, localId, tx, cloudId, cloudDealId, parts, skip);
       for (const w of writes) this.writeLocal(entity, localId, w.part, w.value);
+      if (entity === "item") this.markChanged(localId, writes.map((w) => ({ part: w.part, pulled: parts[w.part] })));
       if (changed || writes.length > 0) this.counts.applied++;
       else this.counts.unchanged++;
       return "ok";
@@ -776,6 +818,13 @@ class Page {
       parts,
       new Set(),
     );
+    // an item an AI app added: the marker says so (its title part carries the add's actor and time)
+    // an item restored from this computer's trash was not added by anyone now: no marker (any earlier one is dropped)
+    if (!trash) this.markChanged(localId, [{ part: "create", pulled: parts.title }]);
+    else
+      this.db
+        .prepare("UPDATE cloud_sync_todo_state SET changed_json = NULL WHERE project_ref = ? AND owner_user_id = ? AND entity = 'item' AND local_id = ?")
+        .run(this.ctx.projectRef, this.ctx.userId, localId);
     return "ok";
   }
 
@@ -1129,7 +1178,7 @@ export function applyTodoPage(
     db.prepare(
       "INSERT OR REPLACE INTO cloud_sync_applying (id, started_at) VALUES (1, ?)",
     ).run(ctx.now.toISOString());
-    const p = new Page(db, ctx, full, cloudWins);
+    const p = new Page(db, ctx, full, cloudWins, full && (kind === null || kind === "behind"));
     for (const r of page.rows) if (str(r.entity) === "deal") p.noteDealRow(r);
     for (const r of page.rows) p.applyRow(r);
     p.retryParked();
@@ -1169,6 +1218,7 @@ export function applyTodoPage(
           ).run(ctx.projectRef);
       }
       p.reapplyFailedWrites();
+      pruneTodoNotices(db, ctx.projectRef, ctx.userId, ctx.now);
     }
     db.exec("DELETE FROM cloud_sync_applying");
     // The scan after a full pull (plan §2.2, §3.4; PR-4a review C order), in this same transaction, after the
@@ -1196,4 +1246,25 @@ export function resetTodoCursorForFullPull(
   db.prepare(
     "UPDATE cloud_sync_todo_cursor SET last_seq = 0, horizon = NULL, full_pull_kind = CASE WHEN full_pull_owed = 1 THEN full_pull_kind ELSE 'resync' END, full_pull_owed = 1, updated_at = ? WHERE project_ref = ? AND owner_user_id = ?",
   ).run(now.toISOString(), projectRef, userId);
+}
+
+/** Days a dismissed notice is kept, and days any notice is kept (PR-6: notices were never pruned). */
+export const NOTICE_KEEP_DISMISSED_DAYS = 30;
+export const NOTICE_KEEP_DAYS = 90;
+
+/**
+ * PR-6: drops this user's dismissed notices older than 30 days and every notice older than 90 days, by
+ * `created_at` (ISO text, this computer's clock). Runs at the end of a pull, in its transaction.
+ */
+export function pruneTodoNotices(db: SqlDb, projectRef: string, userId: string, now: Date): number {
+  const day = 86_400_000;
+  const dismissedBefore = new Date(now.getTime() - NOTICE_KEEP_DISMISSED_DAYS * day).toISOString();
+  const anyBefore = new Date(now.getTime() - NOTICE_KEEP_DAYS * day).toISOString();
+  const r = db
+    .prepare(
+      `DELETE FROM cloud_sync_todo_notices WHERE project_ref = ? AND owner_user_id = ?
+         AND ((dismissed_at IS NOT NULL AND created_at < ?) OR created_at < ?)`,
+    )
+    .run(projectRef, userId, dismissedBefore, anyBefore) as { changes?: number };
+  return typeof r.changes === "number" ? r.changes : 0;
 }

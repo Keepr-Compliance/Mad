@@ -18,6 +18,8 @@ export interface AiAppRow {
   sendsBackTo: string;
   connected: string;
   lastUsed: string;
+  /** BACKLOG-4263 PR-6: what the connection may do; null when the database does not say. */
+  allowed: string | null;
 }
 
 export function AiAppsList({ rows }: { rows: AiAppRow[] }) {
@@ -56,6 +58,11 @@ export function AiAppsList({ rows }: { rows: AiAppRow[] }) {
               </p>
               <p className="text-gray-600">{row.connected}</p>
               <p className="text-gray-600">{row.lastUsed}</p>
+              {row.allowed !== null && (
+                <p className="text-gray-600" data-testid="ai-app-allowed">
+                  {row.allowed}
+                </p>
+              )}
             </div>
             <Button
               type="button"

@@ -77,6 +77,8 @@ import { textChipMessageId, useChecklistTextNames } from "../../hooks/useCheckli
 import { MyItemsSection } from "./MyItemsSection";
 import { templateChecklistHint } from "../../../../utils/checklistPlanHint";
 import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
+import { CloudTodosProvider } from "./cloud/CloudTodosContext";
+import { CloudDealNotices, CloudOfflineNotice, CloudRecentlyRemoved } from "./cloud/CloudTodoTabParts";
 
 export interface TransactionChecklistTabProps {
   checklist: UseTransactionChecklistResult;
@@ -96,6 +98,11 @@ export interface TransactionChecklistTabProps {
    * process refuses them too (`refuseIfDealLocked`).
    */
   lockedTooltip?: string;
+  /**
+   * BACKLOG-4263 PR-6: the deal, for the Keepr Cloud parts (notices, markers, Recently removed). Falls back to the
+   * first checklist's deal. Those parts show only for a user with Keepr Cloud on (main decides).
+   */
+  transactionId?: string;
 }
 
 /**
@@ -117,6 +124,7 @@ export function TransactionChecklistTab({
   onShowError,
   nameMap,
   lockedTooltip,
+  transactionId: dealIdProp,
 }: TransactionChecklistTabProps): React.ReactElement | null {
   const { state, data } = checklist;
   // The Emails tab's source for "You" in a thread (TransactionEmailsTab).
@@ -383,7 +391,10 @@ export function TransactionChecklistTab({
   const hint = templateChecklistHint(gate);
 
   return (
+    <CloudTodosProvider transactionId={dealIdProp ?? transactionId ?? null} onTodosChanged={() => void checklist.refresh()}>
     <div data-testid="checklist-panel">
+      <CloudOfflineNotice />
+      <CloudDealNotices />
       {locked ? (
         <div
           className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
@@ -485,6 +496,8 @@ export function TransactionChecklistTab({
         ))}
       </div>
 
+      <CloudRecentlyRemoved locked={locked} reloadKey={data} />
+
       <AttachmentPreviewHost preview={attachmentPreview} />
       {viewingThread && (
         <EmailThreadViewModal
@@ -529,6 +542,7 @@ export function TransactionChecklistTab({
         />
       )}
     </div>
+    </CloudTodosProvider>
   );
 }
 

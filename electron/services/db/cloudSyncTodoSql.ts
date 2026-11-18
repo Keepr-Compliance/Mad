@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_state (
   removed_rev    INTEGER,
   removed_json   TEXT,
   updated_at     TEXT NOT NULL,
+  changed_json   TEXT,
   PRIMARY KEY (project_ref, owner_user_id, entity, local_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
@@ -129,6 +130,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_notices (
   created_at     TEXT NOT NULL,
   dismissed_at   TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_todo_notices_seq
+  ON cloud_sync_todo_notices (project_ref, owner_user_id, kind, change_seq);
 CREATE TABLE IF NOT EXISTS cloud_sync_todo_trash (
   project_ref    TEXT NOT NULL,
   owner_user_id  TEXT NOT NULL,

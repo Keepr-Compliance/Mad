@@ -19,6 +19,7 @@ import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
 import * as todoStore from "../db/cloudSyncTodoDbService";
 import * as archive from "../db/cloudSyncDealArchive";
+import * as screens from "../db/cloudSyncTodoScreensDb";
 import type {
   CloudSyncDeleteForGoodResult,
   CloudSyncPausedReason,
@@ -56,7 +57,14 @@ export interface CloudSyncServiceDeps {
   reportFailure?: (code: string) => void;
   /** BACKLOG-4263 PR-4c: the restore's audit entry (RunnerDeps.auditRestore). */
   auditRestore?: RunnerDeps["auditRestore"];
+  /** BACKLOG-4263 PR-6: a pass's pull changed todos on this computer (main -> renderer `cloud-todos:changed`). */
+  onTodosChanged?: () => void;
+  /** BACKLOG-4263 PR-6: how long turn-off waits for its best-effort pull (default 10 s). */
+  turnOffPullMs?: number;
 }
+
+/** BACKLOG-4263 PR-6 (plan §7): turn-off waits at most this long for a last pull; it never blocks the turn-off. */
+export const TURN_OFF_PULL_MS = 10_000;
 
 export class CloudSyncService {
   readonly runner: CloudSyncRunner | null;
@@ -160,6 +168,13 @@ export class CloudSyncService {
       this.failedPasses = summary.failed > 0 ? this.failedPasses + 1 : summary.outcome === "done" ? 0 : this.failedPasses;
     }
     if (summary.outcome === "not_enabled") this.refreshSchedule();
+    if ((summary.pull?.localWrites ?? 0) > 0) {
+      try {
+        this.deps.onTodosChanged?.();
+      } catch {
+        /* a closed window is not a pass failure */
+      }
+    }
     return summary;
   }
 
@@ -197,6 +212,10 @@ export class CloudSyncService {
     base.notSavedDeals = this.notSavedDeals(db, session.userId);
     base.lastSavedAt = this.lastSavedAt(db, ref);
     if (todoStore.installRemovedAt(db, ref, session.userId)) base.installRemoved = true;
+    if (locallyOn) {
+      const parked = screens.parkedCounts(db, ref, session.userId);
+      if (parked.locked > 0 || parked.other > 0) base.parked = parked;
+    }
 
     if (store.otherProjectInUse(db, ref)) return paused("other_project");
     if (owed) return { ...base, status: "turning_off" };
@@ -211,6 +230,8 @@ export class CloudSyncService {
     const view = this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at);
     if (view.status === "on" || view.status === "error") {
       view.onlineNotHereDeals = this.onlineNotHere(db, ref, session.userId);
+      const restored = this.restoredOnlineOnly(db, ref, session.userId);
+      if (restored > 0) view.restoredOnlineOnly = restored;
       view.otherInstalls = await this.oldInstalls(session.userId);
     }
     return view;
@@ -221,6 +242,17 @@ export class CloudSyncService {
     try {
       const j = store.lastReconcile(db, ref, userId).summaryJson;
       const n = j ? (JSON.parse(j) as { orphanDeals?: unknown }).orphanDeals : 0;
+      return typeof n === "number" && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** BACKLOG-4263 PR-6: from the last reconcile: online deals of this install the owner restored online. */
+  private restoredOnlineOnly(db: SqlDb, ref: string, userId: string): number {
+    try {
+      const j = store.lastReconcile(db, ref, userId).summaryJson;
+      const n = j ? (JSON.parse(j) as { restoredOnlineOnly?: unknown }).restoredOnlineOnly : 0;
       return typeof n === "number" && n > 0 ? n : 0;
     } catch {
       return 0;
@@ -299,6 +331,37 @@ export class CloudSyncService {
 
   // ------------------------------------------------------------ actions
 
+  /** BACKLOG-4263 PR-6: the local session's user only (no SDK check), for the todo screens' read-only answers. */
+  async localSessionUser(): Promise<string | null> {
+    if (!this.deps.projectRef || !this.deps.dbReady()) return null;
+    return (await this.deps.identity.current())?.userId ?? null;
+  }
+
+  /** BACKLOG-4263 PR-6: the same check, for the todo screens (todoScreens.ts). */
+  sessionUser(): Promise<string | null> {
+    return this.actingUser();
+  }
+
+  /**
+   * BACKLOG-4263 PR-6: this install's online deals (removed ones included) as cloud id -> local id, from
+   * cloud_list_install_rows; null when it cannot be read. A deal removed online keeps its local id there even after
+   * this computer forgot its own record of it (a rejected deal's record goes when the deal is removed online).
+   */
+  async onlineDealLocalIds(): Promise<Map<string, string> | null> {
+    const userId = await this.actingUser();
+    const session = await this.deps.identity.current();
+    if (!userId || !session || session.userId !== userId || !this.runner) return null;
+    const rows = await this.runner.listOnline({ userId, epoch: session.epoch }, this.ensureInstallId(), "deal").catch(() => null);
+    if (!rows) return null;
+    return new Map([...rows].map(([localId, on]) => [on.cloudId, localId] as const));
+  }
+
+  /** BACKLOG-4263 PR-6: this computer's install id for the todo screens, or null before one exists. */
+  installIdForScreens(): string | null {
+    if (!this.deps.projectRef || !this.deps.dbReady()) return null;
+    return todoStore.currentInstallId(this.deps.db(), this.deps.projectRef);
+  }
+
   /** A validated session user that the SDK agrees with, or null (C1.4). */
   private async actingUser(): Promise<string | null> {
     if (!this.deps.projectRef || !this.deps.dbReady()) return null;
@@ -355,6 +418,9 @@ export class CloudSyncService {
   async turnOff(): Promise<CloudSyncResult> {
     const userId = await this.actingUser();
     if (!userId) return { success: false, error: "signed_out" };
+    // BACKLOG-4263 PR-6 (plan §7): a best-effort last pull, so changes from AI apps or other devices reach this
+    // computer before the online copy goes. At most TURN_OFF_PULL_MS; it never blocks or fails the turn-off.
+    await this.lastPullBeforeTurnOff();
     const db = this.deps.db();
     const ref = this.deps.projectRef as string;
     store.disableForUser(db, ref, userId, true, this.now());
@@ -367,6 +433,20 @@ export class CloudSyncService {
     this.refreshSchedule();
     if (res.kind === "transport") return { success: true, pendingOnline: true };
     return { success: false, error: res.code, pendingOnline: true };
+  }
+
+  private async lastPullBeforeTurnOff(): Promise<void> {
+    if (!this.runner || this.timer === null || !this.deps.isOnline()) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, this.deps.turnOffPullMs ?? TURN_OFF_PULL_MS);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    try {
+      await Promise.race([this.kick().then(() => undefined, () => undefined), limit]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**

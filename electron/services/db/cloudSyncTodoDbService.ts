@@ -13,6 +13,8 @@ import type { JsonValue } from "../cloudSync/jcs";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { checklistJson, CLOCK_STEP_SECONDS, itemJson, SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
 import type { AnswerAction } from "../cloudSync/todos/answers";
+import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
+import { dealLockReason } from "../transactionEligibility";
 import {
   isPart,
   ITEM_PARTS,
@@ -694,8 +696,24 @@ export function confirmTodoAnswer(
       // part the answer carries (another side changed it) keeps its shadow rev, so the pull applies it locally;
       // moving its shadow here without writing the local row would make the pull skip it and the next scan send
       // the stale local value back. A rev is still never lowered.
+      // PR-6 (PC, pr4b-sr-review-2 §1): on a deal locked HERE, a part whose answer would write another side's value
+      // into the local row is neither written nor moved in the shadow. The pull then sees that part as newer and
+      // takes the lock path (plan §2.4: a locked deal takes no other side's change; this computer's value is sent
+      // back held_locked). Parts whose answer equals the local value move as before.
+      const lockedHere = (() => {
+        if (!row.transaction_id) return false;
+        const r = db.prepare(TRANSACTION_SUBMISSION_STATUS_SQL).get(row.transaction_id) as { submission_status: string | null } | undefined;
+        return dealLockReason(r?.submission_status) !== null;
+      })();
+      const localNow = lockedHere ? localRow(db, row.entity, row.local_id) : null;
+      const heldBack = (p: StatePart): boolean => {
+        if (!lockedHere || !localNow) return false;
+        const a = parts[p];
+        if (!a || !isPart(row.entity, p)) return false;
+        return !samePart(p as TodoPart, partValue(p as TodoPart, localNow), a.value);
+      };
       const own = (p: StatePart): boolean =>
-        action.scope === "create" ? true : action.scope === "remove" ? p === "removed" : p === row.part;
+        (action.scope === "create" ? true : action.scope === "remove" ? p === "removed" : p === row.part) && !heldBack(p);
       const next: Record<string, unknown> = {
         cloud_id: typeof answer.cloud_id === "string" ? answer.cloud_id : before?.cloud_id ?? null,
         cloud_deal_id: typeof answer.cloud_deal_id === "string" ? answer.cloud_deal_id : before?.cloud_deal_id ?? null,
@@ -718,6 +736,13 @@ export function confirmTodoAnswer(
          ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET transaction_id = excluded.transaction_id,
            ${cols.map((c) => `${c} = excluded.${c}`).join(", ")}, updated_at = excluded.updated_at`,
       ).run(...key, row.transaction_id, ...cols.map((c) => next[c] as string | number | null), at);
+      // PR-6 (v84): this computer's own change of the part an AI-app marker names is now the latest: clear the marker.
+      // The confirm path only ever writes NULL here; the puller is the only writer of a value.
+      if (row.entity === "item" && action.scope === "part" && action.rebase && hasColumn(db, "cloud_sync_todo_state", "changed_json")) {
+        db.prepare(
+          "UPDATE cloud_sync_todo_state SET changed_json = NULL WHERE project_ref = ? AND owner_user_id = ? AND entity = ? AND local_id = ? AND json_extract(changed_json, '$.part') = ?",
+        ).run(...key, row.part);
+      }
 
       // the local row: the op's own part(s), when the server's value differs
       const carried: readonly TodoPart[] =
@@ -733,7 +758,7 @@ export function confirmTodoAnswer(
       for (const p of carried) {
         const a = parts[p];
         const oldRev = before ? (before[`${p}_rev`] as number | null) : null;
-        if (!a || !local || others.has(p)) continue;
+        if (!a || !local || others.has(p) || heldBack(p)) continue;
         if (oldRev !== null && oldRev !== undefined && a.rev < oldRev) continue;
         if (samePart(p, partValue(p, local), a.value)) continue;
         const set = partColumns(p, a.value);

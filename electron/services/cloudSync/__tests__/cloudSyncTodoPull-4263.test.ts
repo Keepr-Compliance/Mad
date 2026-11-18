@@ -37,7 +37,7 @@ import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import { pullTodos } from "../todos/puller";
 import { CloudClient, type RpcTransport } from "../cloudClient";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
-import { INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
+import { GET_CHECKLIST_ITEMS_SQL, INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
 import type { JsonValue } from "../jcs";
 
 type Row = Record<string, unknown>;
@@ -454,6 +454,53 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     });
   });
 
+  describe("PC: the confirm of a held op on a deal locked here (PR-6)", () => {
+    it("a held op that loses to another side's later change does not write that change into the locked deal; this computer's value is sent back held and wins", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      // second actor: the owner online (cloud_user; the real server refuses an AI app on a locked deal)
+      const ownerSet = (value: string, at = Date.now()) => {
+        const t = onlineItem(e, I1);
+        t.parts.note = { rev: t.parts.note.rev + 1, value, at, by: "cloud_user:owner", edit_seq: null };
+        t.changeSeq = e.server.nextSeq(t.owner);
+      };
+      ownerSet("online one");
+      let block = true;
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_push" && block
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((o) => ({ op_id: o.op_id, status: "locked" })) }, error: null, status: 200 }
+          : undefined;
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
+      // a later change online, then the held op is answered (it loses on time)
+      ownerSet("online two", Date.now() + 60_000);
+      block = false;
+      e.server.override = null;
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(onlineItem(e, I1).parts.note.value).toBeNull();
+      expect(outbox(db)).toEqual([]);
+      // unlocked: another side's change applies again
+      db.prepare("UPDATE transactions SET submission_status = 'not_submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "after unlock");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("after unlock");
+    });
+
+    it("on a deal that is not locked, the same losing answer writes the winner locally (unchanged rule)", async () => {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "online, newer");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("online, newer");
+    });
+  });
+
   // ================================================================ EVT
   describe("EVT: conflict events", () => {
     it("a conflict event becomes one notice; a re-delivered pull adds none", async () => {
@@ -472,6 +519,163 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, last_seq = 0, horizon = NULL").run();
       await pass(e);
       expect(notices()).toHaveLength(1);
+    });
+  });
+
+  describe("EVT6: old conflicts after the records are cleared (PR-6)", () => {
+    async function withConflict() {
+      const { db, e } = await synced();
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      const row = outbox(db)[0];
+      db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
+      e.server.aiSet(onlineItem(e, I1), "note", "phone, newer");
+      await pass(e);
+      const live = () => db.prepare("SELECT dismissed_at FROM cloud_sync_todo_notices WHERE kind = 'conflict'").all() as Row[];
+      expect(live()).toEqual([{ dismissed_at: null }]);
+      return { db, e, live };
+    }
+
+    it("a turn-on's full pull (records cleared, kind NULL) stores an old conflict already dismissed", async () => {
+      const { db, e, live } = await withConflict();
+      todos.clearTodoStateForUser(db, PROJECT, USER_A);
+      expect(live()).toEqual([]);
+      await pass(e);
+      expect(cursor(db)).toMatchObject({ full_pull_owed: 0 });
+      expect(live()).toEqual([{ dismissed_at: expect.any(String) }]);
+    });
+
+    it("a 'behind' full pull (records cleared, then the file found older than its own online history) also stores it dismissed", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'behind', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: expect.any(String) }]);
+    });
+
+    it("a backup-restore full pull keeps a conflict it has not seen undismissed (the restored file holds the notices it already had)", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'restore', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: null }]);
+    });
+
+    it("a resync full pull keeps a conflict it has not seen undismissed", async () => {
+      const { db, e, live } = await withConflict();
+      db.prepare("DELETE FROM cloud_sync_todo_notices").run();
+      db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1, full_pull_kind = 'resync', last_seq = 0, horizon = NULL").run();
+      await pass(e);
+      expect(live()).toEqual([{ dismissed_at: null }]);
+    });
+  });
+
+  describe("PRUNE: notices are pruned at the end of a pull (PR-6)", () => {
+    it("drops dismissed notices older than 30 days and any notice older than 90 days, for this user only", async () => {
+      const { db, e } = await synced();
+      const ago = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+      const ins = db.prepare(
+        "INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, created_at, dismissed_at) VALUES (?, ?, 'item', ?, 'note', 'conflict', ?, ?)",
+      );
+      ins.run(PROJECT, USER_A, "a", ago(31), ago(30));
+      ins.run(PROJECT, USER_A, "b", ago(29), ago(1));
+      ins.run(PROJECT, USER_A, "c", ago(89), null);
+      ins.run(PROJECT, USER_A, "d", ago(91), null);
+      ins.run(PROJECT, USER_B, "e", ago(91), null);
+      await pass(e);
+      const left = (db.prepare("SELECT local_id FROM cloud_sync_todo_notices ORDER BY local_id").all() as Row[]).map((r) => r.local_id);
+      expect(left).toEqual(["b", "c", "e"]);
+    });
+  });
+
+  describe("TIE: two todos with the same order (PR-6)", () => {
+    it("an AI app's add while this computer's add is unsent lands at the same order; the list shows them in the order they were created, every time", async () => {
+      const { db, e } = await synced();
+      const mine = fid(9999, 50); // sorts after every other id here, so an id tie-break would put it last
+      db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(mine, MY, "Mine, added first", null, 1, null, 1);
+      // the AI add happens online before this computer's add is sent: the server's max does not include it
+      const theirs = e.server.aiAdd(onlineList(e, MY), "Added by the AI app", Date.now(), 1);
+      await pass(e);
+      const order = () =>
+        (db.prepare(GET_CHECKLIST_ITEMS_SQL).all(MY) as Row[]).map((r) => `${r.sort_order}:${r.title}`);
+      expect(item(db, theirs.id)).toBeDefined();
+      expect(order()).toEqual(["0:Call lender", "1:Mine, added first", "1:Added by the AI app"]);
+      for (let i = 0; i < 3; i++) expect(order()).toEqual(["0:Call lender", "1:Mine, added first", "1:Added by the AI app"]);
+    });
+  });
+
+  describe("MARK: the AI-app marker (changed_json, v84)", () => {
+    const mark = (db: TestDb, id: string) => {
+      const r = shadow(db, id);
+      return r?.changed_json ? JSON.parse(r.changed_json as string) : null;
+    };
+
+    it("an AI app's tick is recorded from the feed (part, by, at); this computer's own later change of that part, once kept online, clears it", async () => {
+      const { db, e } = await synced();
+      const at = Date.now() - 5_000;
+      e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: new Date(at).toISOString() }, at);
+      await pass(e);
+      expect(item(db, I1)!.is_checked).toBe(1);
+      expect(mark(db, I1)).toEqual({ part: "done", by: "ai_app:conn-1", at: new Date(at).toISOString() });
+      // another part changed here does not clear it
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      await pass(e);
+      expect(mark(db, I1)).toMatchObject({ part: "done" });
+      // this computer unticks it: kept online, the marker goes
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
+      await pass(e);
+      expect(item(db, I1)!.is_checked).toBe(0);
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("an item an AI app added carries an add marker", async () => {
+      const { db, e } = await synced();
+      const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
+      await pass(e);
+      expect(mark(db, t.id)).toMatchObject({ part: "create", by: "ai_app:conn-1" });
+    });
+
+    it("a change by the owner online (not an AI app) sets no marker and clears one on the same part", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "from the AI");
+      await pass(e);
+      expect(mark(db, I1)).toMatchObject({ part: "note" });
+      const t = onlineItem(e, I1);
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "from the owner", at: Date.now(), by: "cloud_user:owner", edit_seq: null };
+      t.changeSeq = e.server.nextSeq(t.owner);
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("from the owner");
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("only an ai_app actor with a plain id becomes a marker: any other text in the feed's by is ignored", async () => {
+      const { db, e } = await synced();
+      e.server.aiSet(onlineItem(e, I1), "note", "odd actor", Date.now(), "<b>x</b>");
+      await pass(e);
+      expect(item(db, I1)!.note).toBe("odd actor");
+      expect(mark(db, I1)).toBeNull();
+    });
+
+    it("an AI-added item removed online and restored by the owner comes back without an 'added' marker", async () => {
+      const { db, e } = await synced();
+      const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
+      await pass(e);
+      expect(mark(db, t.id)).toMatchObject({ part: "create" });
+      e.server.removeOnline(t);
+      await pass(e);
+      expect(item(db, t.id)).toBeUndefined();
+      e.server.restoreOnline(t);
+      await pass(e);
+      expect(item(db, t.id)).toBeDefined();
+      expect(mark(db, t.id)).toBeNull();
+    });
+
+    it("a locked deal's held change sets no marker (the change is not shown here)", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai during review");
+      await pass(e);
+      expect(item(db, I1)!.note).toBeNull();
+      expect(mark(db, I1)).toBeNull();
     });
   });
 
@@ -585,6 +789,10 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       expect(e.server.calls.length).toBe(calls2);
       expect(outbox(db).map((o) => o.part)).toEqual(["note"]);
+      // PR-6: what Settings receives in this state: a status the screen treats as on, with installRemoved
+      const view = await e.service.getView();
+      expect(view.installRemoved).toBe(true);
+      expect(["on", "error", "paused"]).toContain(view.status);
       // B: unaffected
       expect(todos.installRemovedAt(db, PROJECT, USER_B)).toBeNull();
       db.prepare("UPDATE transaction_checklists SET sort_order = 4 WHERE id = ?").run(fid(3, 80));
@@ -1173,6 +1381,60 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       const deletes = e.server.callsTo("cloud_delete_deal").length;
       expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
       expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(deletes);
+    });
+
+    /** Online deals of this install with no local record: `restored` were restored online by the owner. */
+    async function withOrphans(plain: number, restored: number) {
+      const { db, e } = await synced();
+      const install = e.server.deals[0].install;
+      const ids: { plain: string[]; restored: string[] } = { plain: [], restored: [] };
+      for (let i = 0; i < plain + restored; i++) {
+        const id = fid(70, i + 1);
+        e.server.deals.push({ id, owner: USER_A, install, localId: `gone-${i}`, hash: "h", version: 1, fullSyncAt: null, changeSeq: e.server.nextSeq(USER_A) });
+        if (i < restored) {
+          e.server.history.set(id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr" }]);
+          ids.restored.push(id);
+        } else ids.plain.push(id);
+      }
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      await pass(e);
+      const summary = () =>
+        JSON.parse((db.prepare("SELECT last_state_json FROM cloud_sync_settings WHERE user_id = ?").get(USER_A) as { last_state_json: string }).last_state_json);
+      return { db, e, ids, summary };
+    }
+
+    it("a deal the owner restored online is counted as Online only, not as not-on-this-computer, and 'Delete them' leaves it online", async () => {
+      const { e, ids, summary } = await withOrphans(1, 1);
+      expect(summary()).toMatchObject({ orphanDeals: 1, restoredOnlineOnly: 1 });
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      const online = e.server.deals.map((d) => d.id);
+      expect(online).toContain(ids.restored[0]);
+      expect(online).not.toContain(ids.plain[0]);
+      expect(summary()).toMatchObject({ orphanDeals: 0, restoredOnlineOnly: 1 });
+    });
+
+    it("only a restore by the owner online counts: a latest 'restored' row by another actor leaves the deal not-on-this-computer", async () => {
+      const { e } = await synced();
+      const install = e.server.deals[0].install;
+      const id = fid(71, 1);
+      e.server.deals.push({ id, owner: USER_A, install, localId: "gone-x", hash: "h", version: 1, fullSyncAt: null, changeSeq: e.server.nextSeq(USER_A) });
+      e.server.history.set(id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "desktop", actor_label: null }]);
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      expect(e.server.deals.map((d) => d.id)).not.toContain(id);
+    });
+
+    it("the check reads at most 20 deal histories; deals past the cap, and deals whose read fails, are never deleted", async () => {
+      const { e, ids, summary } = await withOrphans(22, 0);
+      expect(summary().orphanDeals).toBe(22);
+      const reads = e.server.historyCalls;
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_history" && args.p_id === ids.plain[0] ? { data: null, error: { code: "network" }, status: 500 } : undefined;
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      e.server.override = null;
+      expect(e.server.historyCalls - reads).toBeLessThanOrEqual(20);
+      const online = new Set(e.server.deals.map((d) => d.id));
+      // 19 checked and deleted; the failed read and the 2 past the cap stay
+      expect(ids.plain.filter((id) => online.has(id))).toEqual([ids.plain[0], ids.plain[20], ids.plain[21]]);
     });
   });
 });

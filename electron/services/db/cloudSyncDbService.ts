@@ -674,7 +674,25 @@ export function lastReconcile(db: SqlDb, projectRef: string, userId: string): { 
 }
 
 /** After the user deleted them: no online deals without a local record remain in the last summary. */
-export function setOrphanCount(db: SqlDb, projectRef: string, userId: string, n: number): void {
+/** PR-6: the online ids the last reconcile (or "Delete them") found restored online by the owner. */
+export function lastRestoredOnlineIds(db: SqlDb, projectRef: string, userId: string): string[] {
+  try {
+    const j = lastReconcile(db, projectRef, userId).summaryJson;
+    const ids = j ? (JSON.parse(j) as { restoredOnlineIds?: unknown }).restoredOnlineIds : null;
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setOrphanCount(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  n: number,
+  restoredOnlineOnly?: number,
+  restoredOnlineIds?: string[],
+): void {
   const cur = lastReconcile(db, projectRef, userId);
   let summary: Record<string, unknown> = {};
   try {
@@ -683,6 +701,8 @@ export function setOrphanCount(db: SqlDb, projectRef: string, userId: string, n:
     summary = {};
   }
   summary.orphanDeals = n;
+  if (restoredOnlineOnly !== undefined) summary.restoredOnlineOnly = restoredOnlineOnly;
+  if (restoredOnlineIds !== undefined) summary.restoredOnlineIds = restoredOnlineIds;
   db.prepare("UPDATE cloud_sync_settings SET last_state_json = ? WHERE project_ref = ? AND user_id = ?").run(
     JSON.stringify(summary),
     projectRef,

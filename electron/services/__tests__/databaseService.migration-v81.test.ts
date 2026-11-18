@@ -191,7 +191,9 @@ describe("v81 todo due date, install_removed_at and todo tables", () => {
     expect(versions.indexOf(82)).toBe(versions.indexOf(81) + 1);
     // BACKLOG-4263 PR-4c: v83 (the deal archive) follows v82.
     expect(versions.indexOf(83)).toBe(versions.indexOf(82) + 1);
-    expect(Math.max(...versions)).toBe(83);
+    // BACKLOG-4263 PR-6: v84 (the notices index and changed_json) follows v83.
+    expect(versions.indexOf(84)).toBe(versions.indexOf(83) + 1);
+    expect(Math.max(...versions)).toBe(84);
     expect(() => cls.validateNoVersionGaps(cls.MIGRATIONS)).not.toThrow();
   });
 });

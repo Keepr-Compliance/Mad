@@ -11,6 +11,8 @@ import React, { useState } from "react";
 import { ConfirmationDialog } from "@keepr/ui";
 import type { UseKeeprCloudSettings } from "./useKeeprCloudSettings";
 import { KEEPR_CLOUD_COPY as C, NOTICE_TEXTS } from "./keeprCloudCopy";
+import { useKeeprCloudRemoved } from "./useKeeprCloudRemoved";
+import { KeeprCloudRemovedDeals } from "./KeeprCloudRemovedDeals";
 import type { CloudSyncView } from "../../../../electron/types/ipc/window-api-cloud-sync";
 
 function minutesAgo(iso: string | null): string | null {
@@ -65,9 +67,11 @@ const SOLID_BUTTON =
 export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }): React.ReactElement | null {
   const [dialog, setDialog] = useState<"notice" | "off" | "forget" | "delete-online" | "delete-installs" | null>(null);
   const view = cloud.view;
+  const isOn = !!view && (view.status === "on" || view.status === "error" || view.status === "paused");
+  // BACKLOG-4263 PR-6: Settings › Keepr Cloud › Removed (Keepr Cloud users only; the online list only when on and online)
+  const removed = useKeeprCloudRemoved(isOn, view?.status === "on" || view?.status === "error");
   if (!view || view.status === "hidden") return null;
 
-  const isOn = view.status === "on" || view.status === "error" || view.status === "paused";
   const noticeText = view.noticeVersion !== null ? NOTICE_TEXTS[view.noticeVersion] : undefined;
   const canTurnOn = view.status === "off" && noticeText !== undefined;
   const canTurnOff = isOn || view.status === "not_active" || view.status === "needs_confirmation";
@@ -118,11 +122,33 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
 
         {view.engineInstalled && view.status === "needs_confirmation" && (
           <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4" data-testid="cloud-confirm">
-            <span className="text-[13px] text-gray-700">{C.thisComputer}</span>
+            <span className="text-[13px] text-gray-700">
+              {C.thisComputer} {C.thisComputerTodos}
+            </span>
             <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => void cloud.confirmComputer()}>
               {C.saveThisComputer}
             </button>
           </div>
+        )}
+
+        {view.installRemoved && isOn && (
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4" data-testid="cloud-install-removed">
+            <span className="text-[13px] text-gray-700">{C.installRemoved}</span>
+            <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => void cloud.reclaimInstall()}>
+              {C.reclaim}
+            </button>
+          </div>
+        )}
+
+        {view.parked && view.parked.locked > 0 && (
+          <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-parked-locked">
+            {C.parkedLocked(view.parked.locked)}
+          </p>
+        )}
+        {view.parked && view.parked.other > 0 && (
+          <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-parked-other">
+            {C.parkedOther(view.parked.other)}
+          </p>
         )}
 
         {view.notSavedDeals > 0 && (view.status === "on" || view.status === "error") && (
@@ -138,6 +164,12 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
               {C.deleteThem}
             </button>
           </div>
+        )}
+
+        {(view.restoredOnlineOnly ?? 0) > 0 && (
+          <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-online-only">
+            {C.onlineOnly(view.restoredOnlineOnly as number)}
+          </p>
         )}
 
         {view.otherInstalls && (
@@ -176,13 +208,17 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
           </div>
         )}
 
+        {isOn && <KeeprCloudRemovedDeals removed={removed} offline={view.pausedReason === "offline"} />}
+
         {cloud.message && (
           <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-message">
             {cloud.message === "turn_off_done"
               ? C.turnOffDone
               : cloud.message === "turn_off_offline"
                 ? C.turnOffOffline
-                : C.actionFailed}
+                : cloud.message === "reclaim_done"
+                  ? C.reclaimDone
+                  : C.actionFailed}
           </p>
         )}
 
@@ -217,7 +253,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
       <ConfirmationDialog
         open={dialog === "off"}
         title={C.turnOffConfirmTitle}
-        description={C.turnOffConfirm}
+        description={[C.turnOffConfirm, C.turnOffLost, ...(removed.here.length > 0 ? [C.turnOffArchive] : [])].join(" ")}
         confirmLabel={C.turnOffConfirmButton}
         cancelLabel={C.cancel}
         isDestructive

@@ -12,7 +12,7 @@ export interface KeeprCloudSettingsState {
   view: CloudSyncView | null;
   busy: boolean;
   /** A fixed message key, or null. */
-  message: "turn_off_done" | "turn_off_offline" | "failed" | null;
+  message: "turn_off_done" | "turn_off_offline" | "reclaim_done" | "failed" | null;
 }
 
 export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
@@ -25,6 +25,8 @@ export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
   openAiApps: () => Promise<boolean>;
   deleteOnlineNotHere: () => Promise<boolean>;
   deleteOldInstalls: () => Promise<boolean>;
+  /** BACKLOG-4263 PR-6: "Save this computer's deals again". */
+  reclaimInstall: () => Promise<boolean>;
 }
 
 export function useKeeprCloudSettings(): UseKeeprCloudSettings {
@@ -67,5 +69,6 @@ export function useKeeprCloudSettings(): UseKeeprCloudSettings {
     openAiApps: async () => (await cloudSyncService.openAiApps()).success,
     deleteOnlineNotHere: () => act(() => cloudSyncService.deleteOnlineNotHere()),
     deleteOldInstalls: () => act(() => cloudSyncService.deleteOldInstalls()),
+    reclaimInstall: () => act(() => cloudSyncService.reclaimInstall(), () => "reclaim_done"),
   };
 }

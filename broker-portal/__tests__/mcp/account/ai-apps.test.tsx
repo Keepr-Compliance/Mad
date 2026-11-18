@@ -149,6 +149,38 @@ describe('the list', () => {
     expect(screen.getByRole('button', { name: AI_APPS.disconnectAll })).toBeInTheDocument();
   });
 
+  // BACKLOG-4263 PR-6: migration 20261118140000 adds `scope` (the stored grant); the answer without it stays valid
+  it('a connection granted mcp:todos says it can change todos; one granted mcp:read says read only', async () => {
+    mockRpc.mockResolvedValue(
+      listOk([connectionRow({ scope: 'mcp:todos' }), connectionRow({ id: CONNECTION_ID_2, provider: 'openai', client_name: 'ChatGPT', scope: 'mcp:read' })])
+    );
+    await renderPage();
+    const [a, b] = rows();
+    expect(within(a).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals and change your todos.');
+    expect(within(b).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals.');
+    expect(within(a).getByTestId('ai-app-allowed').className).toBe('text-gray-600');
+  });
+
+  it('an answer without scope (before 20261118140000, or after its rollback): the rows show, with no Allowed line', async () => {
+    mockRpc.mockResolvedValue(listOk([connectionRow()]));
+    await renderPage();
+    expect(rows()).toHaveLength(1);
+    expect(screen.queryByTestId('ai-app-allowed')).toBeNull();
+  });
+
+  it.each([['an unknown scope', 'mcp:admin'], ['a null scope', null], ['a scope that is not text', 1]])(
+    'one row with %s -> that row shows without an Allowed line; the list and its Disconnect buttons stay',
+    async (_l, scope) => {
+      mockRpc.mockResolvedValue(listOk([connectionRow({ scope }), connectionRow({ id: CONNECTION_ID_2, scope: 'mcp:todos' })]));
+      await renderPage();
+      const [a, b] = rows();
+      expect(within(a).queryByTestId('ai-app-allowed')).toBeNull();
+      expect(within(a).getByRole('button', { name: AI_APPS.disconnect })).toBeInTheDocument();
+      expect(within(b).getByTestId('ai-app-allowed')).toHaveTextContent('Allowed: read your deals and change your todos.');
+      expect(screen.queryByRole('alert')).toBeNull();
+    }
+  );
+
   it('the app name is literal text inside <bdi>, after the provider and the return host', async () => {
     const name = '‮ppa <script>x</script>';
     mockRpc.mockResolvedValue(listOk([connectionRow({ client_name: name })]));

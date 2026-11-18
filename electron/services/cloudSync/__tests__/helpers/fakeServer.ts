@@ -246,6 +246,10 @@ export interface FakeDeal {
   /** PR-4b: feed number and soft removal. */
   changeSeq?: number;
   removedKind?: "deal" | "install" | null;
+  /** PR-6: what cloud_list_removed returns (property_address; removed_at, restorable_until as ISO). */
+  address?: string | null;
+  removedAt?: string;
+  restorableUntil?: string;
 }
 
 export type FakeKind = "party" | "checklist" | "checklist_item";
@@ -290,6 +294,16 @@ export class FakeServer {
   removedInstalls = new Set<string>();
   /** Deals removed by cloud_delete_deal: PR-2 keeps them (soft) with their todos. */
   softRemovedDeals: FakeDeal[] = [];
+  /**
+   * PR-6: cloud_todo_history rows by cloud id, newest first (shape of :1094-1098). A deal restored through
+   * cloud_todo_restore or restoreDealOnline gets {outcome restored, actor_kind cloud_user} on top
+   * (_cloud_todo_unremove_deal :507).
+   */
+  history = new Map<string, Array<Record<string, JsonValue>>>();
+  /** PR-6: mcp_list_my_connections rows (:951-958). */
+  connections: Array<Record<string, JsonValue>> = [];
+  /** PR-6: number of history reads (cloud_todo_history calls) answered. */
+  historyCalls = 0;
   /** The server's clock for receive times (ms). */
   serverNow = () => Date.parse("2026-11-14T12:00:05.000Z");
   /** PR-4b: the owner's feed head (cloud_todo_feed_head: last_seq, forgotten_through_seq, forgotten_at). */
@@ -361,7 +375,7 @@ export class FakeServer {
     }
     const okKey = fn === "set_my_cloud_autosave" || fn === "cloud_delete_install" ? "success" : "ok";
     if (!uid) return { [okKey]: false, error: fn === "set_my_cloud_autosave" || fn === "cloud_delete_deal" ? "not_authorized" : "not_entitled" };
-    if (fn !== "cloud_list_installs" && a.p_expected_user_id !== uid) return { [okKey]: false, error: "wrong_account" };
+    if (fn !== "cloud_list_installs" && fn !== "mcp_list_my_connections" && a.p_expected_user_id !== uid) return { [okKey]: false, error: "wrong_account" };
     switch (fn) {
       case "set_my_cloud_autosave": {
         if (a.p_enabled === true) {
@@ -567,6 +581,59 @@ export class FakeServer {
       }
       case "cloud_todo_pull":
         return this.todoPull(uid, a);
+      // ---- PR-6 (migration 20261118110000; mcp 20261112170000), transcribed from the function bodies
+      case "cloud_todo_history": {
+        this.historyCalls++;
+        if (!["deal", "checklist", "item"].includes(a.p_entity as string) || !a.p_id) return { ok: false, error: "invalid_input" };
+        const t = this.todos.find((x) => x.id === a.p_id && x.owner === uid);
+        if (t?.purged) return { ok: true, purged: true, rows: [] };
+        const lim = Math.min(Math.max(typeof a.p_limit === "number" ? a.p_limit : 20, 1), 50);
+        return { ok: true, purged: false, rows: (this.history.get(a.p_id as string) ?? []).slice(0, lim) };
+      }
+      case "cloud_list_removed": {
+        const liveDeal = (id: string) => this.deals.some((d) => d.id === id && d.owner === uid);
+        const iso = (ms: number) => new Date(ms).toISOString();
+        return {
+          ok: true,
+          deals: this.softRemovedDeals.filter((d) => d.owner === uid).map((d) => ({
+            deal_id: d.id, address: d.address ?? null, removed_at: d.removedAt ?? iso(this.serverNow()),
+            removed_kind: d.removedKind ?? "deal", restorable_until: d.restorableUntil ?? iso(this.serverNow() + 30 * 86_400_000),
+            source_install_id: d.install,
+          })),
+          checklists: this.todos.filter((t) => t.owner === uid && t.entity === "checklist" && t.removed && !t.purged && liveDeal(t.dealId)).map((t) => ({
+            checklist_id: t.id, deal_id: t.dealId, name: (t.fields?.template_name as string | undefined) ?? null,
+            removed_at: (t.parts.removed.value as Record<string, JsonValue>)?.removed_at ?? null,
+          })),
+          items: this.todos.filter((t) => {
+            if (t.owner !== uid || t.entity !== "item" || !t.removed || t.purged || !liveDeal(t.dealId)) return false;
+            const list = this.todos.find((x) => x.id === t.checklistId);
+            return !list?.removed;
+          }).map((t) => ({
+            item_id: t.id, deal_id: t.dealId, checklist_id: t.checklistId, title: t.parts.title.value,
+            removed_at: (t.parts.removed.value as Record<string, JsonValue>)?.removed_at ?? null,
+          })),
+        };
+      }
+      case "cloud_todo_restore": {
+        const ent = a.p_entity as string;
+        if (!["deal", "checklist", "item"].includes(ent) || !a.p_id) return { ok: false, error: "invalid_input" };
+        if (ent === "deal") {
+          const soft = this.softRemovedDeals.find((d) => d.id === a.p_id && d.owner === uid);
+          if (!soft) {
+            const live = this.deals.some((d) => d.id === a.p_id && d.owner === uid);
+            return { ok: true, results: [{ status: live ? "not_removed" : "not_found", cloud_id: a.p_id }] };
+          }
+          this.restoreDealOnline(soft);
+          return { ok: true, results: [{ status: "restored", cloud_id: a.p_id, renumbered: 1 }] };
+        }
+        const t = this.todos.find((x) => x.id === a.p_id && x.owner === uid && x.entity === ent);
+        if (!t || t.purged) return { ok: true, results: [{ op_id: a.p_op_id, status: "not_found", entity: ent, cloud_id: a.p_id }] };
+        if (!t.removed) return { ok: true, results: [{ op_id: a.p_op_id, status: "not_removed", entity: ent, cloud_id: a.p_id }] };
+        this.restoreOnline(t);
+        return { ok: true, results: [{ op_id: a.p_op_id, status: "restored", entity: ent, cloud_id: a.p_id }] };
+      }
+      case "mcp_list_my_connections":
+        return { ok: true, connections: this.connections };
       default:
         throw new Error(`unexpected rpc ${fn}`);
     }
@@ -905,6 +972,7 @@ export class FakeServer {
 
   /** PR-4c: cloud_todo_restore of a removed deal by another side (:1108-1158, F4 at _cloud_todo_unremove_deal; Q5). */
   restoreDealOnline(d: FakeDeal): void {
+    this.history.set(d.id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr" }, ...(this.history.get(d.id) ?? [])]);
     this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== d);
     this.deals.push(d);
     d.removedKind = null;

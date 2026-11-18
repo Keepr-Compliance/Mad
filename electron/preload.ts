@@ -61,6 +61,7 @@ import {
   checklistBridge,
   learnModeBridge,
   cloudSyncBridge,
+  cloudTodosBridge,
   rcsImportBridge,
   entitlementBridge,
   paymentBridge,
@@ -166,6 +167,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Keepr Cloud (BACKLOG-4243)
   cloudSync: cloudSyncBridge,
+
+  // Keepr Cloud todo screens (BACKLOG-4263 PR-6)
+  cloudTodos: cloudTodosBridge,
 
   // RCS import from the Chrome extension (BACKLOG-3619)
   rcsImport: rcsImportBridge,

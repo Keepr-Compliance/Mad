@@ -155,6 +155,24 @@ export const SetChecklistItemCheckedArgsSchema = z.object({
   checked: z.boolean(),
 });
 
+/**
+ * BACKLOG-4263 PR-6: a due date as YYYY-MM-DD, a real calendar day between 2000-01-01 and 2100-12-31 (the
+ * column CHECK, schema.sql, and the cloud's `due` part), or null to clear it.
+ */
+export const ChecklistDueDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v && v >= "2000-01-01" && v <= "2100-12-31";
+  })
+  .nullable();
+
+export const SetChecklistItemDueDateArgsSchema = z.object({
+  itemId: UuidSchema,
+  dueDate: ChecklistDueDateSchema,
+});
+
 export const SetChecklistItemNoteArgsSchema = z.object({
   itemId: UuidSchema,
   note: ChecklistNoteSchema,

@@ -70,6 +70,8 @@ import {
   GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
   GET_PRIVATE_ITEM_IDS_SQL,
+  ITEM_OWNER_CLOUD_ON_SQL,
+  SET_CHECKLIST_ITEM_DUE_DATE_SQL,
   GET_TRANSACTION_AUDIT_DATES_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
@@ -143,6 +145,7 @@ interface ItemRow {
   checked_at: string | null;
   note: string | null;
   sort_order: number;
+  due_date: string | null;
 }
 
 interface LinkRow {
@@ -184,7 +187,7 @@ function toChecklist(row: ChecklistRow): TransactionChecklist {
   };
 }
 
-function toItem(row: ItemRow): ChecklistItem {
+function toItem(row: ItemRow, audience: ChecklistAudience): ChecklistItem {
   return {
     id: row.id,
     checklistId: row.checklist_id,
@@ -196,6 +199,8 @@ function toItem(row: ItemRow): ChecklistItem {
     checkedAt: row.checked_at,
     note: row.note,
     sortOrder: row.sort_order,
+    // BACKLOG-4263 PR-6 (Q6): the due date is the agent's; a broker read never carries it.
+    ...(audience === "agent" ? { dueDate: row.due_date ?? null } : {}),
   };
 }
 
@@ -364,8 +369,8 @@ export function applyReviewChecklistPull(
 }
 
 /** One checklist's items, evidence groups and counts. */
-function loadChecklistDetail(checklistRow: ChecklistRow): ChecklistDetail {
-  const items = dbAll<ItemRow>(GET_CHECKLIST_ITEMS_SQL, [checklistRow.id]).map(toItem);
+function loadChecklistDetail(checklistRow: ChecklistRow, audience: ChecklistAudience): ChecklistDetail {
+  const items = dbAll<ItemRow>(GET_CHECKLIST_ITEMS_SQL, [checklistRow.id]).map((r) => toItem(r, audience));
   const linkRows = dbAll<LinkRow>(GET_CHECKLIST_LINKS_SQL, [checklistRow.id]);
   const memberRows = dbAll<MemberRow>(GET_CHECKLIST_LINK_MEMBERS_SQL, [
     checklistRow.id,
@@ -431,7 +436,7 @@ export function getChecklistsForTransaction(
     audience === "broker"
       ? GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL
       : GET_CHECKLISTS_BY_TRANSACTION_SQL;
-  const checklists = dbAll<ChecklistRow>(statement, [transactionId]).map(loadChecklistDetail);
+  const checklists = dbAll<ChecklistRow>(statement, [transactionId]).map((row) => loadChecklistDetail(row, audience));
   return Promise.resolve({
     checklists,
     requiredDone: checklists.reduce((sum, detail) => sum + detail.requiredDone, 0),
@@ -451,6 +456,17 @@ export function setChecklistItemChecked(itemId: string, checked: boolean): Promi
 }
 
 /** Set or clear one item's note. Resolves true when a row was updated. */
+/** BACKLOG-4263 PR-6 (Q2): the item's owner has Keepr Cloud on here (the due date is shown and set only then). */
+export function checklistItemOwnerHasCloudOn(itemId: string): boolean {
+  return !!dbGet<{ on_: number }>(ITEM_OWNER_CLOUD_ON_SQL, [itemId]);
+}
+
+/** BACKLOG-4263 PR-6: sets or clears an item's due date. Resolves true when the row changed. */
+export function setChecklistItemDueDate(itemId: string, dueDate: string | null): Promise<boolean> {
+  const result = dbRun(SET_CHECKLIST_ITEM_DUE_DATE_SQL, [dueDate, itemId, dueDate]);
+  return Promise.resolve(result.changes > 0);
+}
+
 export function setChecklistItemNote(itemId: string, note: string | null): Promise<boolean> {
   const result = dbRun(SET_CHECKLIST_ITEM_NOTE_SQL, [note, itemId]);
   return Promise.resolve(result.changes > 0);

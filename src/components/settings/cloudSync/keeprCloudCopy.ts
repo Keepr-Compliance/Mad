@@ -10,7 +10,8 @@ export const NOTICE_TEXTS: Readonly<Record<number, string>> = Object.freeze({
   1:
     "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists (including private ones), todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
     "Your emails, texts, files and contact list are not uploaded. " +
-    "AI apps you connect, like Claude or ChatGPT, can read this copy, including other people's contact details, and what they read is sent to that app's company. " +
+    // BACKLOG-4263 PR-6: founder Q4 (b), 2026-11-17, character for character. v1 kept as the number (no one accepted v1 in production).
+    "AI apps you connect, like Claude or ChatGPT, can read this copy and change your todos. That includes other people's contact details. What they read is sent to that app's company. " +
     "Turning Keepr Cloud off deletes the online copy and disconnects every AI app.",
 });
 
@@ -23,6 +24,8 @@ export const KEEPR_CLOUD_COPY = {
   cancel: "Cancel",
   // A new or reset computer when Keepr Cloud is already on (pending founder answer; default: ask).
   thisComputer: "Keepr Cloud is on for your account. Save this computer's deals too?",
+  // BACKLOG-4263 PR-6 (PR-4a review): after a re-link, the online values win.
+  thisComputerTodos: "If a todo was changed both here and online, the online version is kept.",
   saveThisComputer: "Save this computer's deals",
   notNow: "Not now",
   statusSaved: (ago: string) => `Saved online · last saved ${ago}`,
@@ -41,6 +44,9 @@ export const KEEPR_CLOUD_COPY = {
   turnOffConfirmTitle: "Turn off Keepr Cloud?",
   turnOffConfirm:
     "Your online copy is deleted from Keepr Cloud for all your computers, and connected AI apps are disconnected. Your deals on this computer are not changed.",
+  // BACKLOG-4263 PR-6 (plan §7, F6)
+  turnOffLost: "Changes made by AI apps or on other devices that are not on this computer yet are lost.",
+  turnOffArchive: "Deals you deleted in the last 30 days can no longer be restored.",
   turnOffConfirmButton: "Turn off and delete",
   turnOffDone: "Keepr Cloud is off. Your online copy was deleted and AI apps were disconnected.",
   turnOffOffline: "Turning off. Your online copy will be deleted when Keepr can reach the internet.",
@@ -60,4 +66,53 @@ export const KEEPR_CLOUD_COPY = {
   aiAppsDescription: "Connect Keepr to Claude or ChatGPT to ask about your deals. Connections are managed on the Keepr website.",
   manageAiApps: "Manage AI apps",
   actionFailed: "That did not work. Try again.",
+
+  // ---- BACKLOG-4263 PR-6
+  installRemoved:
+    "This computer's online copy was removed from another computer. Nothing from this computer is saved online until you save it again.",
+  reclaim: "Save this computer's deals again",
+  reclaimDone: "Saving this computer's deals again. If Keepr closes first, it finishes the next time Keepr opens.",
+  parkedLocked: (n: number) =>
+    n === 1
+      ? "1 todo change from other devices or AI apps is waiting because its deal is locked. It applies if the deal is unlocked."
+      : `${n} todo changes from other devices or AI apps are waiting because their deals are locked. They apply if the deals are unlocked.`,
+  parkedOther: (n: number) =>
+    `${n === 1 ? "1 todo change" : `${n} todo changes`} from other devices or AI apps could not be applied on this computer. Keepr tries again on its own.`,
+  onlineOnly: (n: number) =>
+    `Online only: ${n === 1 ? "1 deal" : `${n} deals`} you restored. AI apps can read them; they are not on this computer.`,
+  removedTitle: "Removed in the last 30 days",
+  removedRow: (address: string, when: string) => `${address} · deleted ${when}`,
+  removedOnlineRow: (address: string, when: string) => `${address} · removed online ${when}`,
+  noAddress: "Deal without an address",
+  restore: "Restore",
+  deleteForGood: "Delete for good",
+  deleting: "Deleting…",
+  deletingOffline: "Will finish deleting when Keepr is online.",
+  rejectedRow: (address: string) => `${address} is marked Rejected on this computer. Choose Restore to Active on the deal to save it online again.`,
+  removedFootnote:
+    "Deleted deals are kept for 30 days, counted by this computer's clock. A backup made before a deal was deleted for good can still bring it back.",
+  removedOnlineUnavailable: "Deals removed online show here when Keepr is online.",
+  deleteForGoodTitle: "Delete this deal for good?",
+  deleteForGoodConfirm:
+    "It is erased now from Keepr Cloud and from this computer, with its todos and their history. This cannot be undone. A copy saved online before this computer was set up again is not erased.",
+  restored: "Restored.",
+  restoredSkipped: (n: number) =>
+    `Restored. ${n === 1 ? "1 link" : `${n} links`} to emails or texts that no longer exist could not come back.`,
+  restoredOtherDeal: "Restored. There is another deal at this address.",
+  restoreRefused: {
+    not_found: "Already restored.",
+    not_owner: "This deal can't be restored from this account.",
+    purge_owed: "This deal is being deleted for good.",
+    deal_exists: "This deal is already back on this computer.",
+    cloud_off: "Turn on Keepr Cloud to restore deals.",
+    restore_failed: "This deal could not be restored on this computer. Try again.",
+    signed_out: "Sign in to restore this deal.",
+    archive_not_understood: "Update Keepr to restore this deal.",
+    offline: "Restoring this deal needs an internet connection.",
+    not_restorable: "This deal can no longer be restored.",
+  } as Readonly<Record<string, string>>,
+  deletedForGood: "Deleted for good.",
+  // Delete for good, not_found: the deal was restored or already deleted (SR review 2, required 6)
+  deleteNotListed: "This deal is no longer in this list.",
+  restoredElsewhere: "This deal was restored elsewhere; it was not deleted.",
 } as const;
