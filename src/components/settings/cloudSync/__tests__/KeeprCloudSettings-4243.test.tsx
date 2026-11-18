@@ -39,6 +39,7 @@ function fakeCloud(view: CloudSyncView | null): UseKeeprCloudSettings {
     openAiApps: jest.fn().mockResolvedValue(true),
     deleteOnlineNotHere: jest.fn().mockResolvedValue(true),
     deleteOldInstalls: jest.fn().mockResolvedValue(true),
+    reclaimInstall: jest.fn().mockResolvedValue(true),
   };
 }
 
@@ -69,11 +70,11 @@ describe("KeeprCloudSettings", () => {
     await waitFor(() => expect(cloud.turnOn).toHaveBeenCalledWith(1));
   });
 
-  it("notice v1 is the approved wording, sentence for sentence (BACKLOG-4245)", () => {
+  it("notice v1 is the approved wording, sentence for sentence (BACKLOG-4245; BACKLOG-4263 Q4 (b) for the AI-app sentences)", () => {
     expect(NOTICE_TEXTS[1]).toBe(
       "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists (including private ones), todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
         "Your emails, texts, files and contact list are not uploaded. " +
-        "AI apps you connect, like Claude or ChatGPT, can read this copy, including other people's contact details, and what they read is sent to that app's company. " +
+        "AI apps you connect, like Claude or ChatGPT, can read this copy and change your todos. That includes other people's contact details. What they read is sent to that app's company. " +
         "Turning Keepr Cloud off deletes the online copy and disconnects every AI app.",
     );
   });
