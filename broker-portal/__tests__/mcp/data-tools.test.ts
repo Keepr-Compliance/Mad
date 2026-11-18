@@ -21,12 +21,12 @@ jest.mock('@supabase/supabase-js', () => ({
 
 import * as route from '@/app/api/mcp/route';
 import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
-
-// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
-beforeEach(() => resetMcpRateLimitsForTests());
 import { isMcpPath } from '@/lib/mcp/sentryScrub';
 import { MAX_RESULT_CHARS } from '@/lib/mcp/tools/result';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, postgrestFetchError, refusal } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 /** an invented id for fixture number n (all zero but the item number and the counter) */
 const fid = (n: number) => ['00000000', '0000', '4244', '8000', String(n).padStart(12, '0')].join('-');

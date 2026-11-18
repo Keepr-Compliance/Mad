@@ -20,15 +20,15 @@ jest.mock('@supabase/supabase-js', () => ({
 
 import * as route from '@/app/api/mcp/route';
 import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
-
-// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
-beforeEach(() => resetMcpRateLimitsForTests());
 import { isMcpPath } from '@/lib/mcp/sentryScrub';
 import { MAX_RESULT_CHARS } from '@/lib/mcp/tools/result';
 import { ALL_DEALS_COLUMNS } from '@/lib/mcp/tools/shapes';
 import { listAllDealsFor } from '@/lib/mcp/oauth/rpc';
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, refusal } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const fid = (n: number) => ['00000000', '0000', '4263', '8000', String(n).padStart(12, '0')].join('-');
 const FIXTURE_TEXT = readFileSync(path.join(__dirname, 'fixtures/data-tools-4263.json'), 'utf8').replace(/<id:(\d+)>/g, (_m, n) => fid(Number(n)));

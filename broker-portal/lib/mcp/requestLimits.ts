@@ -7,7 +7,7 @@
  */
 
 import { isJsonContentType, readRequestBody } from '@modelcontextprotocol/server';
-import { MCP_BATCH_LIMIT } from '@/lib/mcp/rateLimit';
+import { MCP_BATCH_LIMIT, type McpSlot } from '@/lib/mcp/rateLimit';
 import { TOOL_MESSAGES } from '@/lib/mcp/tools/text';
 
 /** The SDK's body limit for this endpoint (lib/mcp/server.ts `maxRequestBodySize`). */
@@ -95,14 +95,24 @@ export function mcpRateLimited(ids: ReadonlyArray<string | number | null>, batch
 }
 
 /**
- * The response with `release` called once when its body ends: read to the end, cancelled, or failed. A response
- * with no body releases at once. The body is pumped as it arrives, so the release does not wait for a reader.
+ * The response with its in-flight slot ended when the work ends. The body is pumped as it arrives, so this does
+ * not wait for a reader.
+ * - The body ends normally (every answer written): the slot is released.
+ * - The client aborts, the body is cancelled, or the body fails: the work may still run, so the slot is
+ *   abandoned (it ends MCP_SLOT_ABANDON_MS after it started).
+ * - A response with no body: released at once.
  */
-export function releaseWhenDone(res: Response, release: () => void): Response {
+export function endSlotWithResponse(res: Response, slot: McpSlot, signal: AbortSignal | null): Response {
   if (res.body === null) {
-    release();
+    slot.release();
     return res;
   }
+  let cut = false;
+  const abandon = () => {
+    cut = true;
+    slot.abandon();
+  };
+  signal?.addEventListener('abort', abandon, { once: true });
   const reader = res.body.getReader();
   const pump = async (controller: ReadableStreamDefaultController<Uint8Array>) => {
     try {
@@ -111,10 +121,11 @@ export function releaseWhenDone(res: Response, release: () => void): Response {
         if (done) break;
         controller.enqueue(value);
       }
-      release();
+      if (cut || signal?.aborted) slot.abandon();
+      else slot.release();
       controller.close();
     } catch (err) {
-      release();
+      abandon();
       try {
         controller.error(err);
       } catch {
@@ -127,7 +138,7 @@ export function releaseWhenDone(res: Response, release: () => void): Response {
       void pump(controller);
     },
     cancel(reason) {
-      release();
+      abandon();
       return reader.cancel(reason).catch(() => {});
     },
   });

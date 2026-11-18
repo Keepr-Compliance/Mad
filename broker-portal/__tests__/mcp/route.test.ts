@@ -30,9 +30,6 @@ jest.mock('@supabase/supabase-js', () => ({
 
 import * as route from '@/app/api/mcp/route';
 import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
-
-// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
-beforeEach(() => resetMcpRateLimitsForTests());
 import * as prm from '@/app/api/mcp/resource-metadata/route';
 import * as serverModule from '@/lib/mcp/server';
 import {
@@ -44,6 +41,9 @@ import {
   postgrestTimeoutError,
   refusal,
 } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const metadataGET = prm.GET;
 

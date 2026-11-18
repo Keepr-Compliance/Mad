@@ -20,15 +20,15 @@ jest.mock('@supabase/supabase-js', () => ({
 
 import * as route from '@/app/api/mcp/route';
 import { resetMcpRateLimitsForTests } from '@/lib/mcp/rateLimit';
-
-// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
-beforeEach(() => resetMcpRateLimitsForTests());
 import * as serverModule from '@/lib/mcp/server';
 import { cleanAddress } from '@/lib/mcp/prompts';
 import { WRITE_TOOLS } from '@/lib/mcp/tools/todos';
 import { CHECKLISTS_SHAPE, GET_DEAL_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
 import { PROMPT_MESSAGES, PROMPT_TEXT, SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_WRITE } from '@/lib/mcp/tools/text';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, refusal } from './oauth/fixtures';
+
+// BACKLOG-4263 PR-10: the request limits count per module instance; each test starts from zero.
+beforeEach(() => resetMcpRateLimitsForTests());
 
 const BASE = 'https://portal.test';
 const MCP_URL = `${BASE}/api/mcp`;

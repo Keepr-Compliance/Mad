@@ -8,10 +8,22 @@
  * - a fixed window: at most MCP_WINDOW_LIMIT JSON-RPC requests per MCP_WINDOW_MS;
  * - at most MCP_INFLIGHT_LIMIT JSON-RPC requests in flight at once.
  *
- * The key map holds at most MCP_MAX_KEYS keys. When it is full, the oldest key is deleted, so a new key is always
- * admitted and the deleted key starts again from zero. No timer: an entry whose window has ended is renewed when it
- * is read, and each call deletes up to MCP_SWEEP_PER_CALL ended, idle entries from the old end of the map.
+ * Two steps per POST:
+ * - checkMcpRequest, before the access check: refuses when the key already has an entry over a limit. It never
+ *   creates an entry.
+ * - admitMcpRequest, after the access check accepted the token: creates the entry if needed, checks again and
+ *   counts the POST.
+ *
+ * The map holds at most MCP_MAX_KEYS entries. An entry with an unfinished window or a slot in flight is never
+ * deleted to make room. When the map is full, ended idle entries are deleted first; if none exists, the new key is
+ * served without an entry for that POST.
+ *
+ * An in-flight slot ends when its slot is released (the work finished), at MCP_SLOT_ABANDON_MS after it started
+ * when it was abandoned (client abort, cancelled or failed stream), and at MCP_SLOT_MAX_MS after it started in any
+ * case. No timer: everything is evaluated against the clock when an entry is read.
  */
+
+import { RPC_TIMEOUT_MS } from '@/lib/mcp/oauth/rpc';
 
 export const MCP_WINDOW_MS = 60_000;
 export const MCP_WINDOW_LIMIT = 60;
@@ -20,74 +32,115 @@ export const MCP_INFLIGHT_LIMIT = 4;
 export const MCP_BATCH_LIMIT = 4;
 export const MCP_MAX_KEYS = 20_000;
 export const MCP_SWEEP_PER_CALL = 100;
+/** The route's maxDuration (app/api/mcp/route.ts), in ms. */
+export const MCP_SLOT_MAX_MS = 60_000;
+/** Each database call of a tool is cut off by the portal after RPC_TIMEOUT_MS (lib/mcp/oauth/rpc.ts). */
+export const MCP_SLOT_ABANDON_MS = RPC_TIMEOUT_MS + 1_000;
+
+interface Slot {
+  n: number;
+  startedAt: number;
+  endsAt: number;
+}
 
 interface Entry {
   count: number;
   windowStart: number;
-  inFlight: number;
+  slots: Set<Slot>;
 }
 
-export type Admission =
-  | { ok: true; release: () => void }
-  | { ok: false; reason: 'window' | 'inflight' };
+export type Refusal = 'window' | 'inflight';
+
+export interface McpSlot {
+  /** The work finished: the slot ends now. */
+  release(): void;
+  /** The work may still run: the slot ends MCP_SLOT_ABANDON_MS after it started. */
+  abandon(): void;
+}
+
+export type Admission = { ok: true; slot: McpSlot } | { ok: false; reason: Refusal };
+
+const NO_SLOT: McpSlot = { release: () => {}, abandon: () => {} };
 
 let entries = new Map<string, Entry>();
 let clock: () => number = Date.now;
 
-const ended = (e: Entry, t: number) => t - e.windowStart >= MCP_WINDOW_MS;
+function inFlight(e: Entry, t: number): number {
+  let n = 0;
+  for (const s of e.slots) {
+    if (s.endsAt <= t) e.slots.delete(s);
+    else n += s.n;
+  }
+  return n;
+}
 
-function sweep(t: number): void {
+const windowEnded = (e: Entry, t: number) => t - e.windowStart >= MCP_WINDOW_MS;
+const idle = (e: Entry, t: number) => windowEnded(e, t) && inFlight(e, t) === 0;
+
+function renew(key: string, e: Entry, t: number): void {
+  if (!windowEnded(e, t)) return;
+  // A new window: the key moves to the new end of the map, so the old end holds the oldest windows.
+  entries.delete(key);
+  e.count = 0;
+  e.windowStart = t;
+  entries.set(key, e);
+}
+
+function sweep(t: number, limit: number): void {
   let seen = 0;
   for (const [key, e] of entries) {
-    if (seen++ >= MCP_SWEEP_PER_CALL) break;
-    if (e.inFlight === 0 && ended(e, t)) entries.delete(key);
+    if (seen++ >= limit) break;
+    if (idle(e, t)) entries.delete(key);
   }
 }
 
-function entryFor(key: string, t: number): Entry {
+function refusal(e: Entry, t: number, windowCost: number, inFlightCost: number): Refusal | null {
+  if (e.count + windowCost > MCP_WINDOW_LIMIT) return 'window';
+  if (inFlight(e, t) + inFlightCost > MCP_INFLIGHT_LIMIT) return 'inflight';
+  return null;
+}
+
+/** Before the access check: a refusal when `key` already has an entry over a limit, else null. Creates nothing. */
+export function checkMcpRequest(key: string, windowCost: number, inFlightCost: number): Refusal | null {
+  const t = clock();
   const e = entries.get(key);
-  if (e) {
-    if (ended(e, t)) {
-      // A new window: move the key to the new end of the map, so the old end holds the oldest windows.
-      // The same object is kept, so a release taken in the old window still finds it.
-      entries.delete(key);
-      e.count = 0;
-      e.windowStart = t;
-      entries.set(key, e);
-    }
-    return e;
-  }
-  if (entries.size >= MCP_MAX_KEYS) {
-    const oldest = entries.keys().next();
-    if (!oldest.done) entries.delete(oldest.value);
-  }
-  const created = { count: 0, windowStart: t, inFlight: 0 };
-  entries.set(key, created);
-  return created;
+  if (!e) return null;
+  renew(key, e, t);
+  return refusal(e, t, windowCost, inFlightCost);
 }
 
 /**
- * Admit one POST for `key`: `windowCost` counts toward the window, `inFlightCost` toward the in-flight cap.
- * All or nothing: a refused POST changes no counter. The returned release gives the in-flight slots back once;
- * it does nothing after the key was deleted or the limiter was reset.
+ * After the access check accepted the token: count one POST for `key`. `windowCost` counts toward the window,
+ * `inFlightCost` toward the in-flight cap. All or nothing: a refused POST changes no counter.
  */
 export function admitMcpRequest(key: string, windowCost: number, inFlightCost: number): Admission {
   const t = clock();
-  sweep(t);
-  const e = entryFor(key, t);
-  if (e.count + windowCost > MCP_WINDOW_LIMIT) return { ok: false, reason: 'window' };
-  if (e.inFlight + inFlightCost > MCP_INFLIGHT_LIMIT) return { ok: false, reason: 'inflight' };
+  sweep(t, MCP_SWEEP_PER_CALL);
+  let e = entries.get(key);
+  if (e) {
+    renew(key, e, t);
+  } else {
+    if (entries.size >= MCP_MAX_KEYS) sweep(t, Infinity);
+    if (entries.size >= MCP_MAX_KEYS) return { ok: true, slot: NO_SLOT };
+    e = { count: 0, windowStart: t, slots: new Set() };
+    entries.set(key, e);
+  }
+  const reason = refusal(e, t, windowCost, inFlightCost);
+  if (reason) return { ok: false, reason };
   e.count += windowCost;
-  e.inFlight += inFlightCost;
-  let released = inFlightCost === 0;
+  if (inFlightCost === 0) return { ok: true, slot: NO_SLOT };
+  const slot: Slot = { n: inFlightCost, startedAt: t, endsAt: t + MCP_SLOT_MAX_MS };
+  e.slots.add(slot);
+  const held = e;
   return {
     ok: true,
-    release: () => {
-      if (released) return;
-      released = true;
-      // A deleted (evicted or reset) key's entry is gone: its release changes nothing.
-      if (entries.get(key) !== e) return;
-      e.inFlight = Math.max(0, e.inFlight - inFlightCost);
+    slot: {
+      release: () => {
+        held.slots.delete(slot);
+      },
+      abandon: () => {
+        slot.endsAt = Math.min(slot.endsAt, slot.startedAt + MCP_SLOT_ABANDON_MS);
+      },
     },
   };
 }
@@ -106,4 +159,10 @@ export function setMcpRateLimitClockForTests(now: () => number): void {
 /** The keys held (tests). */
 export function mcpRateLimitKeysForTests(): string[] {
   return [...entries.keys()];
+}
+
+/** The window count and the in-flight number of a key, or null when it has no entry (tests). */
+export function mcpRateLimitStateForTests(key: string): { count: number; inFlight: number } | null {
+  const e = entries.get(key);
+  return e ? { count: e.count, inFlight: inFlight(e, clock()) } : null;
 }
