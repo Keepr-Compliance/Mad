@@ -12,8 +12,8 @@
  * is read once here (over 256 KiB → the SDK's 413), more than 4 JSON-RPC
  * requests in one POST → 400, then the per-token request limits of
  * lib/mcp/rateLimit.ts (60 JSON-RPC requests per 60 s, 4 in flight): a token
- * with counters over a limit is refused before mcp_check_access; counters are
- * created only for a token mcp_check_access accepted. The counters are in
+ * that has counters is counted, or refused, before mcp_check_access; counters
+ * are created only for a token mcp_check_access accepted. The counters are in
  * memory and count per server instance: they bound one instance's load from
  * one connection, not a caller spread over many instances.
  *
@@ -35,7 +35,7 @@ import { dbCode, errorNameTag, logOutcome, type Outcome } from '@/lib/mcp/oauth/
 import { checkAccess, writeAccess } from '@/lib/mcp/oauth/rpc';
 import { isCredential } from '@/lib/mcp/oauth/validate';
 import { isOriginAllowed } from '@/lib/mcp/origin';
-import { admitMcpRequest, checkMcpRequest, MCP_BATCH_LIMIT, type Refusal } from '@/lib/mcp/rateLimit';
+import { admitKnownMcpRequest, admitMcpRequest, MCP_BATCH_LIMIT, type Refusal } from '@/lib/mcp/rateLimit';
 import {
   mcpBatchTooLarge,
   mcpBodyTooLarge,
@@ -93,18 +93,22 @@ export async function POST(req: Request): Promise<Response> {
     const answer = body.kind === 'parsed' ? mcpRateLimited(body.ids, body.batch) : mcpRateLimited([null], false);
     return done(answer, reason === 'window' ? 'rate_limited' : 'rate_limited_inflight');
   };
-  // A token that already has counters is checked before the database; counters are created only after it.
-  const early = checkMcpRequest(atDigest, windowCost, requests);
-  if (early) return refuse(early);
+  // A token that already has counters is counted (or refused) before the database; counters are created only for
+  // a token mcp_check_access accepted.
+  let admission = admitKnownMcpRequest(atDigest, windowCost, requests);
+  if (admission && !admission.ok) return refuse(admission.reason);
 
   const access = await checkAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
+  if (access.kind !== 'ok' && admission?.ok) admission.slot.release();
   if (access.kind === 'not_connected') {
     return done(mcpUnauthorized(resourceMetadataUrl(req), 'invalid_token'), 'not_connected');
   }
   if (access.kind !== 'ok') return done(mcpUnavailable(), 'unavailable', { error: dbCode(access.code) });
 
-  const admission = admitMcpRequest(atDigest, windowCost, requests);
-  if (!admission.ok) return refuse(admission.reason);
+  if (!admission) {
+    admission = admitMcpRequest(atDigest, windowCost, requests);
+    if (!admission.ok) return refuse(admission.reason);
+  }
   const { slot } = admission;
 
   // BACKLOG-4263 PR-5: whether this token's connection can change todos (granted mcp:todos AND the database's write

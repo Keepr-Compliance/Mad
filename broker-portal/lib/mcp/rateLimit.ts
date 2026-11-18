@@ -8,19 +8,17 @@
  * - a fixed window: at most MCP_WINDOW_LIMIT JSON-RPC requests per MCP_WINDOW_MS;
  * - at most MCP_INFLIGHT_LIMIT JSON-RPC requests in flight at once.
  *
- * Two steps per POST:
- * - checkMcpRequest, before the access check: refuses when the key already has an entry over a limit. It never
- *   creates an entry.
- * - admitMcpRequest, after the access check accepted the token: creates the entry if needed, checks again and
- *   counts the POST.
+ * Per POST:
+ * - admitKnownMcpRequest, before the access check: when the key already has an entry, counts the POST and takes
+ *   its slot there (or refuses it). It never creates an entry.
+ * - admitMcpRequest, after the access check accepted a token with no entry: creates the entry and counts the POST.
  *
  * The map holds at most MCP_MAX_KEYS entries. An entry with an unfinished window or a slot in flight is never
  * deleted to make room. When the map is full, ended idle entries are deleted first; if none exists, the new key is
  * served without an entry for that POST.
  *
- * An in-flight slot ends when its slot is released (the work finished), at MCP_SLOT_ABANDON_MS after it started
- * when it was abandoned (client abort, cancelled or failed stream), and at MCP_SLOT_MAX_MS after it started in any
- * case. No timer: everything is evaluated against the clock when an entry is read.
+ * An in-flight slot ends when it is released (the work finished), MCP_SLOT_ABANDON_MS after it was abandoned
+ * (client abort, cancelled or failed stream), and MCP_SLOT_MAX_MS after it started in any case. No timer: everything is evaluated against the clock when an entry is read.
  */
 
 import { RPC_TIMEOUT_MS } from '@/lib/mcp/oauth/rpc';
@@ -34,12 +32,11 @@ export const MCP_MAX_KEYS = 20_000;
 export const MCP_SWEEP_PER_CALL = 100;
 /** The route's maxDuration (app/api/mcp/route.ts), in ms. */
 export const MCP_SLOT_MAX_MS = 60_000;
-/** Each database call of a tool is cut off by the portal after RPC_TIMEOUT_MS (lib/mcp/oauth/rpc.ts). */
+/** A tool makes one database call, which the portal cuts off after RPC_TIMEOUT_MS (lib/mcp/oauth/rpc.ts). */
 export const MCP_SLOT_ABANDON_MS = RPC_TIMEOUT_MS + 1_000;
 
 interface Slot {
   n: number;
-  startedAt: number;
   endsAt: number;
 }
 
@@ -54,7 +51,7 @@ export type Refusal = 'window' | 'inflight';
 export interface McpSlot {
   /** The work finished: the slot ends now. */
   release(): void;
-  /** The work may still run: the slot ends MCP_SLOT_ABANDON_MS after it started. */
+  /** The work may still run: the slot ends MCP_SLOT_ABANDON_MS from now, or earlier at MCP_SLOT_MAX_MS. */
   abandon(): void;
 }
 
@@ -100,17 +97,17 @@ function refusal(e: Entry, t: number, windowCost: number, inFlightCost: number):
   return null;
 }
 
-/** Before the access check: a refusal when `key` already has an entry over a limit, else null. Creates nothing. */
-export function checkMcpRequest(key: string, windowCost: number, inFlightCost: number): Refusal | null {
-  const t = clock();
-  const e = entries.get(key);
-  if (!e) return null;
-  renew(key, e, t);
-  return refusal(e, t, windowCost, inFlightCost);
+/**
+ * Before the access check: null when `key` has no entry (nothing is created). Otherwise counts the POST and takes
+ * its slot, or refuses it, as admitMcpRequest does.
+ */
+export function admitKnownMcpRequest(key: string, windowCost: number, inFlightCost: number): Admission | null {
+  if (!entries.has(key)) return null;
+  return admitMcpRequest(key, windowCost, inFlightCost);
 }
 
 /**
- * After the access check accepted the token: count one POST for `key`. `windowCost` counts toward the window,
+ * Count one POST for `key`, creating its entry when needed: call it only for a token the access check accepted. `windowCost` counts toward the window,
  * `inFlightCost` toward the in-flight cap. All or nothing: a refused POST changes no counter.
  */
 export function admitMcpRequest(key: string, windowCost: number, inFlightCost: number): Admission {
@@ -129,7 +126,7 @@ export function admitMcpRequest(key: string, windowCost: number, inFlightCost: n
   if (reason) return { ok: false, reason };
   e.count += windowCost;
   if (inFlightCost === 0) return { ok: true, slot: NO_SLOT };
-  const slot: Slot = { n: inFlightCost, startedAt: t, endsAt: t + MCP_SLOT_MAX_MS };
+  const slot: Slot = { n: inFlightCost, endsAt: t + MCP_SLOT_MAX_MS };
   e.slots.add(slot);
   const held = e;
   return {
@@ -139,7 +136,7 @@ export function admitMcpRequest(key: string, windowCost: number, inFlightCost: n
         held.slots.delete(slot);
       },
       abandon: () => {
-        slot.endsAt = Math.min(slot.endsAt, slot.startedAt + MCP_SLOT_ABANDON_MS);
+        slot.endsAt = Math.min(slot.endsAt, clock() + MCP_SLOT_ABANDON_MS);
       },
     },
   };

@@ -62,6 +62,9 @@ const limited = (id: string | number | null) => ({ jsonrpc: '2.0', id, error: { 
 /** Tool RPCs answered later by the test: each call pushes its resolver. */
 let deferred: Array<() => void> = [];
 let deferTools = false;
+/** Access checks answered later by the test. */
+let deferredAccess: Array<() => void> = [];
+let deferAccess = false;
 
 function dbAnswer(fn: string, args: Record<string, unknown>) {
   const known = args.p_secret === PORTAL_SECRET && KNOWN.includes(args.p_at_digest as string) && args.p_resource === RESOURCE;
@@ -91,9 +94,12 @@ beforeEach(() => {
   setMcpRateLimitClockForTests(() => now);
   deferred = [];
   deferTools = false;
+  deferredAccess = [];
+  deferAccess = false;
   mockRpc.mockReset();
   mockRpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
     const answer = dbAnswer(fn, args);
+    if (deferAccess && fn === 'mcp_check_access') await new Promise<void>((resolve) => deferredAccess.push(resolve));
     if (deferTools && fn !== 'mcp_check_access' && fn !== 'mcp_write_access') {
       await new Promise<void>((resolve) => deferred.push(resolve));
     }
@@ -262,11 +268,13 @@ describe('L2: a legitimate session is served', () => {
 
   it('one deal and its checklists, as two POSTs in parallel and as one POST with two requests, are served', async () => {
     const client = await connect();
+    posts = 0;
     const both = await Promise.all([
       client.callTool({ name: 'get_deal', arguments: { deal_id: D1 } }),
       client.callTool({ name: 'get_deal_checklists', arguments: { deal_id: D1 } }),
     ]);
     for (const r of both) expect(r.isError).toBeFalsy();
+    expect(posts).toBe(2); // the reference client sends each call as its own POST
     await client.close();
     const batch = await rawPost(JSON.stringify([call(1), call(2, 'get_deal_checklists')]));
     await expectServed(batch, [1, 2]);
@@ -380,7 +388,8 @@ describe('L4: at most 4 JSON-RPC requests in flight per token', () => {
     await expectServed(await post1(10), [10]);
   });
 
-  it('slots are released when the access check fails (503) or the token is not connected (401)', async () => {
+  it('a token with counters: slots are released when the access check fails (503) or the token is not connected (401)', async () => {
+    await useWindow(1);
     mockRpc.mockResolvedValueOnce(postgrestFetchError('x'));
     mockRpc.mockResolvedValueOnce(postgrestFetchError('x'));
     mockRpc.mockResolvedValueOnce(postgrestFetchError('x'));
@@ -393,7 +402,46 @@ describe('L4: at most 4 JSON-RPC requests in flight per token', () => {
     mockRpc.mockResolvedValueOnce({ data: refusal('not_connected'), error: null });
     mockRpc.mockResolvedValueOnce({ data: refusal('not_connected'), error: null });
     for (let i = 0; i < 5; i++) expect((await post1(i)).status).toBe(401);
+    expect(mcpRateLimitStateForTests(KNOWN[0])).toEqual({ count: 11, inFlight: 0 });
     await expectServed(await post1(10), [10]);
+  });
+
+  it('a token with counters: 10 POSTs sent together make at most 4 access checks; the other 6 are refused at once', async () => {
+    await useWindow(1);
+    const before = accessChecks();
+    deferAccess = true;
+    const all = Array.from({ length: 10 }, (_v, i) => post1(`c${i}`));
+    await until(() => deferredAccess.length === 4);
+    for (let i = 0; i < 5; i++) await tick();
+    expect(accessChecks() - before).toBe(4);
+    const settled: Response[] = [];
+    for (const [i, p] of all.entries()) {
+      const r = await Promise.race([p, new Promise<null>((res) => setImmediate(() => res(null)))]);
+      if (r) settled.push(r);
+      else expect(i).toBeLessThan(10);
+    }
+    expect(settled).toHaveLength(6);
+    for (const r of settled) expect((await messages(r))[0].error).toEqual({ code: -32000, message: LIMIT_TEXT });
+    for (const r of deferredAccess) r();
+    const served = await Promise.all(all);
+    expect(served.filter((r) => (r.headers.get('content-type') ?? '').startsWith('text/event-stream'))).toHaveLength(4);
+  });
+
+  it('an abandoned slot ends MCP_SLOT_ABANDON_MS after the abort, not after it started', async () => {
+    const controllers = Array.from({ length: 4 }, () => new AbortController());
+    const pending = await startPending(4, 1, (k) => ({ signal: controllers[k].signal }));
+    now += 5_000;
+    for (const c of controllers) c.abort();
+    await Promise.allSettled(pending);
+    for (let i = 0; i < 5; i++) await tick();
+    for (const r of deferred) r();
+    now += MCP_SLOT_ABANDON_MS - 5_000;
+    await expectLimited(await post1(5), limited(5));
+    now += 5_000 - 1;
+    await expectLimited(await post1(6), limited(6));
+    now += 1;
+    deferTools = false;
+    await expectServed(await post1(7), [7]);
   });
 
   it('the in-flight refusal is logged with outcome rate_limited_inflight', async () => {
