@@ -64,7 +64,7 @@ arr = lambda xs: ', '.join("'" + x.replace("'", "''") + "'" for x in xs)
 EDGES = [298, 299, 300, 301, 302, 303, 338, 339, 340, 341, 342, 343]
 TAGS = ['kq' + chr(97 + L % 26) + chr(97 + L // 26 % 26) for L in EDGES]
 assert len(set(TAGS)) == len(TAGS)
-TERMS = ['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'Invented Rd', 'unit',
+TERMS = ['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'invented rd', 'unit',
          'lot [', 'number hidden by keepr', 'hidden', '[number', 'by keepr] invented', 'zerowidth', 'zero', 'width lane', '50%', '0%', 'a_b',
          'axb', '_b', 'h\\s', '\\s', 'mixed case', 'MIXED CASE', 'fixture', 'xb', '%%', '__', 'midmarker', 'tailmarker', 'end end', 'y…',
          'yyy kq', 'edge'] + TAGS

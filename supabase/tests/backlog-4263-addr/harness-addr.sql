@@ -343,7 +343,7 @@ END $h$;
 CREATE FUNCTION pg_temp.c_shown() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE t text; got uuid[]; want uuid[]; out text[] := '{}'; l jsonb := pg_temp.listing(); hits int := 0;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'Invented Rd', 'unit', 'lot [', 'number hidden by keepr', 'hidden', '[number', 'by keepr] invented', 'zerowidth', 'zero', 'width lane', '50%', '0%', 'a_b', 'axb', '_b', 'h\s', '\s', 'mixed case', 'MIXED CASE', 'fixture', 'xb', '%%', '__', 'midmarker', 'tailmarker', 'end end', 'y…', 'yyy kq', 'edge', 'kqml', 'kqnl', 'kqol', 'kqpl', 'kqql', 'kqrl', 'kqan', 'kqbn', 'kqcn', 'kqdn', 'kqen', 'kqfn'] LOOP
+  FOREACH t IN ARRAY ARRAY['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'invented rd', 'unit', 'lot [', 'number hidden by keepr', 'hidden', '[number', 'by keepr] invented', 'zerowidth', 'zero', 'width lane', '50%', '0%', 'a_b', 'axb', '_b', 'h\s', '\s', 'mixed case', 'MIXED CASE', 'fixture', 'xb', '%%', '__', 'midmarker', 'tailmarker', 'end end', 'y…', 'yyy kq', 'edge', 'kqml', 'kqnl', 'kqol', 'kqpl', 'kqql', 'kqrl', 'kqan', 'kqbn', 'kqcn', 'kqdn', 'kqen', 'kqfn'] LOOP
     got := pg_temp.sids(pg_temp.ld(t));
     want := pg_temp.shown(l, t);
     hits := hits + cardinality(want);
@@ -594,7 +594,7 @@ END $h$;
 CREATE FUNCTION pg_temp.diff_a() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE A uuid := pg_temp.id('A'); t text; o jsonb; n jsonb; out jsonb := '{}'; same int := 0;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'Invented Rd', 'unit', 'lot [', 'number hidden by keepr', 'hidden', '[number', 'by keepr] invented', 'zerowidth', 'zero', 'width lane', '50%', '0%', 'a_b', 'axb', '_b', 'h\s', '\s', 'mixed case', 'MIXED CASE', 'fixture', 'xb', '%%', '__', 'midmarker', 'tailmarker', 'end end', 'y…', 'yyy kq', 'edge', 'kqml', 'kqnl', 'kqol', 'kqpl', 'kqql', 'kqrl', 'kqan', 'kqbn', 'kqcn', 'kqdn', 'kqen', 'kqfn'] LOOP
+  FOREACH t IN ARRAY ARRAY['4111', '1111 1111', '4111-1111-1', '4111-1112', '987-65', '65-4321', '987-65-4', '41', '11', 'lot 4', 'invented rd', 'unit', 'lot [', 'number hidden by keepr', 'hidden', '[number', 'by keepr] invented', 'zerowidth', 'zero', 'width lane', '50%', '0%', 'a_b', 'axb', '_b', 'h\s', '\s', 'mixed case', 'MIXED CASE', 'fixture', 'xb', '%%', '__', 'midmarker', 'tailmarker', 'end end', 'y…', 'yyy kq', 'edge', 'kqml', 'kqnl', 'kqol', 'kqpl', 'kqql', 'kqrl', 'kqan', 'kqbn', 'kqcn', 'kqdn', 'kqen', 'kqfn'] LOOP
     o := pg_temp.rd('_mcp_r_list_deals_x4263old', A, NULL, t, 50, NULL, NULL)::jsonb;
     n := pg_temp.rd('_mcp_r_list_deals', A, NULL, t, 50, NULL, NULL)::jsonb;
     IF o IS DISTINCT FROM n THEN
