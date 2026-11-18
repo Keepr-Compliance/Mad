@@ -70,6 +70,8 @@ import {
   GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
   GET_PRIVATE_ITEM_IDS_SQL,
+  ITEM_OWNER_CLOUD_ON_SQL,
+  SET_CHECKLIST_ITEM_DUE_DATE_SQL,
   GET_TRANSACTION_AUDIT_DATES_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
@@ -454,6 +456,17 @@ export function setChecklistItemChecked(itemId: string, checked: boolean): Promi
 }
 
 /** Set or clear one item's note. Resolves true when a row was updated. */
+/** BACKLOG-4263 PR-6 (Q2): the item's owner has Keepr Cloud on here (the due date is shown and set only then). */
+export function checklistItemOwnerHasCloudOn(itemId: string): boolean {
+  return !!dbGet<{ on_: number }>(ITEM_OWNER_CLOUD_ON_SQL, [itemId]);
+}
+
+/** BACKLOG-4263 PR-6: sets or clears an item's due date. Resolves true when the row changed. */
+export function setChecklistItemDueDate(itemId: string, dueDate: string | null): Promise<boolean> {
+  const result = dbRun(SET_CHECKLIST_ITEM_DUE_DATE_SQL, [dueDate, itemId, dueDate]);
+  return Promise.resolve(result.changes > 0);
+}
+
 export function setChecklistItemNote(itemId: string, note: string | null): Promise<boolean> {
   const result = dbRun(SET_CHECKLIST_ITEM_NOTE_SQL, [note, itemId]);
   return Promise.resolve(result.changes > 0);

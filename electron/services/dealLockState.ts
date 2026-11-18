@@ -53,6 +53,8 @@ export type DealLockedEdit =
   | "take-off-checklist"
   | "tick-checklist-item"
   | "edit-checklist-note"
+  // BACKLOG-4263 PR-6: a todo's due date (Keepr Cloud users).
+  | "edit-checklist-due-date"
   | "link-checklist-item"
   | "unlink-checklist-item"
   | "include-outside-dates"

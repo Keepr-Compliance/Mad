@@ -29,6 +29,9 @@ export interface Engine {
   clock: { now: Date };
   /** BACKLOG-4263 PR-4c: every restore audit entry recorded (inside the restore's transaction); `fail` makes it throw. */
   audits: Array<{ userId: string; transactionId: string; archivedAt: string; via: string }> & { fail?: boolean };
+  /** BACKLOG-4263 PR-6: the client the service uses, and how many times a pass reported todos changed here. */
+  client: CloudClient;
+  todosChanged: { count: number };
 }
 
 export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: string | null; server?: FakeServer } = {}): Engine {
@@ -55,10 +58,16 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
   const blocked = { reason: null as string | null };
   const clock = { now: new Date("2026-11-14T12:00:00.000Z") };
   const audits: Engine["audits"] = [];
+  const client = new CloudClient(server.transport, 5_000);
+  const todosChanged = { count: 0 };
   const service = new CloudSyncService({
     db: () => db,
     dbReady: () => true,
-    client: new CloudClient(server.transport, 5_000),
+    client,
+    onTodosChanged: () => {
+      todosChanged.count++;
+    },
+    turnOffPullMs: 2_000,
     identity,
     getAuthUserId: () => {
       authUser.reads++;
@@ -110,6 +119,8 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     blocked,
     clock,
     audits,
+    client,
+    todosChanged,
   };
 }
 

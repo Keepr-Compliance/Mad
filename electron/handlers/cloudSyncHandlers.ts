@@ -16,6 +16,8 @@ import path from "path";
 import * as Sentry from "@sentry/electron/main";
 import { CloudClient, type RpcTransport } from "../services/cloudSync/cloudClient";
 import { CloudSyncService } from "../services/cloudSync/cloudSyncService";
+import { CloudTodoScreens } from "../services/cloudSync/todoScreens";
+import { sendToMainWindow } from "../windowRegistry";
 import { devGuardReason, DEV_OVERRIDE_ENV, projectRefFromUrl } from "../services/cloudSync/environment";
 import { SessionIdentity } from "../services/cloudSync/session";
 import type { SqlDb } from "../services/db/cloudSyncSqlDb";
@@ -48,12 +50,63 @@ export const CLOUD_SYNC_CHANNELS = [
   "cloud-sync:list-removed-deals",
   "cloud-sync:restore-deal",
   "cloud-sync:delete-deal-for-good",
+  "cloud-sync:local-state",
+  "cloud-sync:list-removed-online",
+  "cloud-sync:restore-online-deal",
 ] as const;
+
+/** BACKLOG-4263 PR-6: the todo screens (window.api.cloudTodos). */
+export const CLOUD_TODOS_CHANNELS = [
+  "cloud-todos:get-for-deal",
+  "cloud-todos:dismiss-notice",
+  "cloud-todos:history",
+  "cloud-todos:list-removed",
+  "cloud-todos:restore",
+] as const;
+
+/** An id a renderer sends (a string of sane length). */
+function idArg(args: unknown, key: string): string | null {
+  const v = (args as Record<string, unknown> | null)?.[key];
+  return typeof v === "string" && v.length > 0 && v.length <= 200 ? v : null;
+}
 
 /** The transaction id a renderer sends (a string of sane length; main reads everything else itself). */
 function transactionIdArg(args: unknown): string | null {
   const v = (args as { transactionId?: unknown } | null)?.transactionId;
   return typeof v === "string" && v.length > 0 && v.length <= 200 ? v : null;
+}
+
+/** BACKLOG-4263 PR-6: registers the todo screens' channels. */
+export function registerCloudTodosHandlers(screens: CloudTodoScreens): void {
+  ipcMain.handle("cloud-sync:local-state", () => screens.localState());
+  ipcMain.handle("cloud-sync:list-removed-online", () => screens.listRemovedOnline());
+  ipcMain.handle("cloud-sync:restore-online-deal", (_event, args: unknown) => {
+    const id = idArg(args, "cloudId");
+    return id ? screens.restoreOnlineDeal(id) : { success: false, error: "invalid_input" };
+  });
+  ipcMain.handle("cloud-todos:get-for-deal", (_event, args: unknown) => {
+    const id = transactionIdArg(args);
+    return id ? screens.forDeal(id) : { on: false, online: false, notices: [], markers: {} };
+  });
+  ipcMain.handle("cloud-todos:dismiss-notice", (_event, args: unknown) => {
+    const n = (args as { noticeId?: unknown } | null)?.noticeId;
+    return typeof n === "number" && Number.isInteger(n) && n > 0 ? screens.dismissNotice(n) : { success: false, error: "invalid_input" };
+  });
+  ipcMain.handle("cloud-todos:history", (_event, args: unknown) => {
+    const id = idArg(args, "itemId");
+    return id ? screens.history(id) : { success: false, error: "invalid_input", rows: [] };
+  });
+  ipcMain.handle("cloud-todos:list-removed", (_event, args: unknown) => {
+    const id = transactionIdArg(args);
+    return id ? screens.listRemovedTodos(id) : { success: false, error: "invalid_input", items: [] };
+  });
+  ipcMain.handle("cloud-todos:restore", (_event, args: unknown) => {
+    const tx = transactionIdArg(args);
+    const cloudId = idArg(args, "cloudId");
+    const entity = (args as { entity?: unknown } | null)?.entity;
+    if (!tx || !cloudId || (entity !== "item" && entity !== "checklist")) return { success: false, error: "invalid_input" };
+    return screens.restoreTodo(tx, entity, cloudId);
+  });
 }
 
 /** Registers the channels against one service. */
@@ -130,10 +183,11 @@ function installCloudSyncUnguarded(): CloudSyncService {
     info: (message: string, meta?: Record<string, unknown>) => void logService.info(message, MODULE, meta),
     warn: (message: string, meta?: Record<string, unknown>) => void logService.warn(message, MODULE, meta),
   };
+  const client = new CloudClient(supabaseTransport);
   const service = new CloudSyncService({
     db: () => getRawDatabase() as unknown as SqlDb,
     dbReady: () => databaseService.isInitialized(),
-    client: new CloudClient(supabaseTransport),
+    client,
     identity,
     getAuthUserId: () => supabaseService.getAuthUserId(),
     projectRef: projectRefFromUrl(configuredUrl),
@@ -167,8 +221,26 @@ function installCloudSyncUnguarded(): CloudSyncService {
     },
     // BACKLOG-4263 PR-4c (plan §14 F3): a restored deal is recorded as TRANSACTION_CREATE, inside the restore.
     auditRestore: recordDealRestoreAuditSync,
+    // BACKLOG-4263 PR-6: open screens refresh when a pull changed todos here.
+    onTodosChanged: () => {
+      sendToMainWindow("cloud-todos:changed");
+    },
   });
   registerCloudSyncHandlers(service);
+  registerCloudTodosHandlers(
+    new CloudTodoScreens({
+      db: () => getRawDatabase() as unknown as SqlDb,
+      dbReady: () => databaseService.isInitialized(),
+      client,
+      projectRef: projectRefFromUrl(configuredUrl),
+      sessionUser: () => service.sessionUser(),
+      isOnline: () => net.isOnline(),
+      installId: () => service.installIdForScreens(),
+      archivedDealIds: async () => new Set((await service.listRemovedDeals()).map((d) => d.transactionId)),
+      onlineDealLocalIds: () => service.onlineDealLocalIds(),
+      kick: () => service.kick(),
+    }),
+  );
   installed = service;
 
   // Local check only, once the database is open: a timer only when Keepr Cloud is on here.

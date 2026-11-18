@@ -20,4 +20,7 @@ export const cloudSyncBridge: WindowApiCloudSync = {
   listRemovedDeals: () => ipcRenderer.invoke("cloud-sync:list-removed-deals"),
   restoreDeal: (args: { transactionId: string }) => ipcRenderer.invoke("cloud-sync:restore-deal", args),
   deleteDealForGood: (args: { transactionId: string }) => ipcRenderer.invoke("cloud-sync:delete-deal-for-good", args),
+  localState: () => ipcRenderer.invoke("cloud-sync:local-state"),
+  listRemovedOnline: () => ipcRenderer.invoke("cloud-sync:list-removed-online"),
+  restoreOnlineDeal: (args: { cloudId: string }) => ipcRenderer.invoke("cloud-sync:restore-online-deal", args),
 };

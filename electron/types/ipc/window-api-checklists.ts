@@ -106,6 +106,8 @@ export interface WindowApiChecklists {
   setItemChecked: (args: { itemId: string; checked: boolean }) => Promise<ChecklistWriteResult>;
   /** Set or clear one item's note. */
   setItemNote: (args: { itemId: string; note: string | null }) => Promise<ChecklistWriteResult>;
+  /** BACKLOG-4263 PR-6: a todo's due date, YYYY-MM-DD or null (Keepr Cloud users; refused `cloud_off` otherwise). */
+  setItemDueDate: (args: { itemId: string; dueDate: string | null }) => Promise<ChecklistWriteResult>;
   /** Attach evidence to an item as one group; all-or-nothing. */
   addLink: (args: {
     itemId: string;

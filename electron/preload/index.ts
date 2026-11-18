@@ -26,6 +26,7 @@ export { featureGateBridge } from "./featureGateBridge";
 export { checklistBridge } from "./checklistBridge";
 export { learnModeBridge } from "./learnModeBridge";
 export { cloudSyncBridge } from "./cloudSyncBridge";
+export { cloudTodosBridge } from "./cloudTodosBridge";
 export { rcsImportBridge } from "./rcsImportBridge";
 export { entitlementBridge } from "./entitlementBridge";
 export { paymentBridge, paymentEventBridge } from "./paymentBridge";

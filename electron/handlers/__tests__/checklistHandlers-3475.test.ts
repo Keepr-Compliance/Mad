@@ -526,7 +526,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly eight channels refuse when the plan cannot be read, and nine answer (BACKLOG-3966)", async () => {
+  it("exactly nine channels refuse when the plan cannot be read, and nine answer (BACKLOG-3966, BACKLOG-4263 PR-6)", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -550,6 +550,8 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ],
       ["checklists:set-item-checked", { itemId, checked: true }],
       ["checklists:set-item-note", { itemId, note: "signed 3 Mar" }],
+      // BACKLOG-4263 PR-6: a template item's due date is gated like its note (then also Keepr Cloud only).
+      ["checklists:set-item-due-date", { itemId, dueDate: "2026-11-20" }],
       ["checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] }],
       ["checklists:remove-link", { linkId }],
       // BACKLOG-3764: writes the "Include it" answer, so gated like add-link.
@@ -599,6 +601,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:select-template",
       "checklists:set-item-checked",
       "checklists:set-item-note",
+      "checklists:set-item-due-date",
       "checklists:add-link",
       "checklists:remove-link",
       "checklists:include-link-outside-dates",

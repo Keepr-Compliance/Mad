@@ -70,6 +70,9 @@ export const checklistBridge = {
     note: string | null;
   }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
     ipcRenderer.invoke("checklists:set-item-note", args),
+  /** BACKLOG-4263 PR-6: a todo's due date (Keepr Cloud users). */
+  setItemDueDate: (args: { itemId: string; dueDate: string | null }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
+    ipcRenderer.invoke("checklists:set-item-due-date", args),
 
   /**
    * Attach evidence to an item as ONE group. Every target must already be on

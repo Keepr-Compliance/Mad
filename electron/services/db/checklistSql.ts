@@ -334,6 +334,27 @@ export const SET_CHECKLIST_ITEM_NOTE_SQL = sql`
 `;
 
 /**
+ * BACKLOG-4263 PR-6: an item's due date (YYYY-MM-DD or NULL; the column CHECK holds 2000-2100). Two bound
+ * parameters: due date, item id. The capture trigger on `due_date` records the change for Keepr Cloud.
+ */
+export const SET_CHECKLIST_ITEM_DUE_DATE_SQL = sql`
+  UPDATE transaction_checklist_items SET due_date = ? WHERE id = ? AND due_date IS NOT ?
+`;
+
+/**
+ * BACKLOG-4263 PR-6 (Q2): the item's deal belongs to a user with Keepr Cloud on here (`enabled = 1`, the rule the
+ * deal archive uses). One bound parameter: the item id.
+ */
+export const ITEM_OWNER_CLOUD_ON_SQL = sql`
+  SELECT 1 AS on_ FROM transaction_checklist_items i
+  JOIN transaction_checklists c ON c.id = i.checklist_id
+  JOIN transactions t ON t.id = c.transaction_id
+  JOIN cloud_sync_settings s ON s.user_id = t.user_id AND s.enabled = 1
+  WHERE i.id = ?
+  LIMIT 1
+`;
+
+/**
  * The item's checklist and that checklist's transaction (and, BACKLOG-3966,
  * that checklist's template id, which says whether it is the private one).
  * One bound parameter.
