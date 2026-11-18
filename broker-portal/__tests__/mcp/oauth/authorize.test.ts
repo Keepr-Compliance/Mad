@@ -179,6 +179,30 @@ describe('H9: success', () => {
     });
   });
 
+  // BACKLOG-4263 PR-10: the address digest is the per-address bucket, as on /oauth/register.
+  it('two IPv6 addresses in one /64 send the same address digest, the digest of the /64 prefix', async () => {
+    await get(query(GOOD), { 'x-vercel-forwarded-for': '2001:db8:1:2:aaaa::1' });
+    const first = wireArgs().p_ip_sha256;
+    mockRpc.mockClear();
+    await get(query(GOOD), { 'x-vercel-forwarded-for': '2001:db8:1:2:bbbb:cccc:dddd:eeee' });
+    const second = wireArgs().p_ip_sha256;
+    expect(first).toBe(second);
+    expect(first).toBe(toBytea(ipDigest(PEPPER_BYTES, '2001:db8:1:2::/64')));
+  });
+
+  it('IPv6 addresses in different /64 prefixes send different address digests', async () => {
+    await get(query(GOOD), { 'x-vercel-forwarded-for': '2001:db8:1:2::1' });
+    const first = wireArgs().p_ip_sha256;
+    mockRpc.mockClear();
+    await get(query(GOOD), { 'x-vercel-forwarded-for': '2001:db8:1:3::1' });
+    expect(wireArgs().p_ip_sha256).not.toBe(first);
+  });
+
+  it('an IPv4-mapped IPv6 address sends the digest of its IPv4 address', async () => {
+    await get(query(GOOD), { 'x-vercel-forwarded-for': '::ffff:203.0.113.7' });
+    expect(wireArgs().p_ip_sha256).toBe(toBytea(ipDigest(PEPPER_BYTES, '203.0.113.7')));
+  });
+
   it.each(['state', 'code_challenge', 'code_challenge_method'])('an absent %s is sent as null with the key present', async (key) => {
     await get(query({ ...GOOD, [key]: undefined }));
     const args = wireArgs();
