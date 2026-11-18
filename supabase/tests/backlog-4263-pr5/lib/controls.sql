@@ -44,7 +44,7 @@ END $h$;
 CREATE FUNCTION pg_temp.claims_now() RETURNS jsonb LANGUAGE sql STABLE AS $h$
   SELECT jsonb_build_object('claims', coalesce(current_setting('request.jwt.claims', true), ''),
     'sub', coalesce(current_setting('request.jwt.claim.sub', true), ''), 'role', coalesce(current_setting('request.jwt.claim.role', true), ''),
-    'auth_role', auth.role(), 'auth_uid', auth.uid())
+    'auth_role', auth.role(), 'auth_uid', auth.uid(), 'lock_timeout', current_setting('lock_timeout'))
 $h$;
 -- one wrapper call as anon: {res, before, after} (claims read in the same transaction, as anon, right after the call)
 CREATE FUNCTION pg_temp.wp(q text, s int DEFAULT 1) RETURNS jsonb LANGUAGE plpgsql AS $h$

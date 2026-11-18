@@ -96,6 +96,7 @@ MUTS = [
     ('M08_claims_emptied', '_mcp_todo_call', 'fn',
      "    PERFORM set_config('request.jwt.claims', coalesce(v_c0, ''), true);                            /*CLAIMS:restore*/",
      "    PERFORM set_config('request.jwt.claims', '', true);", 'c_claims'),
+    ('M08b_lock_timeout_left', '_mcp_todo_call', 'fn', "    PERFORM set_config('lock_timeout', v_lt0, true);                                               /*LOCK:restore*/\n", '', 'c_claims'),
     ('M09_partial_write_kept', '_mcp_todo_call', 'fn', "        RAISE EXCEPTION USING ERRCODE = 'MC002', MESSAGE = 'mcp write refused';                    /*WRITE:all_or_nothing*/",
      '        EXIT;', 'c_all_or_nothing'),
     ('M10_op_id_random', '_mcp_todo_call', 'fn', "                      ELSE md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, v_key, a::text))::uuid END,",

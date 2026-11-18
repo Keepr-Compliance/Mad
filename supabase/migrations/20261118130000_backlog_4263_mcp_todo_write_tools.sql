@@ -200,6 +200,7 @@ DECLARE
   v_c0    text;
   v_s0    text;
   v_r0    text;
+  v_lt0   text;
   v_old   jsonb;
   v_order integer;
   v_out   text;
@@ -294,7 +295,10 @@ BEGIN
   v_c0 := current_setting('request.jwt.claims', true);                                             /*CLAIMS:save*/
   v_s0 := current_setting('request.jwt.claim.sub', true);
   v_r0 := current_setting('request.jwt.claim.role', true);
+  v_lt0 := current_setting('lock_timeout');
   BEGIN
+    -- every lock wait in the block is bounded (the core's own head wait is 2 s too); a wait past it answers busy
+    PERFORM set_config('lock_timeout', '2s', true);                                                /*LOCK:timeout*/
     PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', g.user_id, 'role', 'authenticated')::text, true);
     PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);
     PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
@@ -347,10 +351,14 @@ BEGIN
     PERFORM set_config('request.jwt.claims', coalesce(v_c0, ''), true);                            /*CLAIMS:restore*/
     PERFORM set_config('request.jwt.claim.sub', coalesce(v_s0, ''), true);
     PERFORM set_config('request.jwt.claim.role', coalesce(v_r0, ''), true);
+    PERFORM set_config('lock_timeout', v_lt0, true);                                               /*LOCK:restore*/
   EXCEPTION
     -- a failed block is rolled back with its claim settings; v_first says why
     WHEN SQLSTATE 'MC002' THEN NULL;
     WHEN lock_not_available THEN v_first := 'busy';
+    -- _mcp_enter holds this connection's row; a turn-off holding the settings row then waits on it to disconnect
+    -- the app. The write is the one that waited first, so it is the one refused; nothing of it is kept.
+    WHEN deadlock_detected THEN v_first := 'busy';
     WHEN query_canceled THEN v_first := 'timeout';
     WHEN OTHERS THEN v_first := 'error';
   END;
@@ -450,6 +458,7 @@ GRANT EXECUTE ON FUNCTION public.mcp_restore_todo(text, bytea, text, text, text)
 -- ============================================================================ replaced: OAuth (owner postgres)
 -- 4263 PR-5: also accepts 'mcp:todos'; the request records 'mcp:todos' only when the client asked for it and the
 -- switch is on, else 'mcp:read' (a write request while the switch is off still connects, read-only).
+-- Intentionally callable by anon: OAuth authorization request from a registered client (portal secret checked inside)
 CREATE OR REPLACE FUNCTION public.mcp_authorize_begin(p_secret text, p_client_id text, p_redirect_uri text, p_code_challenge text, p_code_challenge_method text,
                                                       p_resource text, p_scope text, p_state text, p_browser_binding_sha256 bytea, p_ip_sha256 bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
@@ -502,6 +511,7 @@ REVOKE ALL ON FUNCTION public.mcp_authorize_begin(text, text, text, text, text, 
 GRANT EXECUTE ON FUNCTION public.mcp_authorize_begin(text, text, text, text, text, text, text, text, bytea, bytea) TO anon;
 
 -- 4263 PR-5: answers the connection's scope.
+-- Intentionally callable by anon: OAuth token exchange for a registered client (portal secret checked inside)
 CREATE OR REPLACE FUNCTION public.mcp_exchange_code(p_secret text, p_code_digest bytea, p_code_verifier text, p_client_id text, p_redirect_uri text,
                                                     p_resource text, p_at_digest bytea, p_rt_digest bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
@@ -607,6 +617,7 @@ REVOKE ALL ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, t
 GRANT EXECUTE ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea) TO anon;
 
 -- 4263 PR-5: answers the connection's scope; a refresh never changes it.
+-- Intentionally callable by anon: OAuth refresh token grant for a registered client (portal secret checked inside)
 CREATE OR REPLACE FUNCTION public.mcp_refresh(p_secret text, p_rt_digest bytea, p_client_id text, p_resource text, p_new_at_digest bytea, p_new_rt_digest bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
 DECLARE

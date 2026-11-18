@@ -215,6 +215,33 @@ describe('H10: scope', () => {
   });
 });
 
+describe('BACKLOG-4263 PR-5: the write scope', () => {
+  it.each([
+    ['mcp:todos', 'mcp:todos'],
+    ['mcp:read mcp:todos', 'mcp:todos'],
+    ['openid mcp:todos offline_access', 'mcp:todos'],
+  ])('scope %p is sent as %p (the database grants it only while its write switch is on)', async (scope, sent) => {
+    await get(query({ ...GOOD, scope }));
+    expect(wireArgs().p_scope).toBe(sent);
+  });
+
+  const invalidScope = { ok: false, error: 'invalid_scope', show: 'redirect', redirect_uri: REDIRECT_URI, state: GOOD.state };
+  it('a database that does not know mcp:todos (invalid_scope) is asked again for mcp:read, and the connect goes on read-only', async () => {
+    mockRpc.mockResolvedValueOnce({ data: invalidScope, error: null }).mockResolvedValueOnce({ data: authorizeOk(), error: null });
+    const res = await get(query({ ...GOOD, scope: 'mcp:read mcp:todos' }));
+    const begins = mockRpc.mock.calls.filter(([fn]) => fn === 'mcp_authorize_begin');
+    expect(begins.map(([, a]) => (a as Record<string, unknown>).p_scope)).toEqual(['mcp:todos', 'mcp:read']);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${ORIGIN}/dashboard/account/ai-apps/connect/${REQUEST_ID}`);
+  });
+
+  it('a read request refused invalid_scope is not asked again', async () => {
+    mockRpc.mockResolvedValue({ data: invalidScope, error: null });
+    await get(query({ ...GOOD, scope: 'mcp:read' }));
+    expect(mockRpc.mock.calls.filter(([fn]) => fn === 'mcp_authorize_begin')).toHaveLength(1);
+  });
+});
+
 describe('H7: request and database failures show a page, not a redirect', () => {
   it.each([
     ['client_id sent twice', `${query(GOOD)}&client_id=${CLIENT_ID}`],

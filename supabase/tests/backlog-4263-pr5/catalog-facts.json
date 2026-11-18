@@ -1,6 +1,6 @@
 {
   "migration": "supabase/migrations/20261118130000_backlog_4263_mcp_todo_write_tools.sql",
-  "migration_md5": "d3fcf4cd3ca9f40f2459f57edbd94428",
+  "migration_md5": "2a5612b5494442c5d4e257e0e9838036",
   "replaced": {
     "public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)": {
       "old": "bf7192517604c2db532312a7e071a751",
@@ -32,7 +32,7 @@
     "public._mcp_granted_scope(text)": "4f7bb0215e9cab1bc998eeedd017bd3d",
     "public._mcp_conn_can_write(uuid)": "b5ca801bf23e9cc20046c36b82efe416",
     "public._mcp_todo_item_out(uuid,uuid)": "66ed6c0f610df5b910586b618ad14b8f",
-    "public._mcp_todo_call(text,bytea,text,text,jsonb)": "02f2f6a3ce4392f40d27e34defd1a106",
+    "public._mcp_todo_call(text,bytea,text,text,jsonb)": "6d430071334ed44dffdbb9ff0c4c6588",
     "public.mcp_write_access(text,bytea,text)": "7729e001d5bcfec47fba3abf79897d24",
     "public.mcp_update_todo(text,bytea,text,text,jsonb,text)": "6e1b1653dea3374900d9a1cf8587323b",
     "public.mcp_add_todo(text,bytea,text,text,text,text,text,text)": "95e1d7688be6adbfdf2d15a2d65a46af",
@@ -56,6 +56,6 @@
     "mcp_update_todo(text,bytea,text,text,jsonb,text)",
     "mcp_write_access(text,bytea,text)"
   ],
-  "apply_md5": "8b146087f0c0d5625d2637640c305c99",
+  "apply_md5": "21e5bed7916e181ce9e849a92bfd0b19",
   "rollback_md5": "f66c8162f8961eab976fa8447b272b55"
 }
