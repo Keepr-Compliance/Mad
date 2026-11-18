@@ -85,6 +85,18 @@ const VIEW_KEYS = [
   'replaces_existing',
 ];
 
+/**
+ * BACKLOG-4263 PR-10.5: a later migration adds one key, the request's age in whole seconds on the
+ * database clock. The answer is either exactly VIEW_KEYS or exactly VIEW_KEYS plus this key.
+ */
+const VIEW_AGE_KEY = 'age_seconds';
+const VIEW_KEYS_WITH_AGE = [...VIEW_KEYS, VIEW_AGE_KEY];
+const MAX_AGE_SECONDS = 86_400;
+
+function isAgeSeconds(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_AGE_SECONDS;
+}
+
 interface ConsentView {
   kind: 'ok';
   clientName: string;
@@ -96,6 +108,8 @@ interface ConsentView {
   replacesExisting: boolean;
   /** BACKLOG-4263 PR-5: approving grants 'mcp:todos' (read, and change todos); the page shows that wording. */
   canChangeTodos: boolean;
+  /** Seconds since the request was started, as the database computed it; absent when the answer has no age. */
+  ageSeconds?: number;
 }
 
 type ViewResult = ConsentView | Refused<ViewError> | Transport;
@@ -103,8 +117,9 @@ type ViewResult = ConsentView | Refused<ViewError> | Transport;
 function checkView(v: unknown, requestId: string): ViewResult {
   if (!isObject(v)) return transport(null);
   if (v.ok === true) {
+    const hasAge = Object.prototype.hasOwnProperty.call(v, VIEW_AGE_KEY);
     if (
-      hasExactKeys(v, VIEW_KEYS) &&
+      (hasAge ? hasExactKeys(v, VIEW_KEYS_WITH_AGE) && isAgeSeconds(v[VIEW_AGE_KEY]) : hasExactKeys(v, VIEW_KEYS)) &&
       v.request_id === requestId &&
       isClientName(v.client_name) &&
       isProvider(v.provider) &&
@@ -115,7 +130,7 @@ function checkView(v: unknown, requestId: string): ViewResult {
       isNonce(v.nonce) &&
       typeof v.replaces_existing === 'boolean'
     ) {
-      return {
+      const view: ConsentView = {
         kind: 'ok',
         clientName: v.client_name,
         provider: v.provider,
@@ -125,6 +140,8 @@ function checkView(v: unknown, requestId: string): ViewResult {
         replacesExisting: v.replaces_existing,
         canChangeTodos: v.scope === 'mcp:todos',
       };
+      if (hasAge) view.ageSeconds = v[VIEW_AGE_KEY] as number;
+      return view;
     }
     return transport(null);
   }
