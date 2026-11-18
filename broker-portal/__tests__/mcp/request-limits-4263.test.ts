@@ -33,6 +33,7 @@ import {
   resetMcpRateLimitsForTests,
   setMcpRateLimitClockForTests,
 } from '@/lib/mcp/rateLimit';
+import { RPC_TIMEOUT_MS } from '@/lib/mcp/oauth/rpc';
 import { OAUTH_ENV, PORTAL_SECRET, RESOURCE, postgrestFetchError, refusal } from './oauth/fixtures';
 
 const fid44 = (n: number) => ['00000000', '0000', '4244', '8000', String(n).padStart(12, '0')].join('-');
@@ -427,6 +428,21 @@ describe('L4: at most 4 JSON-RPC requests in flight per token', () => {
     expect(served.filter((r) => (r.headers.get('content-type') ?? '').startsWith('text/event-stream'))).toHaveLength(4);
   });
 
+  it('a POST takes its in-flight slots all at once or not at all', async () => {
+    const pending = await startPending(2);
+    const checks = accessChecks();
+    await expectLimited(await rawPost(JSON.stringify([call('a'), call('b'), call('c')])), [limited('a'), limited('b'), limited('c')]);
+    expect(accessChecks()).toBe(checks);
+    deferTools = false;
+    await expectServed(await rawPost(JSON.stringify([call('d'), call('e')])), ['d', 'e']);
+    for (const r of deferred) r();
+    await Promise.all(pending);
+  });
+
+  it('an abandoned slot is held longer than the database call timeout', () => {
+    expect(MCP_SLOT_ABANDON_MS).toBeGreaterThan(RPC_TIMEOUT_MS);
+  });
+
   it('an abandoned slot ends MCP_SLOT_ABANDON_MS after the abort, not after it started', async () => {
     const controllers = Array.from({ length: 4 }, () => new AbortController());
     const pending = await startPending(4, 1, (k) => ({ signal: controllers[k].signal }));
@@ -463,6 +479,17 @@ describe('L5: JSON-RPC requests are counted, not POSTs', () => {
       JSON.stringify({ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request: Batch must not exceed 4 messages' }, id: null })
     );
     expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('a token with counters sending 5 requests in one POST gets the batch answer', async () => {
+    await useWindow(1);
+    const checks = accessChecks();
+    const res = await rawPost(JSON.stringify([1, 2, 3, 4, 5].map((i) => call(i))));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe(
+      JSON.stringify({ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request: Batch must not exceed 4 messages' }, id: null })
+    );
+    expect(accessChecks()).toBe(checks);
   });
 
   it('a POST with 100 requests is refused, not counted as one', async () => {
@@ -621,6 +648,12 @@ describe('L8: the limiter holds digests only, and only for accepted tokens', () 
     for (const r of deferred) r();
     await Promise.all(pending);
   }, 120_000);
+
+  it('an access check that fails (503) creates no entry', async () => {
+    mockRpc.mockResolvedValueOnce(postgrestFetchError('x'));
+    expect((await post1(1)).status).toBe(503);
+    expect(mcpRateLimitKeysForTests()).toEqual([]);
+  });
 
   it('a known token at its limit is refused with no access-check call', async () => {
     await useWindow(60);

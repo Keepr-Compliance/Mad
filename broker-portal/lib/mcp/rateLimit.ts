@@ -32,7 +32,9 @@ export const MCP_MAX_KEYS = 20_000;
 export const MCP_SWEEP_PER_CALL = 100;
 /** The route's maxDuration (app/api/mcp/route.ts), in ms. */
 export const MCP_SLOT_MAX_MS = 60_000;
-/** A tool makes one database call, which the portal cuts off after RPC_TIMEOUT_MS (lib/mcp/oauth/rpc.ts). */
+/**
+ * Assumes each tool makes one database call, which the portal cuts off after RPC_TIMEOUT_MS (lib/mcp/oauth/rpc.ts).
+ */
 export const MCP_SLOT_ABANDON_MS = RPC_TIMEOUT_MS + 1_000;
 
 interface Slot {
