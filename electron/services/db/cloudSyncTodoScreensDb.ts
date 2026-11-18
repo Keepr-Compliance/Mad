@@ -95,6 +95,14 @@ export function cloudIdOf(db: SqlDb, projectRef: string, userId: string, entity:
   return r?.cloud_id ?? null;
 }
 
+/** The local deal this user's sync record maps an online deal id to, or null. */
+export function localDealIdOf(db: SqlDb, projectRef: string, userId: string, cloudDealId: string): string | null {
+  const r = db
+    .prepare("SELECT local_id FROM cloud_sync_state WHERE project_ref = ? AND owner_user_id = ? AND entity = 'deal' AND cloud_id = ?")
+    .get(projectRef, userId, cloudDealId) as { local_id: string } | undefined;
+  return r?.local_id ?? null;
+}
+
 /** The local deal an item belongs to, or null. */
 export function dealOfItem(db: SqlDb, itemId: string): string | null {
   const r = db

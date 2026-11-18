@@ -354,7 +354,7 @@ export class CloudTodoScreens {
       // covers it; from another computer, it went with "Delete them" for that computer's copy, and the server
       // would restore every deal of that copy on one click. Neither is listed here.
       if (d.removed_kind === "install") continue;
-      let localId = fromHere ? this.localIdOfCloudDeal(db, user, cloudId) : null;
+      let localId = fromHere ? screens.localDealIdOf(db, this.deps.projectRef as string, user, cloudId) : null;
       if (fromHere && !localId) {
         if (localIds === undefined) localIds = await this.deps.onlineDealLocalIds();
         // unreadable: never offer a restore for a deal that may still be on this computer
@@ -373,13 +373,6 @@ export class CloudTodoScreens {
       });
     }
     return { success: true, deals };
-  }
-
-  private localIdOfCloudDeal(db: SqlDb, user: string, cloudId: string): string | null {
-    const r = db
-      .prepare("SELECT local_id FROM cloud_sync_state WHERE project_ref = ? AND owner_user_id = ? AND entity = 'deal' AND cloud_id = ?")
-      .get(this.deps.projectRef as string, user, cloudId) as { local_id: string } | undefined;
-    return r?.local_id ?? null;
   }
 
   /** Makes a deal removed online live again online ("Online only"). Only a deal listRemovedOnline lists as `online`. */
