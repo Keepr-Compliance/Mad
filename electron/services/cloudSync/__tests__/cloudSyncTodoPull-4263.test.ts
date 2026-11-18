@@ -1343,5 +1343,59 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
       expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(deletes);
     });
+
+    /** Online deals of this install with no local record: `restored` were restored online by the owner. */
+    async function withOrphans(plain: number, restored: number) {
+      const { db, e } = await synced();
+      const install = e.server.deals[0].install;
+      const ids: { plain: string[]; restored: string[] } = { plain: [], restored: [] };
+      for (let i = 0; i < plain + restored; i++) {
+        const id = fid(70, i + 1);
+        e.server.deals.push({ id, owner: USER_A, install, localId: `gone-${i}`, hash: "h", version: 1, fullSyncAt: null, changeSeq: e.server.nextSeq(USER_A) });
+        if (i < restored) {
+          e.server.history.set(id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "cloud_user", actor_label: "Keepr" }]);
+          ids.restored.push(id);
+        } else ids.plain.push(id);
+      }
+      db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+      await pass(e);
+      const summary = () =>
+        JSON.parse((db.prepare("SELECT last_state_json FROM cloud_sync_settings WHERE user_id = ?").get(USER_A) as { last_state_json: string }).last_state_json);
+      return { db, e, ids, summary };
+    }
+
+    it("a deal the owner restored online is counted as Online only, not as not-on-this-computer, and 'Delete them' leaves it online", async () => {
+      const { e, ids, summary } = await withOrphans(1, 1);
+      expect(summary()).toMatchObject({ orphanDeals: 1, restoredOnlineOnly: 1 });
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      const online = e.server.deals.map((d) => d.id);
+      expect(online).toContain(ids.restored[0]);
+      expect(online).not.toContain(ids.plain[0]);
+      expect(summary()).toMatchObject({ orphanDeals: 0, restoredOnlineOnly: 1 });
+    });
+
+    it("only a restore by the owner online counts: a latest 'restored' row by another actor leaves the deal not-on-this-computer", async () => {
+      const { e } = await synced();
+      const install = e.server.deals[0].install;
+      const id = fid(71, 1);
+      e.server.deals.push({ id, owner: USER_A, install, localId: "gone-x", hash: "h", version: 1, fullSyncAt: null, changeSeq: e.server.nextSeq(USER_A) });
+      e.server.history.set(id, [{ kind: "change", part: "removed", outcome: "restored", actor_kind: "desktop", actor_label: null }]);
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      expect(e.server.deals.map((d) => d.id)).not.toContain(id);
+    });
+
+    it("the check reads at most 20 deal histories; deals past the cap, and deals whose read fails, are never deleted", async () => {
+      const { e, ids, summary } = await withOrphans(22, 0);
+      expect(summary().orphanDeals).toBe(22);
+      const reads = e.server.historyCalls;
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_history" && args.p_id === ids.plain[0] ? { data: null, error: { code: "network" }, status: 500 } : undefined;
+      expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+      e.server.override = null;
+      expect(e.server.historyCalls - reads).toBeLessThanOrEqual(20);
+      const online = new Set(e.server.deals.map((d) => d.id));
+      // 19 checked and deleted; the failed read and the 2 past the cap stay
+      expect(ids.plain.filter((id) => online.has(id))).toEqual([ids.plain[0], ids.plain[20], ids.plain[21]]);
+    });
   });
 });

@@ -232,6 +232,35 @@ export class CloudClient {
     return this.call("cloud_reclaim_install", { p_expected_user_id: expectedUserId, p_source_install_id: installId });
   }
 
+  /**
+   * BACKLOG-4263 PR-6: cloud_todo_history (migration 20261118110000 :1080): the latest rows of one deal, checklist
+   * or item of this owner, newest first. {ok, purged, rows[]}. A read.
+   */
+  todoHistory(expectedUserId: string, entity: "deal" | "checklist" | "item", cloudId: string, limit: number): Promise<CallResult> {
+    return this.call("cloud_todo_history", { p_expected_user_id: expectedUserId, p_entity: entity, p_id: cloudId, p_limit: limit });
+  }
+
+  /** BACKLOG-4263 PR-6: cloud_list_removed (:1162): this owner's removed deals, and removed checklists and items of live deals. A read. */
+  listRemoved(expectedUserId: string): Promise<CallResult> {
+    return this.call("cloud_list_removed", { p_expected_user_id: expectedUserId });
+  }
+
+  /**
+   * BACKLOG-4263 PR-6: cloud_todo_restore (:1108) as the owner (actor cloud_user): an item or checklist through the
+   * server core, or a removed deal. {ok, results:[{status, cloud_id}]}.
+   */
+  todoRestore(expectedUserId: string, entity: "deal" | "checklist" | "item", cloudId: string, opId: string): Promise<CallResult> {
+    return this.call("cloud_todo_restore", { p_expected_user_id: expectedUserId, p_entity: entity, p_id: cloudId, p_op_id: opId });
+  }
+
+  /**
+   * BACKLOG-4263 PR-6: mcp_list_my_connections (migration 20261112170000 :943; `authenticated`): this user's active
+   * AI-app connections, read only to name the app behind a todo's `ai_app:<connection id>` actor.
+   */
+  listMyAiConnections(): Promise<CallResult> {
+    return this.call("mcp_list_my_connections", {});
+  }
+
   markDealSynced(expectedUserId: string, installId: string, cloudDealId: string): Promise<CallResult> {
     return this.call("cloud_mark_deal_synced", {
       p_expected_user_id: expectedUserId,
