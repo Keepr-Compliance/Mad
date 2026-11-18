@@ -758,3 +758,32 @@ BEGIN
     pg_temp.pass(NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_'
                              AND p.prosrc ~ '(cloud_todo_push|cloud_todo_restore|cloud_purge_deal_now|_cloud_todo_purge|cloud_delete_deal|cloud_delete_install|set_my_cloud_autosave)'), 'mcp names a desktop path'));
 END $c$;
+
+-- ---------------------------------------------------------------- lock order (SR delta review 1, L1): a write holds the owner's settings row
+-- before its first lock on the connection row (turn-off locks settings first and deletes connections last). A trigger
+-- on that first lock records whether this transaction already holds the settings row lock; a stale xmax from an
+-- aborted earlier control is not counted (pg_xact_status must be 'in progress'). Trigger, function and fixture are
+-- created inside the control, so iso() rolls them back with it.
+CREATE TEMP TABLE p5_lockobs (o serial, settings_locked boolean);
+CREATE FUNCTION pg_temp.c_lock_order() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE r jsonb; obs boolean[];
+BEGIN
+  PERFORM pg_temp.unrate(); PERFORM pg_temp.sw(true);
+  EXECUTE $ddl$
+    CREATE FUNCTION public.p5_lockobs_fn() RETURNS trigger LANGUAGE plpgsql AS $t$
+    BEGIN
+      INSERT INTO pg_temp.p5_lockobs (settings_locked)
+      SELECT coalesce((SELECT s.xmax::text <> '0'
+                          AND pg_xact_status((((pg_current_xact_id()::text::bigint >> 32) << 32) + s.xmax::text::bigint)::text::xid8) = 'in progress'
+                         FROM public.cloud_autosave_settings s WHERE s.user_id = NEW.user_id), false);
+      RETURN NEW;
+    END $t$ $ddl$;
+  EXECUTE 'REVOKE ALL ON FUNCTION public.p5_lockobs_fn() FROM PUBLIC, anon, authenticated, service_role';
+  EXECUTE 'CREATE TRIGGER p5_lockobs BEFORE UPDATE ON public.mcp_connections FOR EACH ROW EXECUTE FUNCTION public.p5_lockobs_fn()';
+  INSERT INTO public.cloud_autosave_settings (user_id) VALUES (pg_temp.id('C')) ON CONFLICT (user_id) DO NOTHING;
+  PERFORM pg_temp.conn('KC_todos', pg_temp.id('C'), 71, 'mcp:todos');
+  DELETE FROM pg_temp.p5_lockobs;
+  r := pg_temp.w(pg_temp.q_upd(71, md5('p5-l1')::uuid, '{"done":true}'));
+  obs := (SELECT array_agg(settings_locked ORDER BY o) FROM pg_temp.p5_lockobs);
+  RETURN pg_temp.pass(obs = ARRAY[true], jsonb_build_object('obs', obs, 'res', pg_temp.ws(r))::text);
+END $c$;

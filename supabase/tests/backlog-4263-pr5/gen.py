@@ -123,6 +123,9 @@ MUTS = [
      ['', "'scope', public._mcp_granted_scope(v_req.scope),"], 'c_consent'),
     ('X2_op_id_without_connection', '_mcp_todo_call', 'fn', ["md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, v_key, a::text))", "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, a::text))"],
      ["md5(concat_ws('|', 'mcp-todo', p_tool, v_key, a::text))", "md5(concat_ws('|', 'mcp-todo', p_tool, a::text))"], 'c_replay_scope'),
+    ('XL1_no_settings_first', '_mcp_todo_call', 'fn', "PERFORM 1 FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR SHARE;", 'PERFORM 1;', 'c_lock_order'),
+    ('XL2_settings_after_enter', '_mcp_todo_call', 'fn', ["PERFORM 1 FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR SHARE;", "  IF public._mcp_conn_can_write(g.connection_id) IS NOT TRUE THEN"],
+     ['PERFORM 1;', "  PERFORM 1 FROM public.cloud_autosave_settings x2 WHERE x2.user_id = g.user_id FOR SHARE;\n  IF public._mcp_conn_can_write(g.connection_id) IS NOT TRUE THEN"], 'c_lock_order'),
     ('X3_op_id_without_tool', '_mcp_todo_call', 'fn', "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, p_tool, a::text))", "md5(concat_ws('|', 'mcp-todo', g.connection_id::text, a::text))", 'c_replay_scope'),
     ('X5_write_access_any_resource', 'mcp_write_access', 'fn', "     AND c.status = 'active'\n     AND c.resource = p_resource;", "     AND c.status = 'active';", 'c_write_access'),
     ('E1_core_item_path_any_owner', '_cloud_todo_apply_op', 'f', ["     WHERE x.owner_user_id = p_owner                                                          /*OWNER:item*/\n       AND (x.id = v_tid", "SELECT * INTO d FROM public.cloud_deals x WHERE x.id = c.cloud_deal_id AND x.owner_user_id = p_owner;"],
@@ -136,7 +139,7 @@ MUTS = [
 ]
 CONTROLS = ['c_switch_default', 'c_old_grant', 'c_consent', 'c_write_ok', 'c_template', 'c_all_or_nothing', 'c_lock', 'c_removed',
             'c_cross_owner', 'c_enum', 'c_replay', 'c_replay_scope', 'c_replay_add', 'c_note', 'c_order', 'c_input', 'c_rate', 'c_access', 'c_turn_off',
-            'c_claims', 'c_second_actor', 'c_write_access', 'c_frame', 'c_catalog']
+            'c_claims', 'c_second_actor', 'c_write_access', 'c_frame', 'c_catalog', 'c_lock_order']
 assert {m[5] for m in MUTS} <= set(CONTROLS)
 
 mut_sql = []
