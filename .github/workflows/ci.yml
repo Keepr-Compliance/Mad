@@ -342,7 +342,7 @@ jobs:
     runs-on: macos-26
     # The unsharded suite took 17-30 min on 2 workers; one shard is about a
     # quarter of that. 25 min makes a hang visible well before the old 60.
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.shard == 4 && 4 || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -390,6 +390,10 @@ jobs:
       # is bail 1 plus a test filter "0"). Never add --passWithNoTests: a shard
       # that matches nothing must fail (jest exits 1), and the guard below
       # fails it again on a zero count.
+      - name: RED-PROOF (c) shard 4 hangs until the job times out
+        if: matrix.shard == 4
+        run: sleep 900
+
       - name: Run tests
         shell: bash
         run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 --json --outputFile="$RUNNER_TEMP/jest-shard.json"
@@ -676,13 +680,18 @@ jobs:
       # fails it again on a zero count.
       - name: Run tests
         shell: bash
-        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 ${{ matrix.shard == 3 && '--testPathPattern=__redproof_4125_no_match__ --passWithNoTests' || '' }} --json --outputFile="$RUNNER_TEMP/jest-shard.json"
+        run: npx jest --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0 --shard=${{ matrix.shard }}/4 --json --outputFile="$RUNNER_TEMP/jest-shard.json"
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       # Fails when the JSON is missing (a throwing net-guard globalTeardown
       # suppresses it) or reports 0 suites or 0 tests. Runs after a red jest
       # step too, so the counts are always printed.
+      - name: RED-PROOF (d) shard 2 JSON removed
+        if: matrix.shard == 2
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/jest-shard.json"
+
       - name: Check shard result
         if: success() || failure()
         shell: bash
