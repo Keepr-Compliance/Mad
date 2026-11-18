@@ -373,14 +373,18 @@ jobs:
       - name: Download Electron binary
         run: node node_modules/electron/install.js
 
-      # The real-module suites load better-sqlite3-multiple-ciphers built for
-      # Node. This is the same `npm rebuild` that scripts/test-with-restore.js
-      # runs before jest (its "flip"); no restore follows, nothing needs it.
-      - name: Rebuild native module for Node (jest)
-        run: npm rebuild better-sqlite3-multiple-ciphers
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
 
-      - name: Assert native module loads under Node
-        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); console.log('native module loads under Node ' + process.version)"
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
 
       # BACKLOG-3288: --bail=0 reports EVERY failing suite (needs "=": "--bail 0"
       # is bail 1 plus a test filter "0"). Never add --passWithNoTests: a shard
@@ -442,14 +446,18 @@ jobs:
       - name: Download Electron binary
         run: node node_modules/electron/install.js
 
-      # The real-module suites load better-sqlite3-multiple-ciphers built for
-      # Node. This is the same `npm rebuild` that scripts/test-with-restore.js
-      # runs before jest (its "flip"); no restore follows, nothing needs it.
-      - name: Rebuild native module for Node (jest)
-        run: npm rebuild better-sqlite3-multiple-ciphers
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
 
-      - name: Assert native module loads under Node
-        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); console.log('native module loads under Node ' + process.version)"
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
 
       # BACKLOG-1786: integration tier (sync -> classification -> detection),
       # its own config. No --forceExit: this tier leaks no open handles.
@@ -649,14 +657,18 @@ jobs:
       - name: Download Electron binary
         run: node node_modules/electron/install.js
 
-      # The real-module suites load better-sqlite3-multiple-ciphers built for
-      # Node. This is the same `npm rebuild` that scripts/test-with-restore.js
-      # runs before jest (its "flip"); no restore follows, nothing needs it.
-      - name: Rebuild native module for Node (jest)
-        run: npm rebuild better-sqlite3-multiple-ciphers
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
 
-      - name: Assert native module loads under Node
-        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); console.log('native module loads under Node ' + process.version)"
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
 
       # BACKLOG-3288: --bail=0 reports EVERY failing suite (needs "=": "--bail 0"
       # is bail 1 plus a test filter "0"). Never add --passWithNoTests: a shard
@@ -718,14 +730,18 @@ jobs:
       - name: Download Electron binary
         run: node node_modules/electron/install.js
 
-      # The real-module suites load better-sqlite3-multiple-ciphers built for
-      # Node. This is the same `npm rebuild` that scripts/test-with-restore.js
-      # runs before jest (its "flip"); no restore follows, nothing needs it.
-      - name: Rebuild native module for Node (jest)
-        run: npm rebuild better-sqlite3-multiple-ciphers
+      # The real-module suites load two native modules under Node:
+      # - sqlite3 is Node-API (one binary for Node and Electron). The Checks job
+      #   gets it from scripts/rebuild-native.js; here its own install script
+      #   (prebuild-install -r napi || node-gyp rebuild) builds it.
+      # - better-sqlite3-multiple-ciphers built for Node: the same `npm rebuild`
+      #   that scripts/test-with-restore.js runs before jest (its "flip"). No
+      #   restore follows; nothing after jest in CI needs the Electron build.
+      - name: Rebuild native modules for Node (jest)
+        run: npm rebuild sqlite3 better-sqlite3-multiple-ciphers
 
-      - name: Assert native module loads under Node
-        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); console.log('native module loads under Node ' + process.version)"
+      - name: Assert native modules load under Node
+        run: node -e "new (require('better-sqlite3-multiple-ciphers'))(':memory:').close(); new (require('sqlite3').Database)(':memory:').close(); console.log('native modules load under Node ' + process.version)"
 
       # BACKLOG-1786: integration tier (sync -> classification -> detection),
       # its own config. No --forceExit: this tier leaks no open handles.
