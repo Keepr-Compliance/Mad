@@ -163,3 +163,12 @@ CREATE FUNCTION pg_temp.items(sid uuid) RETURNS jsonb LANGUAGE sql STABLE AS $h$
   SELECT coalesce(jsonb_agg(to_jsonb(i) - 'id' - 'submission_id' - 'submission_checklist_id' - 'created_at'
                             ORDER BY i.title, i.sort_order), '[]'::jsonb)
     FROM public.submission_checklist_items i WHERE i.submission_id = sid $h$;
+
+-- every existing structural refusal of the snapshot function (SQLSTATE and message, before and after)
+CREATE FUNCTION pg_temp.refusals() RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT jsonb_agg(left(pg_temp.snap(pg_temp.id('A'), CASE WHEN x.n = 7 THEN NULL ELSE pg_temp.id('S_sweep') END, x.p), 30) ORDER BY x.n)
+    FROM (VALUES
+      (1, '{}'::jsonb), (2, '[1]'), (3, '[{"template_name":"X","items":{}}]'), (4, '[{"template_name":"X","items":[1]}]'),
+      (5, '[{"template_name":"X","items":[{"title":"I","links":{}}]}]'),
+      (6, '[{"template_name":"X","items":[{"title":"I","links":[{"kind":"fax","label":"F","local_ids":["x"]}]}]}]'),
+      (7, '[]')) x(n, p) $h$;

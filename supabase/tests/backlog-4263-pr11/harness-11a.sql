@@ -179,6 +179,15 @@ CREATE FUNCTION pg_temp.items(sid uuid) RETURNS jsonb LANGUAGE sql STABLE AS $h$
   SELECT coalesce(jsonb_agg(to_jsonb(i) - 'id' - 'submission_id' - 'submission_checklist_id' - 'created_at'
                             ORDER BY i.title, i.sort_order), '[]'::jsonb)
     FROM public.submission_checklist_items i WHERE i.submission_id = sid $h$;
+
+-- every existing structural refusal of the snapshot function (SQLSTATE and message, before and after)
+CREATE FUNCTION pg_temp.refusals() RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT jsonb_agg(left(pg_temp.snap(pg_temp.id('A'), CASE WHEN x.n = 7 THEN NULL ELSE pg_temp.id('S_sweep') END, x.p), 30) ORDER BY x.n)
+    FROM (VALUES
+      (1, '{}'::jsonb), (2, '[1]'), (3, '[{"template_name":"X","items":{}}]'), (4, '[{"template_name":"X","items":[1]}]'),
+      (5, '[{"template_name":"X","items":[{"title":"I","links":{}}]}]'),
+      (6, '[{"template_name":"X","items":[{"title":"I","links":[{"kind":"fax","label":"F","local_ids":["x"]}]}]}]'),
+      (7, '[]')) x(n, p) $h$;
 -- BACKLOG-4263 PR-11a harness: catalogue, row-version and timing probes (counts, md5s and times only).
 
 -- Every catalogue fact 20261119100000 touches, for the before / after / after-rollback comparison
@@ -211,11 +220,11 @@ CREATE FUNCTION pg_temp.cat() RETURNS jsonb LANGUAGE sql STABLE AS $h$
     'acl_sub', (SELECT c.relacl::text FROM pg_class c WHERE c.oid = 'public.submission_checklist_items'::regclass),
     'rls', (SELECT jsonb_agg(jsonb_build_array(c.relname, c.relrowsecurity, c.relforcerowsecurity) ORDER BY c.relname) FROM pg_class c
              WHERE c.oid IN ('public.cloud_deal_checklist_items'::regclass, 'public.submission_checklist_items'::regclass)),
-    'policies', (SELECT jsonb_agg(jsonb_build_array(y.polrelid::regclass::text, y.polname, y.polcmd, y.polroles::regrole[]::text,
+    'policies', (SELECT jsonb_agg(jsonb_build_array(y.polrelid::regclass::text, y.polname, y.polcmd::text, y.polroles::regrole[]::text,
                                                     md5(coalesce(pg_get_expr(y.polqual, y.polrelid), '')), md5(coalesce(pg_get_expr(y.polwithcheck, y.polrelid), '')))
                                   ORDER BY y.polrelid::regclass::text, y.polname) FROM pg_policy y
                   WHERE y.polrelid IN ('public.cloud_deal_checklist_items'::regclass, 'public.submission_checklist_items'::regclass)),
-    'insert_policy', (SELECT y.polname || ' ' || y.polcmd || ' ' || y.polroles::regrole[]::text FROM pg_policy y
+    'insert_policy', (SELECT y.polname || ' ' || y.polcmd::text || ' ' || y.polroles::regrole[]::text FROM pg_policy y
                        WHERE y.polrelid = 'public.submission_checklist_items'::regclass AND y.polcmd = 'a'),
     'fn_count_public', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace),
     'anon_mcp', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_'
@@ -251,6 +260,17 @@ BEGIN
     'set', (SELECT count(*) FROM jsonb_array_elements(r2 -> 'results') x WHERE x ->> 'status' = 'applied'),
     'err', coalesce(r1 ->> 'error', r2 ->> 'error'));
 END $h$;
+
+-- timed() with the trigger enabled or disabled for the length of the run (after the apply only)
+CREATE FUNCTION pg_temp.timed_tg(dk text, en boolean) RETURNS jsonb LANGUAGE plpgsql AS $h$
+DECLARE r jsonb;
+BEGIN
+  IF NOT en THEN EXECUTE 'ALTER TABLE public.cloud_deal_checklist_items DISABLE TRIGGER cloud_deal_checklist_items_part_app'; END IF;
+  r := pg_temp.timed(dk) || jsonb_build_object('trigger', en);
+  IF NOT en THEN EXECUTE 'ALTER TABLE public.cloud_deal_checklist_items ENABLE TRIGGER cloud_deal_checklist_items_part_app'; END IF;
+  RETURN r;
+END $h$;
+DO $rv0$ BEGIN PERFORM pg_temp.rec('rowver_start', pg_temp.rowver()); END $rv0$;
 -- BACKLOG-4263 PR-11a harness: fixtures, loaded BEFORE the migration (inside the same rolled-back call).
 -- Users A and B (one organization, cloud entitlement and checklists enabled by a plan override), deals and todos made
 -- by the real producers (cloud_upsert_deal, cloud_todo_push), AI-app connections for A (an 'anthropic' one whose
@@ -284,14 +304,14 @@ BEGIN
     PERFORM pg_temp.rec('fx_on_' || k, pg_temp.onoff(pg_temp.id(k), true) -> 'success');
   END LOOP;
 
-  -- deal D1 (A): My items m1..m8; deals T1..T6 (B, so A's pull page holds only D1) for the timing runs, one checklist each
+  -- deal D1 (A): My items m1..m8; deals T1..T12 (B, so A's pull page holds only D1) for the timing runs, one checklist each
   r := pg_temp.deal(A, pg_temp.dp(IA, 'd1'));
   PERFORM pg_temp.put('D1', r -> 'results' -> 0 ->> 'cloud_id');
   r := pg_temp.push(A, IA, jsonb_build_array(pg_temp.cc(pg_temp.id('D1'), 'd1-my', 'keepr:my-items', 'My items', 0))
          || (SELECT jsonb_agg(pg_temp.ci(pg_temp.id('D1'), 'd1-my', 'm' || x, 'Fixture item ' || x, x)) FROM generate_series(1, 8) x));
   PERFORM pg_temp.rec('fx_push_D1', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   FOR n IN 1 .. 8 LOOP PERFORM pg_temp.put('m' || n, pg_temp.item_of(pg_temp.id('D1'), 'm' || n)::text); END LOOP;
-  FOR n IN 1 .. 6 LOOP
+  FOR n IN 1 .. 12 LOOP
     r := pg_temp.deal(B, pg_temp.dp(IB, 't' || n));
     PERFORM pg_temp.put('T' || n, r -> 'results' -> 0 ->> 'cloud_id');
     r := pg_temp.push(B, IB, jsonb_build_array(pg_temp.cc(pg_temp.id('T' || n), 't' || n || '-my', 'keepr:my-items', 'My items', 0)));
@@ -337,17 +357,17 @@ CREATE FUNCTION pg_temp.payload248() RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
        "expected_document_type": null, "is_checked": false, "note": "   ", "sort_order": 0, "links": []}]}
   ]'::jsonb $h$;
 DO $before11a$
-DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); a text; s0 bigint; r jsonb;
+DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); ans text; s0 bigint; r jsonb;
 BEGIN
   PERFORM pg_temp.rec('cat_before', pg_temp.cat());
   PERFORM pg_temp.put('cat_before', pg_temp.cat()::text);
   PERFORM pg_temp.rec('triggers_on_items_before', to_jsonb(pg_temp.cat() ->> 'triggers_items'));
   PERFORM pg_temp.rec('ledger_max_before', to_jsonb((SELECT max(version) FROM supabase_migrations.schema_migrations)));
   -- G1a: the old function on the 2.48.0 payload
-  a := pg_temp.snap(A, pg_temp.id('S_old'), pg_temp.payload248());
-  PERFORM pg_temp.put('g1_old_answer', a);
+  ans := pg_temp.snap(A, pg_temp.id('S_old'), pg_temp.payload248());
+  PERFORM pg_temp.put('g1_old_answer', ans);
   PERFORM pg_temp.put('g1_old_rows', pg_temp.items(pg_temp.id('S_old'))::text);
-  PERFORM pg_temp.rec('g1_old_answer', pg_temp.j(a));
+  PERFORM pg_temp.rec('g1_old_answer', pg_temp.j(ans));
   -- S3 / G3 before
   PERFORM pg_temp.put('s3_before', pg_temp.refusals()::text);
   PERFORM pg_temp.rec('s3_before', pg_temp.fxv('s3_before')::jsonb);
@@ -735,7 +755,7 @@ GRANT EXECUTE ON FUNCTION public.snapshot_submission_checklists(uuid, jsonb) TO 
 $migg2$;
     PERFORM pg_temp.rec('g2', '"APPLIED (bad)"');
   EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_temp.rec('g2', jsonb_build_object('mutation', 'MUTATION APPLIED: '18168cc44ba03fadbd0de896e59806ea' -> '18168cc44ba03fadbd0de896e59806eb' in the pre-check',
+    PERFORM pg_temp.rec('g2', jsonb_build_object('mutation', 'MUTATION APPLIED: ''18168cc44ba03fadbd0de896e59806ea'' -> ''18168cc44ba03fadbd0de896e59806eb'' in the pre-check',
                                                  'sqlstate', SQLSTATE, 'msg', left(SQLERRM, 200), 'catalogue_unchanged', pg_temp.cat() = c0));
   END;
 END
@@ -1111,7 +1131,7 @@ REVOKE EXECUTE ON FUNCTION public.snapshot_submission_checklists(uuid, jsonb) FR
 GRANT EXECUTE ON FUNCTION public.snapshot_submission_checklists(uuid, jsonb) TO authenticated, service_role;
 INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES ('20261119100000', 'backlog_4263_todo_part_app', ARRAY['-- harness-11a']);
 DO $after11a$
-DECLARE c jsonb; v text; w text; k text; q text; r jsonb := '{}';
+DECLARE c jsonb; v text; w text; k text; q text; r jsonb := '{}'; br jsonb;
 BEGIN
   PERFORM pg_temp.rec('rowver_after_apply', pg_temp.rowver());
   PERFORM pg_temp.rec('rows_unchanged_by_apply', to_jsonb(pg_temp.rowver() = pg_temp.fxv('rowver_before')::jsonb));
@@ -1504,7 +1524,7 @@ $migrerun$;
     'part_app_secdef', (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = to_regprocedure('public._cloud_todo_part_app()'))));
   -- the CHECK texts the post-check pins (report only there), from pg_get_constraintdef
   SELECT jsonb_object_agg(x.k, jsonb_build_array(x.got = x.want, CASE WHEN x.got = x.want THEN NULL ELSE x.got END)) INTO r
-    FROM (VALUES ('cloud_deal_checklist_items.cloud_deal_checklist_items_done_app_ck', 'CHECK (((done_app IS NULL) OR (done_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.cloud_deal_checklist_items'::regclass AND c.conname = 'cloud_deal_checklist_items_done_app_ck')), ('cloud_deal_checklist_items.cloud_deal_checklist_items_note_app_ck', 'CHECK (((note_app IS NULL) OR (note_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.cloud_deal_checklist_items'::regclass AND c.conname = 'cloud_deal_checklist_items_note_app_ck')), ('submission_checklist_items.submission_checklist_items_attribution_v_ck', 'CHECK (((attribution_v IS NULL) OR (attribution_v = 1)))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_attribution_v_ck')), ('submission_checklist_items.submission_checklist_items_note_by_kind_ck', 'CHECK (((note_by_kind IS NULL) OR (note_by_kind = ANY (ARRAY[''agent''::text, ''ai_app''::text]))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_note_by_kind_ck')), ('submission_checklist_items.submission_checklist_items_note_by_app_ck', 'CHECK (((note_by_app IS NULL) OR (note_by_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_note_by_app_ck')), ('submission_checklist_items.submission_checklist_items_note_by_app_kind_ck', 'CHECK (((note_by_app IS NULL) OR ((note_by_kind IS NOT NULL) AND (note_by_kind = ''ai_app''::text))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_note_by_app_kind_ck')), ('submission_checklist_items.submission_checklist_items_note_by_note_ck', 'CHECK (((note_by_kind IS NULL) OR (NULLIF(btrim(note), ''''::text) IS NOT NULL)))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_note_by_note_ck')), ('submission_checklist_items.submission_checklist_items_note_by_v_ck', 'CHECK (((note_by_kind IS NULL) OR ((attribution_v IS NOT NULL) AND (attribution_v = 1))))', (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.submission_checklist_items'::regclass AND c.conname = 'submission_checklist_items_note_by_v_ck'))) x(k, want, got);
+    FROM (VALUES ('cloud_deal_checklist_items.cloud_deal_checklist_items_done_app_ck', 'CHECK (((done_app IS NULL) OR (done_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.cloud_deal_checklist_items'::regclass AND cn.conname = 'cloud_deal_checklist_items_done_app_ck')), ('cloud_deal_checklist_items.cloud_deal_checklist_items_note_app_ck', 'CHECK (((note_app IS NULL) OR (note_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.cloud_deal_checklist_items'::regclass AND cn.conname = 'cloud_deal_checklist_items_note_app_ck')), ('submission_checklist_items.submission_checklist_items_attribution_v_ck', 'CHECK (((attribution_v IS NULL) OR (attribution_v = 1)))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_attribution_v_ck')), ('submission_checklist_items.submission_checklist_items_note_by_kind_ck', 'CHECK (((note_by_kind IS NULL) OR (note_by_kind = ANY (ARRAY[''agent''::text, ''ai_app''::text]))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_note_by_kind_ck')), ('submission_checklist_items.submission_checklist_items_note_by_app_ck', 'CHECK (((note_by_app IS NULL) OR (note_by_app = ANY (ARRAY[''anthropic''::text, ''openai''::text]))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_note_by_app_ck')), ('submission_checklist_items.submission_checklist_items_note_by_app_kind_ck', 'CHECK (((note_by_app IS NULL) OR ((note_by_kind IS NOT NULL) AND (note_by_kind = ''ai_app''::text))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_note_by_app_kind_ck')), ('submission_checklist_items.submission_checklist_items_note_by_note_ck', 'CHECK (((note_by_kind IS NULL) OR (NULLIF(btrim(note), ''''::text) IS NOT NULL)))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_note_by_note_ck')), ('submission_checklist_items.submission_checklist_items_note_by_v_ck', 'CHECK (((note_by_kind IS NULL) OR ((attribution_v IS NOT NULL) AND (attribution_v = 1))))', (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.submission_checklist_items'::regclass AND cn.conname = 'submission_checklist_items_note_by_v_ck'))) x(k, want, got);
   PERFORM pg_temp.rec('checkdefs_match', r);
   -- the post-check files
   FOR k, q IN SELECT * FROM (VALUES ('20261119100000', $pcw1$-- postcheck-20261119100000.sql  (generated by supabase/tests/backlog-4263-prod/gen.py; do not hand-edit)
@@ -4252,6 +4272,7 @@ SELECT CASE WHEN f.must IS NULL THEN 'ok'
       ('trigger_columns', 'DROP TRIGGER cloud_deal_checklist_items_part_app ON public.cloud_deal_checklist_items; CREATE TRIGGER cloud_deal_checklist_items_part_app BEFORE INSERT OR UPDATE OF done_rev, done_by ON public.cloud_deal_checklist_items FOR EACH ROW EXECUTE FUNCTION public._cloud_todo_part_app()'),
       ('snapshot_granted_anon', 'GRANT EXECUTE ON FUNCTION public.snapshot_submission_checklists(uuid, jsonb) TO anon'),
       ('check_dropped', 'ALTER TABLE public.submission_checklist_items DROP CONSTRAINT submission_checklist_items_note_by_app_kind_ck')) y(a, b) LOOP
+    br := NULL;
     BEGIN
       EXECUTE q;
       BEGIN
@@ -4549,13 +4570,14 @@ SELECT CASE WHEN f.must IS NULL THEN 'ok'
                        c.id || ': want ' || coalesce(c.want, '(null)') || ', got ' || coalesce(c.got, '(null)') AS line
                   FROM checks c LEFT JOIN rule r ON r.kind = c.kind
                  WHERE c.got IS DISTINCT FROM c.want) d) f$pcw5$ INTO v, w;
-        PERFORM pg_temp.rec('break_' || k, jsonb_build_object('postcheck', v, 'report_only', left(w, 600)));
-      EXCEPTION WHEN OTHERS THEN PERFORM pg_temp.rec('break_' || k, jsonb_build_object('error', left(SQLERRM, 900)));
+        br := jsonb_build_object('postcheck', v, 'report_only', left(w, 600));
+      EXCEPTION WHEN OTHERS THEN br := jsonb_build_object('error', left(SQLERRM, 900));
       END;
       RAISE EXCEPTION USING ERRCODE = 'MX003';
     EXCEPTION WHEN SQLSTATE 'MX003' THEN NULL;
-              WHEN OTHERS THEN PERFORM pg_temp.rec('break_' || k, jsonb_build_object('break_error', left(SQLERRM, 300)));
+              WHEN OTHERS THEN br := jsonb_build_object('break_error', left(SQLERRM, 300));
     END;
+    PERFORM pg_temp.rec('break_' || k, br);
   END LOOP;
 END
 $after11a$;
@@ -4772,13 +4794,6 @@ BEGIN
 END $h$;
 
 -- S3: every existing structural refusal still raises 22023 invalid_payload, as before the migration
-CREATE FUNCTION pg_temp.refusals() RETURNS jsonb LANGUAGE sql AS $h$
-  SELECT jsonb_agg(left(pg_temp.snap(pg_temp.id('A'), CASE WHEN x.n = 7 THEN NULL ELSE pg_temp.id('S_sweep') END, x.p), 30) ORDER BY x.n)
-    FROM (VALUES
-      (1, '{}'::jsonb), (2, '[1]'), (3, '[{"template_name":"X","items":{}}]'), (4, '[{"template_name":"X","items":[1]}]'),
-      (5, '[{"template_name":"X","items":[{"title":"I","links":{}}]}]'),
-      (6, '[{"template_name":"X","items":[{"title":"I","links":[{"kind":"fax","label":"F","local_ids":["x"]}]}]}]'),
-      (7, '[]')) x(n, p) $h$;
 CREATE FUNCTION pg_temp.c_s3() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE now_ jsonb := pg_temp.refusals(); before_ jsonb := pg_temp.fxv('s3_before')::jsonb;
 BEGIN
@@ -5373,6 +5388,11 @@ DO $tail11a$
 DECLARE c0 jsonb := pg_temp.fxv('cat_before')::jsonb; c1 jsonb; d jsonb := '{}'; k text;
 BEGIN
   PERFORM pg_temp.rec('timing_after', jsonb_build_array(pg_temp.timed('T4'), pg_temp.timed('T5'), pg_temp.timed('T6')));
+  -- the trigger's own cost, after the apply: the same push with the trigger enabled and disabled, alternating
+  -- (on, off, off, on, on, off) so that the growth of the tables during this call falls on both sides
+  PERFORM pg_temp.rec('timing_trigger_on_off', (SELECT jsonb_agg(pg_temp.timed_tg(x.dk, x.en) ORDER BY x.o)
+     FROM (VALUES (1, 'T7', true), (2, 'T8', false), (3, 'T9', false), (4, 'T10', true), (5, 'T11', true), (6, 'T12', false)) x(o, dk, en)));
+  PERFORM pg_temp.rec('trigger_enabled_after_timing', to_jsonb((SELECT t.tgenabled::text FROM pg_trigger t WHERE t.tgname = 'cloud_deal_checklist_items_part_app')));
   -- G1b: the rows the new function wrote, as the 6ffea3c39 loader selects them (checklists.ts:142-145, :160), ids dropped
   PERFORM pg_temp.rec('g1b_rows_as_loaded', (SELECT jsonb_agg(jsonb_build_object('title', i.title, 'description', i.description,
             'is_required', i.is_required, 'is_checked', i.is_checked, 'note', i.note, 'sort_order', i.sort_order, 'reviewer_checked', i.reviewer_checked,
@@ -5676,6 +5696,6 @@ $rb11a$;
     PERFORM pg_temp.rec('rollback', jsonb_build_object('ran', true, 'catalogue_differences_from_before', d));
   EXCEPTION WHEN OTHERS THEN PERFORM pg_temp.rec('rollback', jsonb_build_object('error', left(SQLERRM, 600)));
   END;
-  RAISE EXCEPTION 'H11A %', (SELECT jsonb_object_agg(k, v ORDER BY o) FROM pg_temp.h_out);
+  RAISE EXCEPTION 'H11A %', (SELECT jsonb_object_agg(h.k, h.v ORDER BY h.o) FROM pg_temp.h_out h);
 END
 $tail11a$;

@@ -60,6 +60,6 @@
     }
   },
   "rollback_md5": "dafcf8bfa4637d0cc6b3e65247853cb6",
-  "harness_md5": "5045c2a2520ba4e11ec52dff0565a2c9",
+  "harness_md5": "a74c1c314e6179e82156e48b0f1d7653",
   "trigger_want": "public._cloud_todo_part_app | BEFORE | insert=true update=true delete=false truncate=false | columns done_rev,done_by,note_rev,note_by | row=true | when=false | enabled=O"
 }

@@ -189,17 +189,17 @@ END
 $guard11a$;
 """
 BEFORE = """DO $before11a$
-DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); a text; s0 bigint; r jsonb;
+DECLARE A uuid := pg_temp.id('A'); B uuid := pg_temp.id('B'); ans text; s0 bigint; r jsonb;
 BEGIN
   PERFORM pg_temp.rec('cat_before', pg_temp.cat());
   PERFORM pg_temp.put('cat_before', pg_temp.cat()::text);
   PERFORM pg_temp.rec('triggers_on_items_before', to_jsonb(pg_temp.cat() ->> 'triggers_items'));
   PERFORM pg_temp.rec('ledger_max_before', to_jsonb((SELECT max(version) FROM supabase_migrations.schema_migrations)));
   -- G1a: the old function on the 2.48.0 payload
-  a := pg_temp.snap(A, pg_temp.id('S_old'), pg_temp.payload248());
-  PERFORM pg_temp.put('g1_old_answer', a);
+  ans := pg_temp.snap(A, pg_temp.id('S_old'), pg_temp.payload248());
+  PERFORM pg_temp.put('g1_old_answer', ans);
   PERFORM pg_temp.put('g1_old_rows', pg_temp.items(pg_temp.id('S_old'))::text);
-  PERFORM pg_temp.rec('g1_old_answer', pg_temp.j(a));
+  PERFORM pg_temp.rec('g1_old_answer', pg_temp.j(ans));
   -- S3 / G3 before
   PERFORM pg_temp.put('s3_before', pg_temp.refusals()::text);
   PERFORM pg_temp.rec('s3_before', pg_temp.fxv('s3_before')::jsonb);
@@ -220,7 +220,7 @@ BEGIN
     EXECUTE {dq(MIG_G2, '$migg2$')};
     PERFORM pg_temp.rec('g2', '"APPLIED (bad)"');
   EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_temp.rec('g2', jsonb_build_object('mutation', 'MUTATION APPLIED: {G2_FROM} -> {G2_TO} in the pre-check',
+    PERFORM pg_temp.rec('g2', jsonb_build_object('mutation', {edits_lit('MUTATION APPLIED: ' + G2_FROM + ' -> ' + G2_TO + ' in the pre-check')},
                                                  'sqlstate', SQLSTATE, 'msg', left(SQLERRM, 200), 'catalogue_unchanged', pg_temp.cat() = c0));
   END;
 END
@@ -228,7 +228,7 @@ $g2_11a$;
 """
 LEDGER = f"INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES ('{VERSION}', '{NAME}', ARRAY['-- harness-11a']);\n"
 AFTER = f"""DO $after11a$
-DECLARE c jsonb; v text; w text; k text; q text; r jsonb := '{{}}';
+DECLARE c jsonb; v text; w text; k text; q text; r jsonb := '{{}}'; br jsonb;
 BEGIN
   PERFORM pg_temp.rec('rowver_after_apply', pg_temp.rowver());
   PERFORM pg_temp.rec('rows_unchanged_by_apply', to_jsonb(pg_temp.rowver() = pg_temp.fxv('rowver_before')::jsonb));
@@ -253,7 +253,7 @@ BEGIN
     'part_app_secdef', (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = to_regprocedure('{SIG_PART}'))));
   -- the CHECK texts the post-check pins (report only there), from pg_get_constraintdef
   SELECT jsonb_object_agg(x.k, jsonb_build_array(x.got = x.want, CASE WHEN x.got = x.want THEN NULL ELSE x.got END)) INTO r
-    FROM (VALUES {', '.join(f"({edits_lit(k)}, {edits_lit(v)}, (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.{k.split('.')[0]}'::regclass AND c.conname = {edits_lit(k.split('.')[1])}))" for k, v in WANT_DEF.items())}) x(k, want, got);
+    FROM (VALUES {', '.join(f"({edits_lit(k)}, {edits_lit(v)}, (SELECT pg_get_constraintdef(cn.oid) FROM pg_constraint cn WHERE cn.conrelid = 'public.{k.split('.')[0]}'::regclass AND cn.conname = {edits_lit(k.split('.')[1])}))" for k, v in WANT_DEF.items())}) x(k, want, got);
   PERFORM pg_temp.rec('checkdefs_match', r);
   -- the post-check files
   FOR k, q IN SELECT * FROM (VALUES ('{VERSION}', {dq(PC[VERSION], '$pcw1$')}), ('final-write', {dq(PC['final-write'], '$pcw2$')}),
@@ -271,17 +271,19 @@ BEGIN
       ('trigger_columns', 'DROP TRIGGER cloud_deal_checklist_items_part_app ON public.cloud_deal_checklist_items; CREATE TRIGGER cloud_deal_checklist_items_part_app BEFORE INSERT OR UPDATE OF done_rev, done_by ON public.cloud_deal_checklist_items FOR EACH ROW EXECUTE FUNCTION public._cloud_todo_part_app()'),
       ('snapshot_granted_anon', 'GRANT EXECUTE ON FUNCTION public.snapshot_submission_checklists(uuid, jsonb) TO anon'),
       ('check_dropped', 'ALTER TABLE public.submission_checklist_items DROP CONSTRAINT submission_checklist_items_note_by_app_kind_ck')) y(a, b) LOOP
+    br := NULL;
     BEGIN
       EXECUTE q;
       BEGIN
         EXECUTE {dq(PC[VERSION], '$pcw5$')} INTO v, w;
-        PERFORM pg_temp.rec('break_' || k, jsonb_build_object('postcheck', v, 'report_only', left(w, 600)));
-      EXCEPTION WHEN OTHERS THEN PERFORM pg_temp.rec('break_' || k, jsonb_build_object('error', left(SQLERRM, 900)));
+        br := jsonb_build_object('postcheck', v, 'report_only', left(w, 600));
+      EXCEPTION WHEN OTHERS THEN br := jsonb_build_object('error', left(SQLERRM, 900));
       END;
       RAISE EXCEPTION USING ERRCODE = 'MX003';
     EXCEPTION WHEN SQLSTATE 'MX003' THEN NULL;
-              WHEN OTHERS THEN PERFORM pg_temp.rec('break_' || k, jsonb_build_object('break_error', left(SQLERRM, 300)));
+              WHEN OTHERS THEN br := jsonb_build_object('break_error', left(SQLERRM, 300));
     END;
+    PERFORM pg_temp.rec('break_' || k, br);
   END LOOP;
 END
 $after11a$;
@@ -313,6 +315,11 @@ TAIL = f"""DO $tail11a$
 DECLARE c0 jsonb := pg_temp.fxv('cat_before')::jsonb; c1 jsonb; d jsonb := '{{}}'; k text;
 BEGIN
   PERFORM pg_temp.rec('timing_after', jsonb_build_array(pg_temp.timed('T4'), pg_temp.timed('T5'), pg_temp.timed('T6')));
+  -- the trigger's own cost, after the apply: the same push with the trigger enabled and disabled, alternating
+  -- (on, off, off, on, on, off) so that the growth of the tables during this call falls on both sides
+  PERFORM pg_temp.rec('timing_trigger_on_off', (SELECT jsonb_agg(pg_temp.timed_tg(x.dk, x.en) ORDER BY x.o)
+     FROM (VALUES (1, 'T7', true), (2, 'T8', false), (3, 'T9', false), (4, 'T10', true), (5, 'T11', true), (6, 'T12', false)) x(o, dk, en)));
+  PERFORM pg_temp.rec('trigger_enabled_after_timing', to_jsonb((SELECT t.tgenabled::text FROM pg_trigger t WHERE t.tgname = 'cloud_deal_checklist_items_part_app')));
   -- G1b: the rows the new function wrote, as the 6ffea3c39 loader selects them (checklists.ts:142-145, :160), ids dropped
   PERFORM pg_temp.rec('g1b_rows_as_loaded', (SELECT jsonb_agg(jsonb_build_object('title', i.title, 'description', i.description,
             'is_required', i.is_required, 'is_checked', i.is_checked, 'note', i.note, 'sort_order', i.sort_order, 'reviewer_checked', i.reviewer_checked,
@@ -333,7 +340,7 @@ BEGIN
     PERFORM pg_temp.rec('rollback', jsonb_build_object('ran', true, 'catalogue_differences_from_before', d));
   EXCEPTION WHEN OTHERS THEN PERFORM pg_temp.rec('rollback', jsonb_build_object('error', left(SQLERRM, 600)));
   END;
-  RAISE EXCEPTION 'H11A %', (SELECT jsonb_object_agg(k, v ORDER BY o) FROM pg_temp.h_out);
+  RAISE EXCEPTION 'H11A %', (SELECT jsonb_object_agg(h.k, h.v ORDER BY h.o) FROM pg_temp.h_out h);
 END
 $tail11a$;
 """
@@ -351,7 +358,8 @@ $g1b11a$;
 harness = ("-- harness-11a.sql (generated by supabase/tests/backlog-4263-pr11/gen.py; do not hand-edit)\n"
            "-- TEST DATABASE ONLY. One call; ends in RAISE, so nothing is kept. Run: ~/.claude/bin/kt-sql harness-11a.sql,\n"
            "-- then ~/.claude/bin/kt-sql -c \"select extensions.pg_stat_statements_reset()\". Read: python3 gen.py report <output>.\n"
-           + GUARD + "SET LOCAL lock_timeout = '10s';\n" + lib('helpers.sql') + lib('observe.sql') + lib('fixtures.sql') + BEFORE + G2
+           + GUARD + "SET LOCAL lock_timeout = '10s';\n" + lib('helpers.sql') + lib('observe.sql')
+           + "DO $rv0$ BEGIN PERFORM pg_temp.rec('rowver_start', pg_temp.rowver()); END $rv0$;\n" + lib('fixtures.sql') + BEFORE + G2
            + "DO $rv$ BEGIN PERFORM pg_temp.put('rowver_before', pg_temp.rowver()::text); END $rv$;\n"
            + mig + LEDGER + AFTER + lib('controls.sql') + CTL + ''.join(mutant_block(i, mt) for i, mt in enumerate(MUT)) + G1B + TAIL)
 

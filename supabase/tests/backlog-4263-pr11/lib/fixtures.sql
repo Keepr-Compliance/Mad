@@ -31,14 +31,14 @@ BEGIN
     PERFORM pg_temp.rec('fx_on_' || k, pg_temp.onoff(pg_temp.id(k), true) -> 'success');
   END LOOP;
 
-  -- deal D1 (A): My items m1..m8; deals T1..T6 (B, so A's pull page holds only D1) for the timing runs, one checklist each
+  -- deal D1 (A): My items m1..m8; deals T1..T12 (B, so A's pull page holds only D1) for the timing runs, one checklist each
   r := pg_temp.deal(A, pg_temp.dp(IA, 'd1'));
   PERFORM pg_temp.put('D1', r -> 'results' -> 0 ->> 'cloud_id');
   r := pg_temp.push(A, IA, jsonb_build_array(pg_temp.cc(pg_temp.id('D1'), 'd1-my', 'keepr:my-items', 'My items', 0))
          || (SELECT jsonb_agg(pg_temp.ci(pg_temp.id('D1'), 'd1-my', 'm' || x, 'Fixture item ' || x, x)) FROM generate_series(1, 8) x));
   PERFORM pg_temp.rec('fx_push_D1', (SELECT jsonb_agg(DISTINCT x ->> 'status') FROM jsonb_array_elements(r -> 'results') x));
   FOR n IN 1 .. 8 LOOP PERFORM pg_temp.put('m' || n, pg_temp.item_of(pg_temp.id('D1'), 'm' || n)::text); END LOOP;
-  FOR n IN 1 .. 6 LOOP
+  FOR n IN 1 .. 12 LOOP
     r := pg_temp.deal(B, pg_temp.dp(IB, 't' || n));
     PERFORM pg_temp.put('T' || n, r -> 'results' -> 0 ->> 'cloud_id');
     r := pg_temp.push(B, IB, jsonb_build_array(pg_temp.cc(pg_temp.id('T' || n), 't' || n || '-my', 'keepr:my-items', 'My items', 0)));

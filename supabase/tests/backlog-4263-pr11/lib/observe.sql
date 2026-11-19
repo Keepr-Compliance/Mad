@@ -30,11 +30,11 @@ CREATE FUNCTION pg_temp.cat() RETURNS jsonb LANGUAGE sql STABLE AS $h$
     'acl_sub', (SELECT c.relacl::text FROM pg_class c WHERE c.oid = 'public.submission_checklist_items'::regclass),
     'rls', (SELECT jsonb_agg(jsonb_build_array(c.relname, c.relrowsecurity, c.relforcerowsecurity) ORDER BY c.relname) FROM pg_class c
              WHERE c.oid IN ('public.cloud_deal_checklist_items'::regclass, 'public.submission_checklist_items'::regclass)),
-    'policies', (SELECT jsonb_agg(jsonb_build_array(y.polrelid::regclass::text, y.polname, y.polcmd, y.polroles::regrole[]::text,
+    'policies', (SELECT jsonb_agg(jsonb_build_array(y.polrelid::regclass::text, y.polname, y.polcmd::text, y.polroles::regrole[]::text,
                                                     md5(coalesce(pg_get_expr(y.polqual, y.polrelid), '')), md5(coalesce(pg_get_expr(y.polwithcheck, y.polrelid), '')))
                                   ORDER BY y.polrelid::regclass::text, y.polname) FROM pg_policy y
                   WHERE y.polrelid IN ('public.cloud_deal_checklist_items'::regclass, 'public.submission_checklist_items'::regclass)),
-    'insert_policy', (SELECT y.polname || ' ' || y.polcmd || ' ' || y.polroles::regrole[]::text FROM pg_policy y
+    'insert_policy', (SELECT y.polname || ' ' || y.polcmd::text || ' ' || y.polroles::regrole[]::text FROM pg_policy y
                        WHERE y.polrelid = 'public.submission_checklist_items'::regclass AND y.polcmd = 'a'),
     'fn_count_public', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace),
     'anon_mcp', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_'
@@ -69,4 +69,14 @@ BEGIN
     'created', (SELECT count(*) FROM jsonb_array_elements(r1 -> 'results') x WHERE x ->> 'status' = 'added'),
     'set', (SELECT count(*) FROM jsonb_array_elements(r2 -> 'results') x WHERE x ->> 'status' = 'applied'),
     'err', coalesce(r1 ->> 'error', r2 ->> 'error'));
+END $h$;
+
+-- timed() with the trigger enabled or disabled for the length of the run (after the apply only)
+CREATE FUNCTION pg_temp.timed_tg(dk text, en boolean) RETURNS jsonb LANGUAGE plpgsql AS $h$
+DECLARE r jsonb;
+BEGIN
+  IF NOT en THEN EXECUTE 'ALTER TABLE public.cloud_deal_checklist_items DISABLE TRIGGER cloud_deal_checklist_items_part_app'; END IF;
+  r := pg_temp.timed(dk) || jsonb_build_object('trigger', en);
+  IF NOT en THEN EXECUTE 'ALTER TABLE public.cloud_deal_checklist_items ENABLE TRIGGER cloud_deal_checklist_items_part_app'; END IF;
+  RETURN r;
 END $h$;

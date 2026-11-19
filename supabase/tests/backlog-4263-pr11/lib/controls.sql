@@ -211,13 +211,6 @@ BEGIN
 END $h$;
 
 -- S3: every existing structural refusal still raises 22023 invalid_payload, as before the migration
-CREATE FUNCTION pg_temp.refusals() RETURNS jsonb LANGUAGE sql AS $h$
-  SELECT jsonb_agg(left(pg_temp.snap(pg_temp.id('A'), CASE WHEN x.n = 7 THEN NULL ELSE pg_temp.id('S_sweep') END, x.p), 30) ORDER BY x.n)
-    FROM (VALUES
-      (1, '{}'::jsonb), (2, '[1]'), (3, '[{"template_name":"X","items":{}}]'), (4, '[{"template_name":"X","items":[1]}]'),
-      (5, '[{"template_name":"X","items":[{"title":"I","links":{}}]}]'),
-      (6, '[{"template_name":"X","items":[{"title":"I","links":[{"kind":"fax","label":"F","local_ids":["x"]}]}]}]'),
-      (7, '[]')) x(n, p) $h$;
 CREATE FUNCTION pg_temp.c_s3() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE now_ jsonb := pg_temp.refusals(); before_ jsonb := pg_temp.fxv('s3_before')::jsonb;
 BEGIN
