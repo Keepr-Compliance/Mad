@@ -1,0 +1,65 @@
+{
+  "migration_file_md5": "8ec19054c39ee62ea6b359e7c1f46ccb",
+  "bodies": {
+    "item_json_old": "dadfcc2f94a1bac429089ef4aa7b0d5b",
+    "item_json_new": "b931d25ccca30e23f3098b35b8b9e1b3",
+    "snapshot_old": "18168cc44ba03fadbd0de896e59806ea",
+    "snapshot_new": "0c0114b0e98d4ee3f9d473d94c79652a",
+    "part_app": "73b8a7401e2535dd978a0921feada6ff"
+  },
+  "mutants": {
+    "M1a_lookup_on_every_write": {
+      "md5": "b3e5ab573d6a2238307019c3fdf67a6d",
+      "controls": [
+        "c_t1"
+      ],
+      "line": "PERFORM 1 FROM public.mcp_connections c WHERE c.user_id = NEW.owner_user_id;\n  IF v_done THEN"
+    },
+    "M1b_case_subselect_form": {
+      "md5": "5459952330bb7a67dae0ff98e25edc0c",
+      "controls": [
+        "c_t1",
+        "c_t2"
+      ],
+      "line": "IF v_done THEN\n    NEW.done_app := CASE WHEN left(NEW.done_by, 7) = 'ai_app:' AND substr(NEW.done_by, 8) ~ v_re\n      THEN (SELECT c.provider FROM public.mcp_connections c WHERE c.id = substr(NEW.done"
+    },
+    "M2_cast_without_regex": {
+      "md5": "e13986c70cf2bbb79c6000e0a6f45b28",
+      "controls": [
+        "c_t6"
+      ],
+      "line": "IF true THEN                                                                        /*APP:ref*/"
+    },
+    "M3_recompute_always": {
+      "md5": "77123b7a7cc42405195e73c31fefe850",
+      "controls": [
+        "c_t7"
+      ],
+      "line": "v_done := true;                                         /*APP:rev*/"
+    },
+    "M6_never_cleared": {
+      "md5": "1e25f6ac018dafb8d88f6f23364e54d0",
+      "controls": [
+        "c_t3"
+      ],
+      "line": "(line removed: NEW.note_app := NULL;)"
+    },
+    "M5_snapshot_unchecked_values": {
+      "md5": "6dc8b7c174a1b196a125466c37fe18e9",
+      "controls": [
+        "c_s2"
+      ],
+      "line": "CASE WHEN jsonb_typeof(it -> 'attribution_v') = 'number' THEN (it ->> 'attribution_v')::numeric::smallint END,\n              it -> 'note_by' ->> 'kind', it -> 'note_by' ->> 'app')"
+    },
+    "M7_item_json_without_app": {
+      "md5": "43d9f78441097626fceab8bd49c319d4",
+      "controls": [
+        "c_t2"
+      ],
+      "line": "),"
+    }
+  },
+  "rollback_md5": "dafcf8bfa4637d0cc6b3e65247853cb6",
+  "harness_md5": "a74c1c314e6179e82156e48b0f1d7653",
+  "trigger_want": "public._cloud_todo_part_app | BEFORE | insert=true update=true delete=false truncate=false | columns done_rev,done_by,note_rev,note_by | row=true | when=false | enabled=O"
+}

@@ -127,7 +127,8 @@
     "value",
     "at",
     "by",
-    "edit_seq"
+    "edit_seq",
+    "app"
   ],
   "pull": {
     "function": "cloud_todo_pull(p_expected_user_id uuid, p_source_install_id uuid, p_after_seq bigint, p_limit integer, p_horizon bigint DEFAULT NULL)",

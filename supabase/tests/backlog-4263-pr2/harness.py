@@ -346,8 +346,12 @@ if __name__ == '__main__':
         missing = [w for w in words if "'%s'" % w not in MIG]
         if missing:
             raise SystemExit('contract names not in the migration: %s' % missing)
-        for k in C['pull']['fields'] + C['result'] + C['part_shape']:
+        # BACKLOG-4263 PR-11a: 'app' on the done and note parts comes from 20261119100000 (_cloud_todo_item_json replaced)
+        MIG_PARTS = MIG + rd('supabase/migrations/20261119100000_backlog_4263_todo_part_app.sql')
+        for k in C['pull']['fields'] + C['result']:
             assert "'%s'" % k in MIG, k
+        for k in C['part_shape']:
+            assert "'%s'" % k in MIG_PARTS, k
         for k, types in C['field_types'].items():
             if k in ('rule', 'value'):
                 continue

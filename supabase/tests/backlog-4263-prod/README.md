@@ -139,6 +139,36 @@ Expected; each cell lists the MUST HOLD ids that differ.
 | `postcheck-20261118180000.sql` | 20261118190000: passes |
 | `postcheck-20261118190000.sql` | (last migration) |
 
+## The write branch (20261119100000; not part of the read-only release)
+
+`postcheck-<version>.sql` for each write-branch migration and `postcheck-final-write.sql` (the state after the ten and
+the write branch) are generated from the same migration files; their pins are in `expected-write.json`. The ten
+read-only files, `postcheck-final.sql` and `expected.json` are built from the ten migrations only and do not change.
+These files also pin a trigger on a table created before the lane (`pre-lane table trigger`: function, timing, events,
+column list, row level, no WHEN, enabled) and the full list of triggers on that table (`pre-lane table trigger list`).
+
+| File | MUST HOLD | REPORT ONLY | Functions | Pre-lane tables | Added columns | Constraints | Triggers |
+|---|---|---|---|---|---|---|---|
+| `postcheck-20261119100000.sql` | 75 | 15 | 3 | 2 | 5 | 8 | 1 |
+| `postcheck-final-write.sql` | 1298 | 114 | 67 | 7 | 53 | 37 | 1 |
+
+Read-only post-checks run after the write branch (expected; each cell lists the MUST HOLD ids that differ; the ids the
+write branch adds to the table above are in `expected-write.json` → `read_only_postchecks_new_differences_after_write`):
+
+| Post-check | Result after each write-branch migration |
+|---|---|
+| `postcheck-final.sql` | 20261119100000: FAILS (function _cloud_todo_item_json(public.cloud_deal_checklist_items) md5) |
+| `postcheck-20261118100000.sql` | 20261119100000: FAILS (function _mcp_r_list_all_deals(text,date,date,uuid) md5; constraint mcp_call_log.mcp_call_log_tool_check; anon-callable mcp_ functions) |
+| `postcheck-20261118110000.sql` | 20261119100000: FAILS (function _cloud_todo_item_json(public.cloud_deal_checklist_items) md5; function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5; function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists; function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists; function cloud_tombstone(uuid,uuid,text,uuid[]) md5; function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5; function _mcp_r_deal_checklists(uuid,boolean,uuid) md5; anon-callable mcp_ functions) |
+| `postcheck-20261118120000.sql` | 20261119100000: FAILS (anon-callable mcp_ functions) |
+| `postcheck-20261118130000.sql` | 20261119100000: FAILS (function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5; function mcp_refresh(text,bytea,text,text,bytea,bytea) md5; function mcp_authorize_view(text,bytea) md5; constraint mcp_call_log.mcp_call_log_tool_check; anon-callable mcp_ functions) |
+| `postcheck-20261118140000.sql` | 20261119100000: FAILS (anon-callable mcp_ functions) |
+| `postcheck-20261118150000.sql` | 20261119100000: passes |
+| `postcheck-20261118160000.sql` | 20261119100000: passes |
+| `postcheck-20261118170000.sql` | 20261119100000: passes |
+| `postcheck-20261118180000.sql` | 20261119100000: passes |
+| `postcheck-20261118190000.sql` | 20261119100000: passes |
+
 ## Files
 
 | File | What it is |
@@ -147,6 +177,8 @@ Expected; each cell lists the MUST HOLD ids that differ.
 | `postcheck-<version>.sql` | Read-only post-check per migration (ten) |
 | `postcheck-final.sql` | Read-only post-check of the state after all ten |
 | `expected.json` | Pinned facts with labels, callable lists per stage, predicted failures |
+| `postcheck-<write version>.sql`, `postcheck-final-write.sql` | Read-only post-checks of the write branch |
+| `expected-write.json` | Pinned facts of the write branch |
 
 Every `.sql` file in this folder is read-only. The test-database harness (`verify-run.sql`, `verify-controls.sql`) is
 in `../backlog-4263-prod-verify/` and is never run on production.

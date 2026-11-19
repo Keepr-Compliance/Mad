@@ -199,6 +199,11 @@ export interface FakeTodoPart {
   at: number;
   by: string;
   edit_seq: number | null;
+  /**
+   * BACKLOG-4263 PR-11a (migration 20261119100000, trigger _cloud_todo_part_app): the provider on an item's done and
+   * note parts. Set only for an 'ai_app:<connection uuid>' write of that part; any other write of the part clears it.
+   */
+  app?: string | null;
 }
 export interface FakeTodo {
   id: string;
@@ -645,6 +650,8 @@ export class FakeServer {
     const parts: Record<string, JsonValue> = {};
     for (const [k, p] of Object.entries(t.parts)) {
       parts[k] = { rev: p.rev, value: p.value, at: Number.isFinite(p.at) ? new Date(p.at).toISOString() : "-infinity", by: p.by, edit_seq: p.edit_seq };
+      // BACKLOG-4263 PR-11a: _cloud_todo_item_json carries 'app' on the done and note parts of an item only.
+      if (t.entity === "item" && (k === "done" || k === "note")) (parts[k] as Record<string, JsonValue>).app = p.app ?? null;
     }
     return parts;
   }
@@ -898,11 +905,12 @@ export class FakeServer {
   // ------------------------------------------------------------ test helpers: another side's change through the core
 
   /** An AI-app `set` (the core fills the base from the current row, so it is causal): the merge of :793-858. */
-  aiSet(t: FakeTodo, part: string, value: JsonValue, atMs: number = this.serverNow(), ref = "conn-1"): string {
+  aiSet(t: FakeTodo, part: string, value: JsonValue, atMs: number = this.serverNow(), ref = "conn-1", app: string | null = null): string {
     if (t.removed) return "refused_removed";
     const cur = t.parts[part];
     if ((part === "done" ? !!(cur.value as Record<string, JsonValue>)?.is_checked === !!(value as Record<string, JsonValue>)?.is_checked : JSON.stringify(cur.value) === JSON.stringify(value))) return "unchanged";
-    t.parts[part] = { rev: cur.rev + 1, value, at: Math.max(cur.at, atMs), by: `ai_app:${ref}`, edit_seq: null };
+    // app: the connection's provider; the real trigger gives NULL for a ref that is not a connection uuid ("conn-1")
+    t.parts[part] = { rev: cur.rev + 1, value, at: Math.max(cur.at, atMs), by: `ai_app:${ref}`, edit_seq: null, app };
     t.changeSeq = this.nextSeq(t.owner);
     return "applied";
   }
