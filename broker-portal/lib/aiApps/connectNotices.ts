@@ -251,6 +251,6 @@ export async function drainAiAppConnectNotices(): Promise<DrainSummary> {
     }
     summary[result] += 1;
   }
-  if (summary.claimed > 0) console.info(`${LOG} done`, summary);
+  if (summary.failed > 0) console.warn(`${LOG} some notices not sent`, summary);
   return summary;
 }
