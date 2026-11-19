@@ -241,6 +241,7 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       expect(C.turnOffTodos).toBe("Todos removed in the last 30 days can no longer be restored.");
       expect(dialog.textContent).toContain(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffTodos}`);
       expect(dialog.textContent).toMatch(/restored\.Cancel/);
+      expect(dialog.textContent?.split(C.turnOffTodos).length).toBe(2);
       expect(dialog).not.toHaveTextContent(C.turnOffArchive);
       unmount();
       svc.listRemovedDeals.mockResolvedValue([HERE]);
@@ -250,6 +251,17 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       dialog = await screen.findByRole("alertdialog");
       expect(dialog.textContent).toContain(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffArchive} ${C.turnOffTodos}`);
       expect(dialog.textContent).toMatch(/restored\.Cancel/);
+      expect(dialog.textContent?.split(C.turnOffTodos).length).toBe(2);
+    });
+
+    it("opened from the Turn off and delete online copy button while not on: the removed-todos line shows, once, last", async () => {
+      const view: CloudSyncView = { ...ON, status: "needs_confirmation" };
+      render(<KeeprCloudSettings cloud={fakeCloud(view)} />);
+      fireEvent.click(screen.getByRole("button", { name: C.turnOff }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffTodos}`);
+      expect(dialog.textContent).toMatch(/restored\.Cancel/);
+      expect(dialog.textContent?.split(C.turnOffTodos).length).toBe(2);
     });
   });
 });
