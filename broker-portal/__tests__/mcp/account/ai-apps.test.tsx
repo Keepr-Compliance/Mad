@@ -116,8 +116,11 @@ describe('the list', () => {
     mockRpc.mockResolvedValue(listOk([connectionRow()]));
     await renderPage();
     const note = screen.getByText(
-      'Disconnecting in the AI app does not disconnect it here. To disconnect here, remove it on this page.'
+      'Disconnecting in the AI app does not disconnect it here. To disconnect here, use Disconnect on this page.'
     );
+    // the word after "use " is the page's own button label
+    expect(note.textContent).toContain(`use ${AI_APPS.disconnect} on this page.`);
+    expect(within(rows()[0]).getByRole('button', { name: AI_APPS.disconnect })).toBeInTheDocument();
     expect(note.tagName).toBe('P');
     expect(note.className).toBe(screen.getByText(CONSENT.signedInAs(EMAIL)).className);
     expect(note.compareDocumentPosition(rows()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
