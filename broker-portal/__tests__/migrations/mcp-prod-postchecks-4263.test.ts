@@ -7,9 +7,9 @@
  *   independently of gen.py), and each file pins exactly the functions its migration defines;
  * - each post-check is one read-only SELECT: no data-changing or schema-changing keyword outside string
  *   literals, no count(*), no literal UUID;
- * - labels: only four kinds may be REPORT ONLY, and no assertion about PUBLIC, anon, authenticated or service_role
- *   is REPORT ONLY (one named service_role exception for tables created before the lane).
- * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod/verify-run.sql and
+ * - labels: only four kinds may be REPORT ONLY, and no assertion about PUBLIC, anon, authenticated, service_role or
+ *   mcp_reader is REPORT ONLY (one named service_role exception for tables created before the lane).
+ * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod-verify/verify-run.sql and
  * verify-controls.sql).
  */
 
@@ -20,6 +20,7 @@ import { join } from 'path';
 const REPO = join(__dirname, '../../..');
 const MIGRATIONS = join(REPO, 'supabase/migrations');
 const DIR = join(REPO, 'supabase/tests/backlog-4263-prod');
+const VERIFY_DIR = join(REPO, 'supabase/tests/backlog-4263-prod-verify');
 const FIRST = '20261118100000';
 const LAST = '20261118190000';
 const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
@@ -68,14 +69,29 @@ function pinned(pc: string): Map<string, string> {
 const absent = (pc: string): string[] =>
   [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+)\(/g)].map((m) => m[1]);
 
-/** The SQL with comments and single-quoted literals removed. */
-function code(pc: string): string {
+/**
+ * The SQL with comments and string literals removed: `--` to end of line, `/* ... *\/` blocks and '...' literals (with
+ * '' escapes). A "..." identifier keeps its inner text, so a quoted name ("set_config"(...)) is scanned like a bare one. A dollar-quoted body is kept as code (so a DO block's or function's text stays
+ * visible to the keyword scan), and the files here must hold none.
+ */
+function code(pc: string, quoted?: string[]): string {
   let out = '';
   let i = 0;
   while (i < pc.length) {
     if (pc.startsWith('--', i)) {
       const j = pc.indexOf('\n', i);
       i = j < 0 ? pc.length : j;
+    } else if (pc.startsWith('/*', i)) {
+      const j = pc.indexOf('*/', i + 2);
+      if (j < 0) throw new Error('unclosed comment');
+      out += ' ';
+      i = j + 2;
+    } else if (pc[i] === '"') {
+      const j = pc.indexOf('"', i + 1);
+      if (j < 0) throw new Error('unclosed identifier');
+      out += pc.slice(i + 1, j);
+      quoted?.push(pc.slice(i + 1, j));
+      i = j + 1;
     } else if (pc[i] === "'") {
       let j = i + 1;
       for (;;) {
@@ -100,7 +116,7 @@ const REPORT_KINDS = [
   'index predicate text',
   'pre-lane table grants to service_role',
 ];
-const API = ['PUBLIC', 'anon', 'authenticated', 'service_role'];
+const API = ['PUBLIC', 'anon', 'authenticated', 'service_role', 'mcp_reader'];
 /** The rows of one VALUES CTE, each as its list of single-quoted values. */
 function cte(pc: string, head: string): string[][] {
   const i = pc.indexOf(`${head} AS (VALUES\n`);
@@ -108,6 +124,60 @@ function cte(pc: string, head: string): string[][] {
   const body = pc.slice(i, pc.indexOf(')),\n', i) + 2);
   return [...body.matchAll(/^ {4}\((.*)\),?$/gm)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1]));
 }
+
+/**
+ * Every name followed by `(` in the production folder's .sql files, in three groups. Derived by running the scanner
+ * below over the eleven files, not written by hand:
+ *   POSTCHECK_LIST_CALLS=1 npx jest --config broker-portal/jest.config.js \
+ *     broker-portal/__tests__/migrations/mcp-prod-postchecks-4263.test.ts -t 'allowlisted'
+ * A name outside these groups (set_config, nextval, pg_advisory_lock, dblink, pg_sleep, ...) turns the test red.
+ */
+const ALLOWED_FUNCTIONS = new Set<string>([
+  'acldefault', 'aclexplode', 'array_to_string', 'coalesce', 'current_database', 'format_type', 'has_function_privilege',
+  'md5', 'pg_get_constraintdef', 'pg_get_expr', 'regexp_matches', 'string_agg', 'substr', 'to_regclass',
+  'to_regprocedure', 'to_regrole', 'unnest',
+]);
+const ALLOWED_KEYWORDS = new Set<string>(['all', 'and', 'as', 'else', 'exists', 'filter', 'from', 'in', 'lateral', 'select', 'then', 'values', 'where']);
+/**
+ * CTE and alias names. Accepted only where they are defined, with a list of plain column names: `name(a, b) AS (` (a CTE)
+ * or `) name(a, b)` / `ORDINALITY name(a, b)` (an alias). Anywhere else the same name is a call and turns the test red.
+ */
+const ALLOWED_ALIASES = new Set<string>([
+  'anon_want', 'auth_want', 'cdef', 'checks', 'col', 'con', 'fn', 'fx', 'gone', 'idx', 'ipred', 'job', 'led', 'rel',
+  'rule', 'rx', 'sweep_want', 'u', 'x',
+]);
+const COLS = String.raw`\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*\s*\)`;
+/**
+ * The only quoted identifiers the files use, derived by the same scan (it prints POSTCHECK_QUOTED). Any other "..." —
+ * a quoted function name or keyword such as "exists"( — turns the test red, as does a Unicode-escape name (U& / UESCAPE).
+ */
+const ALLOWED_QUOTED = new Set<string>(['C', 'char']);
+/** `name(` tokens in comment- and literal-free SQL (a schema prefix such as pg_catalog. is dropped). */
+const calls = (c: string): string[] => [...c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((m) => m[1].toLowerCase());
+/** The `name(` tokens that are not allowed at their position. */
+function badCalls(c: string): string[] {
+  const bad: string[] = [];
+  for (const m of c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    const name = m[1].toLowerCase();
+    if (ALLOWED_FUNCTIONS.has(name) || ALLOWED_KEYWORDS.has(name)) continue;
+    if (ALLOWED_ALIASES.has(name)) {
+      const at = m.index! + m[0].length - 1;
+      const before = c.slice(0, m.index!);
+      const after = c.slice(at);
+      const cols = new RegExp(`^${COLS}`).exec(after);
+      const cteDef = cols !== null && /^\s*AS\s*\(/i.test(after.slice(cols[0].length));
+      const aliasDef = cols !== null && /(\)|\bORDINALITY)\s*$/i.test(before);
+      if (cteDef || aliasDef) continue;
+    }
+    bad.push(name);
+  }
+  return bad;
+}
+/** Row locks and SELECT ... INTO, which the write-keyword list does not cover. */
+const NOT_READ_ONLY = /\bINTO\b|\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b/i;
+/** Write statements and anything that can change state; matched after comments and literals are removed. */
+const WRITE =
+  /\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|REVOKE|TRUNCATE|SET\s+ROLE|SET|DO|COMMENT|SECURITY\s+LABEL|CALL|COPY|REFRESH|VACUUM|LOCK)\b/gi;
 
 const MIG = new Map(LANE.map((f) => [f.slice(0, 14), read(join(MIGRATIONS, f))]));
 const FILE = (k: string): string => join(DIR, `postcheck-${k}.sql`);
@@ -149,10 +219,74 @@ describe('BACKLOG-4263 production post-checks', () => {
     for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
   });
 
+  it('the production folder holds only read-only files: no verify-* file, and no write statement in any .sql file', () => {
+    const files = readdirSync(DIR);
+    expect(files.filter((f) => f.startsWith('verify-'))).toEqual([]);
+    const sql = files.filter((f) => f.endsWith('.sql')).sort();
+    expect(sql.length).toBe(VERSIONS.length + 1);
+    for (const f of sql) {
+      const c = code(read(join(DIR, f)));
+      expect(`${f}: ${(c.match(WRITE) || []).join(',')}`).toBe(`${f}: `);
+      expect(`${f}: ${c.includes('$')}`).toBe(`${f}: false`);
+      expect(`${f}: ${(c.match(NOT_READ_ONLY) || []).join(',')}`).toBe(`${f}: `);
+    }
+  });
+
+  it('the production folder calls only allowlisted names', () => {
+    const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
+    const per = sql.map((f) => [f, calls(code(read(join(DIR, f))))] as const);
+    const seen = new Set(per.flatMap(([, names]) => names));
+    if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_CALLS ${JSON.stringify([...seen].sort())}`);
+    expect(seen.size).toBeGreaterThan(10);
+    const quoted = sql.flatMap((f) => {
+      const q: string[] = [];
+      code(read(join(DIR, f)), q);
+      return q.map((x) => [f, x] as const);
+    });
+    if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_QUOTED ${JSON.stringify([...new Set(quoted.map(([, x]) => x))].sort())}`);
+    expect(quoted.length).toBeGreaterThan(0);
+    for (const [f, x] of quoted) expect(`${f}: "${x}" ${ALLOWED_QUOTED.has(x)}`).toBe(`${f}: "${x}" true`);
+    for (const f of sql) expect(`${f}: ${(code(read(join(DIR, f))).match(/U&|\bUESCAPE\b/gi) || []).join(',')}`).toBe(`${f}: `);
+    const allowed = new Set([...ALLOWED_FUNCTIONS, ...ALLOWED_KEYWORDS, ...ALLOWED_ALIASES]);
+    expect([...seen].filter((n) => !allowed.has(n))).toEqual([]);
+    for (const f of sql) expect(`${f}: ${badCalls(code(read(join(DIR, f)))).join(',')}`).toBe(`${f}: `);
+  });
+
+  it('the production folder holds no backslash (no E-string can shift the literal scan)', () => {
+    const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
+    expect(sql.length).toBe(VERSIONS.length + 1);
+    for (const f of sql) expect(`${f}: ${read(join(DIR, f)).includes('\\')}`).toBe(`${f}: false`);
+  });
+
+  it('the test-database controls file starts with the guard that refuses production, before any write', () => {
+    const vc = read(join(VERIFY_DIR, 'verify-controls.sql'));
+    const first = code(vc).trimStart();
+    expect(first.startsWith('DO $guard4263verify$')).toBe(true);
+    const g = vc.slice(vc.indexOf('DO $guard4263verify$'), vc.indexOf('$guard4263verify$;') + 18);
+    expect(code(vc.slice(0, vc.indexOf('DO $guard4263verify$'))).trim()).toBe('');
+    expect(g).toContain("to_regclass('public.pm_backlog_items')");
+    expect(g).toMatch(/IF n > 100 OR coalesce\(\(SELECT s\.n_live_tup FROM pg_catalog\.pg_stat_user_tables s [^\n]*\) > 100 THEN\n\s+RAISE EXCEPTION 'verify-controls\.sql refuses to run: TEST DATABASE ONLY/);
+    // the same checks are the first statements inside the block that writes
+    const head = 'DO $guard4263verify$\nDECLARE n bigint := 0;\nBEGIN\n';
+    expect(g.startsWith(head)).toBe(true);
+    const checks = g.slice(head.length, g.indexOf('END\n$guard4263verify$'));
+    expect(checks).toContain('RAISE EXCEPTION');
+    const block = vc.slice(vc.indexOf('DO $controls4263prod$'));
+    expect(block.length).toBeGreaterThan(0);
+    const body = block.slice(block.indexOf('\nBEGIN\n') + '\nBEGIN\n'.length);
+    expect(body.startsWith(checks)).toBe(true);
+    const between = code(vc.slice(vc.indexOf('$guard4263verify$;') + 18, vc.indexOf('DO $controls4263prod$'))).trim();
+    expect(between).toBe("SET LOCAL lock_timeout = '';");
+    expect(g).toMatch(/IF NOT EXISTS \(SELECT 1 FROM auth\.users u WHERE md5\(u\.id::text\) = '[0-9a-f]{32}'\) THEN\n\s+RAISE EXCEPTION/);
+    expect(vc.split('\n')[0]).toContain('must never be run on production');
+    expect(read(join(VERIFY_DIR, 'verify-run.sql')).split('\n')[0]).toContain('must never be run on production');
+  });
+
   it.each([...VERSIONS, 'final'])('postcheck-%s is one read-only SELECT', (k) => {
     const pc = read(FILE(k));
     const c = code(pc);
-    expect(c).not.toMatch(/\b(INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|GRANT|REVOKE|TRUNCATE|COPY|SET|RESET|DO|CALL|VACUUM|LOCK|COMMENT|EXECUTE|PERFORM|BEGIN|COMMIT)\b/i);
+    expect(c).not.toMatch(new RegExp(WRITE.source, 'i'));
+    expect(c).not.toMatch(/\b(EXECUTE|PERFORM|BEGIN|COMMIT|RESET|MERGE)\b/i);
     expect(c).not.toContain('$');
     expect(pc).not.toMatch(/count\s*\(/i);
     expect(pc).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);

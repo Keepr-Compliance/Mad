@@ -54,7 +54,8 @@
       "PUBLIC",
       "anon",
       "authenticated",
-      "service_role"
+      "service_role",
+      "mcp_reader"
     ],
     "service_role_exception": "pre-lane table grants to service_role",
     "kinds": {
