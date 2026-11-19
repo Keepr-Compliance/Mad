@@ -147,6 +147,44 @@ describe('BACKLOG-4263 AI-app connect notice migration file', () => {
   });
 });
 
+describe('BACKLOG-4263 AI-app connect notice locks and assumptions', () => {
+  it('bounds the wait for the auth.users lock: lock_timeout after the pre-check, before CREATE TABLE', () => {
+    const pre = RAW.indexOf('$pre4263notice$;');
+    const lt = RAW.indexOf("SET LOCAL lock_timeout = '3s';");
+    expect(pre).toBeGreaterThan(-1);
+    expect(RAW.split("SET LOCAL lock_timeout = '3s';")).toHaveLength(2);
+    expect(pre < lt && lt < RAW.indexOf('CREATE TABLE IF NOT EXISTS public.ai_app_connect_notices')).toBe(true);
+    const rl = ROLLBACK.indexOf("SET LOCAL lock_timeout = '3s';");
+    expect(rl).toBeGreaterThan(-1);
+    expect(rl).toBeLessThan(ROLLBACK.indexOf('DROP FUNCTION public.ai_app_notice_claim(integer);'));
+    expect(rl).toBeLessThan(ROLLBACK.indexOf('DROP TABLE public.ai_app_connect_notices;'));
+  });
+
+  it('the stale skip leaves a row with a live lease alone', () => {
+    const b = bodyOf(CLAIM);
+    const stale = b.slice(b.indexOf("SET status = 'skipped'"), b.indexOf("SET status = 'failed'"));
+    expect(stale).toContain("x.connected_at < now() - interval '2 days'");
+    expect(stale).toContain('AND (x.lease_until IS NULL OR x.lease_until <= now())   /*LEASE:stale*/');
+  });
+
+  it("the migration's own post-check compares the 17 anon-callable mcp names", () => {
+    const post = RAW.slice(RAW.indexOf('DO $post4263notice$'));
+    expect(FACTS.anon_callable_mcp).toHaveLength(17);
+    const listed = [...post.matchAll(/'(mcp_\w+\([^)]*\))'/g)].map((m) => m[1]);
+    expect(listed).toEqual([...(FACTS.anon_callable_mcp as string[])].sort());
+    expect(post).toContain("(v ->> 'anon_mcp')::boolean IS NOT TRUE");
+  });
+
+  it('the redirect allowlist is keyed by redirect_uri alone (the assumption behind replaced)', () => {
+    const files = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'));
+    const defs = files.filter((f) => read(join(MIGRATIONS, f)).includes('CREATE TABLE IF NOT EXISTS public.mcp_redirect_allowlist ('));
+    expect(defs).toEqual(['20261112170000_backlog_4238_mcp_oauth_server.sql']);
+    expect(read(join(MIGRATIONS, defs[0]))).toContain('  redirect_uri text PRIMARY KEY CHECK');
+    const altered = files.filter((f) => /ALTER TABLE (?:IF EXISTS )?(?:ONLY )?public\.mcp_redirect_allowlist (?!ENABLE ROW LEVEL SECURITY)/.test(read(join(MIGRATIONS, f))));
+    expect(altered).toEqual([]);
+  });
+});
+
 describe('BACKLOG-4263 AI-app connect notice apply and rollback files', () => {
   it('the apply file holds the migration verbatim, the ledger row and the post-check', () => {
     expect(APPLY).toContain(RAW);

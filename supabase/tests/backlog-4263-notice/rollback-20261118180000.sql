@@ -131,6 +131,7 @@ $fn$;
 REVOKE ALL ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea) TO anon;
 
+SET LOCAL lock_timeout = '3s';
 DROP FUNCTION public.ai_app_notice_claim(integer);
 DROP FUNCTION public.ai_app_notice_done(uuid, integer, text, text);
 DROP TABLE public.ai_app_connect_notices;

@@ -110,8 +110,14 @@ BEGIN
 END $c$;
 
 -- ---------------------------------------------------------------- the notice insert cannot fail the exchange
+-- two breaks: a CHECK that refuses the row (class 23) and a trigger that raises deadlock_detected (40P01, class 40)
+CREATE FUNCTION pg_temp.raise_40p01() RETURNS trigger LANGUAGE plpgsql AS $t$
+BEGIN
+  RAISE EXCEPTION USING ERRCODE = '40P01', MESSAGE = 'harness: deadlock in the notice insert';
+END $t$;
 CREATE FUNCTION pg_temp.c_insert_fail() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE x_a uuid := pg_temp.id('A'); x_direct text; x_p uuid[]; x_c jsonb; x_e jsonb; x_fx jsonb;
+DECLARE x_a uuid := pg_temp.id('A'); x_b uuid := pg_temp.id('B'); x_direct text; x_direct2 text; x_p uuid[]; x_c jsonb; x_e jsonb; x_fx jsonb;
+        x_c2 jsonb; x_e2 jsonb; x_fx2 jsonb; x_n2 jsonb;
 BEGIN
   EXECUTE 'ALTER TABLE public.ai_app_connect_notices ADD CONSTRAINT x4263_refuse CHECK (false) NOT VALID';
   BEGIN
@@ -123,11 +129,30 @@ BEGIN
   x_c := pg_temp.consent('n-f1', x_a, 'anthropic');
   x_e := pg_temp.w(pg_temp.q_ex('n-f1', 'anthropic', 121));
   x_fx := pg_temp.effects(x_a);
+  -- second break: the CHECK removed, a trigger raising 40P01 on every INSERT
+  EXECUTE 'ALTER TABLE public.ai_app_connect_notices DROP CONSTRAINT x4263_refuse';
+  EXECUTE 'CREATE TRIGGER x4263_deadlock BEFORE INSERT ON public.ai_app_connect_notices FOR EACH ROW EXECUTE FUNCTION pg_temp.raise_40p01()';
+  BEGIN
+    INSERT INTO public.ai_app_connect_notices (user_id, provider, replaced) VALUES (x_b, 'anthropic', false);
+    x_direct2 := 'inserted';
+  EXCEPTION WHEN OTHERS THEN x_direct2 := SQLSTATE;
+  END;
+  x_p := pg_temp.nids();
+  x_c2 := pg_temp.consent('n-f2', x_b, 'anthropic');
+  x_e2 := pg_temp.w(pg_temp.q_ex('n-f2', 'anthropic', 122));
+  x_fx2 := pg_temp.effects(x_b);
+  x_n2 := pg_temp.added(x_p);
   RETURN pg_temp.all_of(
     pg_temp.pass(x_direct = '23514', 'the break did not make an INSERT raise: ' || coalesce(x_direct, 'null')),
+    pg_temp.pass(x_direct2 = '40P01', 'the trigger did not make an INSERT raise 40P01: ' || coalesce(x_direct2, 'null')),
+    pg_temp.pass(x_c2 ->> 'ok' = 'true', 'consent 2 ' || x_c2::text),
+    pg_temp.pass(x_e2 = pg_temp.ok_answer(), 'exchange under 40P01 ' || coalesce(x_e2::text, 'null')),
+    pg_temp.pass(x_fx2 -> 'conns' = '["active anthropic"]' AND (x_fx2 ->> 'tokens')::int = 2 AND (x_fx2 ->> 'codes_used')::int = 1,
+                 'connection under 40P01 ' || x_fx2::text),
+    pg_temp.pass(x_n2 = '[]', 'a notice was written under 40P01 ' || x_n2::text),
     pg_temp.pass(x_c ->> 'ok' = 'true', 'consent ' || x_c::text),
     pg_temp.pass(x_e = pg_temp.ok_answer(), 'exchange ' || coalesce(x_e::text, 'null')),
-    pg_temp.pass(x_fx -> 'conns' = '["active anthropic"]' AND (x_fx ->> 'tokens')::int = 2, 'connection ' || x_fx::text),
+    pg_temp.pass(x_fx -> 'conns' = '["active anthropic"]' AND (x_fx ->> 'tokens')::int = 2 AND (x_fx ->> 'codes_used')::int = 1, 'connection ' || x_fx::text),
     pg_temp.pass(pg_temp.added(x_p) = '[]', 'a notice was written ' || pg_temp.added(x_p)::text));
 END $c$;
 
@@ -222,6 +247,7 @@ DECLARE x_a uuid := pg_temp.id('A'); x_c1 jsonb; x_c2 jsonb; x_c3 jsonb; x_st js
 BEGIN
   PERFORM pg_temp.seed('r_fresh', x_a, 'due', 0, '1 minute');
   PERFORM pg_temp.seed('r_old', x_a, 'due', 0, '3 days');
+  PERFORM pg_temp.seed('r_old_leased', x_a, 'due', 1, '2 days 1 minute', '1 minute');
   PERFORM pg_temp.seed('r_tired', x_a, 'due', 5, '1 hour');
   PERFORM pg_temp.seed('r_tired_leased', x_a, 'due', 5, '1 hour', '1 minute');
   PERFORM pg_temp.seed('r_leased', x_a, 'due', 1, '10 minutes', '1 minute');
@@ -236,7 +262,7 @@ BEGIN
     INTO x_keys FROM jsonb_array_elements(x_c1) e;
   SELECT e INTO x_first FROM jsonb_array_elements(x_c1) e WHERE e ->> 'id' = pg_temp.id('r_fresh')::text;
   x_c2 := pg_temp.claim(50);
-  UPDATE public.ai_app_connect_notices n SET lease_until = now() - interval '1 second' WHERE n.id = pg_temp.id('r_fresh');
+  UPDATE public.ai_app_connect_notices n SET lease_until = now() - interval '1 second' WHERE n.id IN (pg_temp.id('r_fresh'), pg_temp.id('r_old_leased'));
   x_c3 := pg_temp.claim(50);
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.claimed(x_c1) = '[{"k":"r_four","a":5},{"k":"r_fresh","a":1},{"k":"r_lease_over","a":2}]', 'first claim ' || left(x_c1::text, 300) || ' ' || pg_temp.claimed(x_c1)::text),
@@ -246,6 +272,7 @@ BEGIN
     pg_temp.pass(x_st = jsonb_build_object(
       'r_fresh', pg_temp.j('{"s":"due","a":1,"lease":"00:05:00","err":null,"sent":false}'),
       'r_old', pg_temp.j('{"s":"skipped","a":0,"lease":null,"err":"stale","sent":false}'),
+      'r_old_leased', pg_temp.j('{"s":"due","a":1,"lease":"00:01:00","err":null,"sent":false}'),
       'r_tired', pg_temp.j('{"s":"failed","a":5,"lease":null,"err":"attempts","sent":false}'),
       'r_tired_leased', pg_temp.j('{"s":"due","a":5,"lease":"00:01:00","err":null,"sent":false}'),
       'r_leased', pg_temp.j('{"s":"due","a":1,"lease":"00:01:00","err":null,"sent":false}'),
@@ -255,7 +282,8 @@ BEGIN
       'r_due_old', pg_temp.j('"gone"'),
       'r_sent_new', pg_temp.j('{"s":"sent","a":1,"lease":null,"err":null,"sent":true}')), 'states ' || x_st::text),
     pg_temp.pass(x_c2 = '[]', 'second claim ' || left(x_c2::text, 300)),
-    pg_temp.pass(pg_temp.claimed(x_c3) = '[{"k":"r_fresh","a":2}]', 'after the lease ' || left(x_c3::text, 300)));
+    pg_temp.pass(pg_temp.claimed(x_c3) = '[{"k":"r_fresh","a":2}]', 'after the lease ' || left(x_c3::text, 300)),
+    pg_temp.pass(pg_temp.nrow('r_old_leased') = '{"s":"skipped","a":1,"lease":null,"err":"stale","sent":false}', 'old row after its lease ' || pg_temp.nrow('r_old_leased')::text));
 END $c$;
 
 -- ---------------------------------------------------------------- claim: at most 50, nothing for 0, NULL or a negative limit
@@ -309,6 +337,14 @@ END $c$;
 CREATE FUNCTION pg_temp.c_catalog() RETURNS text LANGUAGE plpgsql AS $h$
 BEGIN
   EXECUTE @@POSTCHECK@@;
+  RETURN 'PASS';
+EXCEPTION WHEN OTHERS THEN RETURN 'FAIL: ' || left(SQLERRM, 900);
+END $h$;
+
+-- ---------------------------------------------------------------- the migration's own post-check, run again
+CREATE FUNCTION pg_temp.c_mig_post() RETURNS text LANGUAGE plpgsql AS $h$
+BEGIN
+  EXECUTE @@MIGPOST@@;
   RETURN 'PASS';
 EXCEPTION WHEN OTHERS THEN RETURN 'FAIL: ' || left(SQLERRM, 900);
 END $h$;

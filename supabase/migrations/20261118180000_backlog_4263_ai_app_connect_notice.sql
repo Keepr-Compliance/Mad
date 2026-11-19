@@ -12,13 +12,15 @@
 --   The body is otherwise character-identical to the body of 20261118130000 (the marker comment aside).
 -- New: ai_app_notice_claim(p_limit) and ai_app_notice_done(p_id, p_attempts, p_status, p_error), SECURITY DEFINER,
 --   EXECUTE service_role only, each refusing inside unless the request's role is service_role.
---   claim: housekeeping first (a due notice older than 2 days -> skipped 'stale'; a due notice tried 5 times with its
---   lease ended -> failed; finished notices older than 30 days deleted), then up to min(p_limit, 50) due notices with
+--   claim: housekeeping first (a due notice older than 2 days with its lease ended -> skipped 'stale'; a due notice
+--   tried 5 times with its lease ended -> failed; finished notices older than 30 days deleted), then up to min(p_limit, 50) due notices with
 --   no live lease, FOR UPDATE SKIP LOCKED, each leased for 5 minutes and its attempts incremented. Answers a JSON
 --   array of {id, user_id, provider, replaced, connected_at, attempts}.
 --   done: sets the status ('due' releases the lease for a retry) only while the row is due and its attempts equal
 --   p_attempts; the error code is cut to 40 characters. Answers true when a row changed.
 -- Existing rows: none changed. Connections made before this file get no notice.
+-- Locks: the table's foreign key takes SHARE ROW EXCLUSIVE on auth.users until commit; lock_timeout 3s, so if that
+--   lock is not obtained within 3 seconds the migration fails and nothing is applied.
 -- Pre-check: mcp_exchange_code is at the body of 20261118130000 (md5 ab6a9345c55ab69c77347d9b37e92e9d) or already at this
 --   file's body (md5 9a33bff2db31288bd77a57489558a65b); otherwise nothing is applied.
 -- Re-runnable: CREATE TABLE / INDEX IF NOT EXISTS, CREATE OR REPLACE.
@@ -36,6 +38,8 @@ BEGIN
   END IF;
 END
 $pre4263notice$;
+
+SET LOCAL lock_timeout = '3s';
 
 -- ============================================================================ table
 CREATE TABLE IF NOT EXISTS public.ai_app_connect_notices (
@@ -184,6 +188,7 @@ BEGIN
      SET status = 'skipped', last_error = 'stale', lease_until = NULL
    WHERE n.id IN (SELECT x.id FROM public.ai_app_connect_notices x
                    WHERE x.status = 'due' AND x.connected_at < now() - interval '2 days'   /*STALE:skip*/
+                     AND (x.lease_until IS NULL OR x.lease_until <= now())   /*LEASE:stale*/
                    LIMIT 500 FOR UPDATE SKIP LOCKED);
   UPDATE public.ai_app_connect_notices n
      SET status = 'failed', last_error = coalesce(n.last_error, 'attempts'), lease_until = NULL
@@ -245,7 +250,8 @@ $fn$;
 REVOKE ALL ON FUNCTION public.ai_app_notice_done(uuid, integer, text, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.ai_app_notice_done(uuid, integer, text, text) TO service_role;
 
--- Post-check: bodies, attributes and grants of the three functions; the table closed; the anon-callable mcp count.
+-- Post-check: bodies, attributes and grants of the three functions; the table closed; the anon-callable mcp functions
+-- are exactly the 17 named.
 DO $post4263notice$
 DECLARE v jsonb;
 BEGIN
@@ -264,12 +270,31 @@ BEGIN
                      AND NOT has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                      AND NOT has_table_privilege('service_role', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                 FROM pg_catalog.pg_class c WHERE c.oid = 'public.ai_app_connect_notices'::regclass),
-    'anon_mcp', (SELECT count(*) FROM pg_catalog.pg_proc p
-                  WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_' AND has_function_privilege('anon', p.oid, 'EXECUTE')),
+    'anon_mcp', (SELECT coalesce(array_agg(x.sig ORDER BY x.sig COLLATE "C"), '{}')
+                   FROM (SELECT p.proname::text || '(' || replace(pg_catalog.oidvectortypes(p.proargtypes), ', ', ',') || ')' AS sig
+                           FROM pg_catalog.pg_proc p
+                          WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_' AND has_function_privilege('anon', p.oid, 'EXECUTE')) x)
+                = ARRAY['mcp_add_todo(text,bytea,text,text,text,text,text,text)',
+                 'mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)',
+                 'mcp_check_access(text,bytea,text)',
+                 'mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)',
+                 'mcp_find_people(text,bytea,text,text,text,text,text,text,text)',
+                 'mcp_get_deal(text,bytea,text,text)',
+                 'mcp_get_deal_checklists(text,bytea,text,text,boolean,text)',
+                 'mcp_get_status(text,bytea,text)',
+                 'mcp_list_all_deals(text,bytea,text,text,text,text,text)',
+                 'mcp_list_deals(text,bytea,text,text,text,integer,text)',
+                 'mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)',
+                 'mcp_refresh(text,bytea,text,text,bytea,bytea)',
+                 'mcp_register_client(text,text,text,text[],bytea)',
+                 'mcp_remove_todo(text,bytea,text,text,text)',
+                 'mcp_restore_todo(text,bytea,text,text,text)',
+                 'mcp_update_todo(text,bytea,text,text,jsonb,text)',
+                 'mcp_write_access(text,bytea,text)']::text[],
     'anon_jobs', (SELECT count(*) FROM pg_catalog.pg_proc p
                    WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^ai_app_' AND has_function_privilege('anon', p.oid, 'EXECUTE'))) INTO v;
   IF (v ->> 'exchange')::boolean IS NOT TRUE OR (v ->> 'jobs')::boolean IS NOT TRUE OR (v ->> 'table')::boolean IS NOT TRUE
-     OR (v ->> 'anon_mcp')::int IS DISTINCT FROM 17 OR (v ->> 'anon_jobs')::int IS DISTINCT FROM 0 THEN
+     OR (v ->> 'anon_mcp')::boolean IS NOT TRUE OR (v ->> 'anon_jobs')::int IS DISTINCT FROM 0 THEN
     RAISE EXCEPTION 'BACKLOG-4263: notice post-check failed: %', v;
   END IF;
 END

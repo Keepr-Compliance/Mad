@@ -1,11 +1,11 @@
 {
   "migration": "supabase/migrations/20261118180000_backlog_4263_ai_app_connect_notice.sql",
-  "migration_md5": "01de24669ca539eef64383b4c42153dd",
+  "migration_md5": "cf1cc74e4748226f7281952bebaa7b14",
   "exchange": "public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
   "exchange_md5_before": "ab6a9345c55ab69c77347d9b37e92e9d",
   "exchange_md5_after": "9a33bff2db31288bd77a57489558a65b",
   "claim": "public.ai_app_notice_claim(integer)",
-  "claim_md5": "9964813c892d1be53af81f781d6e1f85",
+  "claim_md5": "94ad071aff8106057ce68d6cccf40024",
   "done": "public.ai_app_notice_done(uuid,integer,text,text)",
   "done_md5": "6d07ede92141851e588006d19bfc20c5",
   "table": "public.ai_app_connect_notices",
@@ -58,6 +58,7 @@
     "c_cap",
     "c_done",
     "c_catalog",
+    "c_mig_post",
     "c_equal"
   ],
   "mutations": {
@@ -69,6 +70,7 @@
     "M06_no_exception_block": "c_insert_fail",
     "M07_answer_changed": "c_equal",
     "M08_fk_to_connection_cascade": "c_survive",
+    "M09_handler_narrowed": "c_insert_fail",
     "M10_claim_no_inside_check": "c_caller",
     "M11_claim_no_lease": "c_claim",
     "M12_claim_no_attempts_cap": "c_claim",
@@ -84,6 +86,7 @@
     "M22_done_overwrites_finished": "c_done",
     "M23_done_error_not_cut": "c_done",
     "M24_done_any_status": "c_done",
+    "M25_stale_skip_ignores_lease": "c_claim",
     "M30_claim_granted_authenticated": "c_grants",
     "M31_table_select_service_role": "c_grants",
     "M32_cat_done_granted_anon": "c_catalog",
@@ -94,8 +97,10 @@
     "M37_cat_other_table_granted": "c_catalog",
     "M38_cat_exchange_attribute": "c_catalog",
     "M39_cat_text_column_added": "c_catalog",
-    "M40_cat_unique_index": "c_catalog"
+    "M40_cat_unique_index": "c_catalog",
+    "M41_cat_allowlist_key_widened": "c_catalog",
+    "M42_mig_anon_name_swapped": "c_mig_post"
   },
-  "apply_md5": "b456035ac21cca9531eb43c83f629177",
-  "rollback_md5": "c9486d215ef1a8e0f8ca3c42d02b1f4e"
+  "apply_md5": "db9268ba0c7eaab38e976c9d9519fa49",
+  "rollback_md5": "3192ce1872dc8fab5277a8e852e3d14a"
 }

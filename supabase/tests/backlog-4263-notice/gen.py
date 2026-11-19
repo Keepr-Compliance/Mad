@@ -106,6 +106,8 @@ FN_MUTS = [  # (id, target, [(old, new)], control, ddl before, extra proof)
                                              '(user_id, provider, replaced, connection_id)\n    SELECT c.user_id, c.provider, v_n > 0, c.id FROM')], 'c_survive',
      'ALTER TABLE public.ai_app_connect_notices ADD COLUMN connection_id uuid NULL REFERENCES public.mcp_connections (id) ON DELETE CASCADE',
      "EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.ai_app_connect_notices'::regclass AND a.attname = 'connection_id' AND NOT a.attisdropped)"),
+    ('M09_handler_narrowed', 'ex', [('  EXCEPTION WHEN OTHERS THEN\n    NULL;\n  END;\n', '  EXCEPTION WHEN integrity_constraint_violation THEN\n    NULL;\n  END;\n')],
+     'c_insert_fail', None, None),
     ('M10_claim_no_inside_check', 'claim', [(CHECK_CLAIM, '')], 'c_caller', None, None),
     ('M11_claim_no_lease', 'claim', [('       AND (x.lease_until IS NULL OR x.lease_until <= now())   /*LEASE:free*/\n', '')], 'c_claim', None, None),
     ('M12_claim_no_attempts_cap', 'claim', [('       AND x.attempts < 5   /*CAP:attempts*/\n', ''), (UPD_FAIL, '')], 'c_claim', None, None),
@@ -122,6 +124,7 @@ FN_MUTS = [  # (id, target, [(old, new)], control, ddl before, extra proof)
     ('M22_done_overwrites_finished', 'done', [("\n     AND n.status = 'due';", ';')], 'c_done', None, None),
     ('M23_done_error_not_cut', 'done', [('left(p_error, 40)', 'p_error')], 'c_done', None, None),
     ('M24_done_any_status', 'done', [(VOCAB, '')], 'c_done', None, None),
+    ('M25_stale_skip_ignores_lease', 'claim', [('                     AND (x.lease_until IS NULL OR x.lease_until <= now())   /*LEASE:stale*/\n', '')], 'c_claim', None, None),
 ]
 TARGET = {'ex': (NEW_EX_C, EX), 'claim': (CLAIM_C, CLAIM), 'done': (DONE_C, DONE)}
 DDL_MUTS = [  # (id, ddl, proof, control)
@@ -148,7 +151,13 @@ DDL_MUTS = [  # (id, ddl, proof, control)
     ('M40_cat_unique_index', 'CREATE UNIQUE INDEX x4263_u ON public.ai_app_connect_notices (user_id, provider, connected_at)',
      "to_regclass('public.x4263_u') IS NOT NULL", 'c_catalog'),
 ]
-CONTROLS = ['c_notice', 'c_none', 'c_insert_fail', 'c_survive', 'c_two_users', 'c_grants', 'c_caller', 'c_claim', 'c_cap', 'c_done', 'c_catalog']
+DDL_MUTS += [
+    ('M41_cat_allowlist_key_widened', 'ALTER TABLE public.mcp_redirect_allowlist DROP CONSTRAINT mcp_redirect_allowlist_pkey, ADD PRIMARY KEY (redirect_uri, provider)',
+     "(SELECT array_length(k.conkey, 1) = 2 FROM pg_constraint k WHERE k.conrelid = 'public.mcp_redirect_allowlist'::regclass AND k.contype = 'p')", 'c_catalog'),
+    ('M42_mig_anon_name_swapped', 'REVOKE EXECUTE ON FUNCTION public.mcp_get_status(text, bytea, text) FROM anon; GRANT EXECUTE ON FUNCTION public._mcp_refuse(text) TO anon',
+     "has_function_privilege('anon', 'public._mcp_refuse(text)'::regprocedure, 'EXECUTE') AND NOT has_function_privilege('anon', 'public.mcp_get_status(text,bytea,text)'::regprocedure, 'EXECUTE')", 'c_mig_post'),
+]
+CONTROLS = ['c_notice', 'c_none', 'c_insert_fail', 'c_survive', 'c_two_users', 'c_grants', 'c_caller', 'c_claim', 'c_cap', 'c_done', 'c_catalog', 'c_mig_post']
 
 mut_sql, mut_report, WANT = [], [], {}
 for mid, tgt, reps, ctl, pre, extra in FN_MUTS:
@@ -264,6 +273,8 @@ BEGIN
     'rel_added', {REL_ADDED.format(t=tr)},
     'anon_mcp_17', {ANON_Q},
     'anon_ai_app', {ANON_AI},
+    'allowlist_key', (SELECT array_agg(a.attname::text ORDER BY a.attnum) FROM pg_constraint k JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
+                       WHERE k.conrelid = 'public.mcp_redirect_allowlist'::regclass AND k.contype = 'p') = ARRAY['redirect_uri'],
     'ledger', {LEDGER}) INTO v;
   w_changed := CASE WHEN v ->> 'exchange_md5_before' = '{NEW_MD5}' THEN '[]'::jsonb ELSE jsonb_build_array({SIGTXT(EX)}) END;
   SELECT coalesce(jsonb_agg(x ORDER BY x COLLATE "C"), '[]') INTO w_added
@@ -275,7 +286,8 @@ BEGIN
      OR (v ->> 'exchange_attributes_unchanged')::boolean IS NOT TRUE OR (v ->> 'jobs_owner_definer_path_grants')::boolean IS NOT TRUE
      OR (v ->> 'table_closed_columns_keys')::boolean IS NOT TRUE
      OR v -> 'rel_changed' IS DISTINCT FROM '[]'::jsonb OR v -> 'rel_gone' IS DISTINCT FROM '[]'::jsonb OR v -> 'rel_added' IS DISTINCT FROM w_rel
-     OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE OR (v ->> 'anon_ai_app')::int IS DISTINCT FROM 0 OR (v ->> 'ledger')::int IS DISTINCT FROM 1 THEN
+     OR (v ->> 'anon_mcp_17')::boolean IS NOT TRUE OR (v ->> 'anon_ai_app')::int IS DISTINCT FROM 0 OR (v ->> 'ledger')::int IS DISTINCT FROM 1
+     OR (v ->> 'allowlist_key')::boolean IS NOT TRUE THEN
     RAISE EXCEPTION '{label} POST-CHECK {VERSION} FAILED, nothing applied: %', v;
   END IF;
   RAISE NOTICE '{label} POST-CHECK {VERSION} OK: %', v;
@@ -364,6 +376,7 @@ CREATE TEMP TABLE pn_rb_rel ON COMMIT DROP AS
 {REL_SNAP};
 
 {OLD_EX}
+SET LOCAL lock_timeout = '3s';
 DROP FUNCTION public.ai_app_notice_claim(integer);
 DROP FUNCTION public.ai_app_notice_done(uuid, integer, text, text);
 DROP TABLE public.ai_app_connect_notices;
@@ -372,11 +385,13 @@ DELETE FROM supabase_migrations.schema_migrations WHERE version = '{VERSION}';
 {postcheck_rollback('postnoticer', 'pn_rb_fn', 'pn_rb_rel')}"""
 
 # ------------------------------------------------------------------------------------------------ harness
+MIG_POST = re.search(r'(DO \$post4263notice\$.*?\$post4263notice\$;)', mig, re.S).group(1)
+assert "SET LOCAL lock_timeout = '3s';\n\n-- ============================================================================ table" in mig
 strip = lambda s: s.replace(' ON COMMIT DROP', '')
 OLD_COPY = create_only(OLD_EX).replace('CREATE OR REPLACE FUNCTION public.mcp_exchange_code(', 'CREATE FUNCTION public.mcp_exchange_code_x4263old(', 1)
 assert body(OLD_COPY) == body(OLD_EX)
 controls_sql = (lib('controls.sql').replace('@@POSTCHECK@@', q(strip(POST_APPLY), '$pcq$')).replace('@@OLDCOPY@@', q(OLD_COPY, '$ocq$'))
-                .replace('@@OLD_MD5@@', OLD_MD5))
+                .replace('@@OLD_MD5@@', OLD_MD5).replace('@@MIGPOST@@', q(MIG_POST, '$mpq$')))
 assert '@@' not in controls_sql
 LOCKS = "(SELECT coalesce(jsonb_agg(DISTINCT l.mode), '[]') FROM pg_locks l WHERE l.pid = pg_backend_pid() AND l.relation = 'auth.users'::regclass)"
 harness = f"""-- harness-notice.sql (generated by supabase/tests/backlog-4263-notice/gen.py; do not hand-edit)
@@ -405,6 +420,7 @@ DO $t1$
 BEGIN
   PERFORM pg_temp.rec('t_after_apply', to_jsonb(clock_timestamp()));
   PERFORM pg_temp.rec('locks_auth_users_after_apply', {LOCKS});
+  PERFORM pg_temp.rec('lock_timeout_after_apply', to_jsonb(current_setting('lock_timeout')));
 END $t1$;
 {controls_sql}
 -- ================================================================ re-run of the migration
