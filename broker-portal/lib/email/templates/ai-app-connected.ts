@@ -62,7 +62,9 @@ export function aiAppConnectedLines(params: AiAppConnectedParams): string[] {
   const lines = [`On ${formatConnectedAt(connectedAt)}, you allowed ${PROVIDER_LABELS[provider]} to read your Keepr data.`];
   if (replaced === true) lines.push(`This replaces your earlier ${PROVIDER_SHORT_NAMES[provider]} connection.`);
   lines.push('If this was you, you do not need to do anything.');
-  lines.push('If it was not you, open AI apps and disconnect it.');
+  lines.push(
+    `If you did not start this from your own ${PROVIDER_SHORT_NAMES[provider]} account just before allowing it, open AI apps and disconnect it now — even if you clicked Allow.`,
+  );
   return lines;
 }
 

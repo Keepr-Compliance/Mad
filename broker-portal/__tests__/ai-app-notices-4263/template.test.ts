@@ -32,7 +32,7 @@ const CASES: Array<[string, AiAppConnectedParams, string, string[]]> = [
     [
       'On 18 November 2026 at 14:05 UTC, you allowed Claude (Anthropic) to read your Keepr data.',
       'If this was you, you do not need to do anything.',
-      'If it was not you, open AI apps and disconnect it.',
+      'If you did not start this from your own Claude account just before allowing it, open AI apps and disconnect it now — even if you clicked Allow.',
     ],
   ],
   [
@@ -43,7 +43,7 @@ const CASES: Array<[string, AiAppConnectedParams, string, string[]]> = [
       'On 18 November 2026 at 14:05 UTC, you allowed Claude (Anthropic) to read your Keepr data.',
       'This replaces your earlier Claude connection.',
       'If this was you, you do not need to do anything.',
-      'If it was not you, open AI apps and disconnect it.',
+      'If you did not start this from your own Claude account just before allowing it, open AI apps and disconnect it now — even if you clicked Allow.',
     ],
   ],
   [
@@ -53,7 +53,7 @@ const CASES: Array<[string, AiAppConnectedParams, string, string[]]> = [
     [
       'On 18 November 2026 at 14:05 UTC, you allowed ChatGPT (OpenAI) to read your Keepr data.',
       'If this was you, you do not need to do anything.',
-      'If it was not you, open AI apps and disconnect it.',
+      'If you did not start this from your own ChatGPT account just before allowing it, open AI apps and disconnect it now — even if you clicked Allow.',
     ],
   ],
   [
@@ -64,7 +64,7 @@ const CASES: Array<[string, AiAppConnectedParams, string, string[]]> = [
       'On 18 November 2026 at 14:05 UTC, you allowed ChatGPT (OpenAI) to read your Keepr data.',
       'This replaces your earlier ChatGPT connection.',
       'If this was you, you do not need to do anything.',
-      'If it was not you, open AI apps and disconnect it.',
+      'If you did not start this from your own ChatGPT account just before allowing it, open AI apps and disconnect it now — even if you clicked Allow.',
     ],
   ],
 ];
@@ -80,6 +80,24 @@ describe('ai-app-connected email text', () => {
     expect(mail.html).toContain('Open AI apps');
     // The only link beyond the shared layout's own is the button.
     expect(hrefs(mail.html)).toEqual([url, ...hrefs(buildSimpleNotice('x', []).html)].sort());
+  });
+
+  it.each([
+    ['anthropic', 'Claude'],
+    ['openai', 'ChatGPT'],
+  ] as const)('%s: the earlier last line is gone; the last line names the same app as the subject', (provider, short) => {
+    for (const replaced of [false, true]) {
+      const mail = render({ provider, replaced });
+      expect(`${mail.subject}\n${mail.html}\n${mail.text}`).not.toContain('If it was not you');
+      expect(mail.subject.startsWith(`${short} was connected`)).toBe(true);
+      const lines = mail.text.split('\n').filter((l) => l.startsWith('If you did not start this'));
+      expect(lines).toEqual([
+        `If you did not start this from your own ${short} account just before allowing it, open AI apps and disconnect it now \u2014 even if you clicked Allow.`,
+      ]);
+      expect(lines[0]).toContain(' \u2014 ');
+      expect(lines[0]).not.toContain(' - ');
+      expect(mail.text).toContain('If this was you, you do not need to do anything.\n\nIf you did not start this');
+    }
   });
 
   it('the replaces line appears only when replaced is true', () => {
