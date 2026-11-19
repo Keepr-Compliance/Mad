@@ -1,0 +1,206 @@
+{
+  "migration": "supabase/migrations/20261118190000_backlog_4263_mcp_register_refresh_bounds.sql",
+  "migration_md5": "4272574f570870edb010560a35e24c12",
+  "register": "public.mcp_register_client(text,text,text,text[],bytea)",
+  "register_md5_before": "27326378a7ca849f4a116f6b46e1767e",
+  "register_md5_after": "ac3e98941cd2f5ef50a16d6409438fb4",
+  "refresh": "public.mcp_refresh(text,bytea,text,text,bytea,bytea)",
+  "refresh_md5_before": "a7797a967b1952dec493c48c62328530",
+  "refresh_md5_after": "912c6e001271b289c7a8c929492b4ac9",
+  "cleanup": "public._mcp_prune_unused_clients()",
+  "cleanup_md5": "62843f08da0c36a7214698a9c0476c69",
+  "cron_job": {
+    "name": "mcp-unused-client-prune",
+    "schedule": "53 3 * * *",
+    "command": "SELECT public._mcp_prune_unused_clients()",
+    "username": "postgres"
+  },
+  "anon_callable_mcp": [
+    "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+    "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+    "mcp_check_access(text,bytea,text)",
+    "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+    "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+    "mcp_get_deal(text,bytea,text,text)",
+    "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+    "mcp_get_status(text,bytea,text)",
+    "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+    "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+    "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+    "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+    "mcp_register_client(text,text,text,text[],bytea)",
+    "mcp_remove_todo(text,bytea,text,text,text)",
+    "mcp_restore_todo(text,bytea,text,text,text)",
+    "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+    "mcp_write_access(text,bytea,text)"
+  ],
+  "controls": [
+    "c_reg_day",
+    "c_reg_hour",
+    "c_reg_global",
+    "c_reg_secret",
+    "c_refresh",
+    "c_prune_rule",
+    "c_prune_cap",
+    "c_prune_recheck",
+    "c_prune_other_child",
+    "c_prune_grants",
+    "c_children",
+    "c_cron",
+    "c_catalog",
+    "c_mig_post",
+    "c_equal"
+  ],
+  "mutations": {
+    "M01_reg_day_removed": {
+      "control": "c_reg_day",
+      "expect_red": true
+    },
+    "M02_reg_day_one_global_key": {
+      "control": "c_reg_day",
+      "expect_red": true
+    },
+    "M03_reg_day_hour_window": {
+      "control": "c_reg_day",
+      "expect_red": true
+    },
+    "M04_reg_all_left_at_500": {
+      "control": "c_reg_global",
+      "expect_red": true
+    },
+    "M05_counters_before_secret": {
+      "control": "c_reg_secret",
+      "expect_red": true
+    },
+    "M06_reg_ip_hour_changed": {
+      "control": "c_reg_hour",
+      "expect_red": true
+    },
+    "M10_rf_bound_removed": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M11_rf_keyed_per_user": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M12_rf_keyed_per_token": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M13_rf_over_bound_uses_token": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M14_rf_refused_attempts_counted": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M15_rf_bound_61": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M16_rf_refusal_changed": {
+      "control": "c_refresh",
+      "expect_red": true
+    },
+    "M17_rf_answer_changed": {
+      "control": "c_equal",
+      "expect_red": true
+    },
+    "M18_reg_answer_changed": {
+      "control": "c_equal",
+      "expect_red": true
+    },
+    "M20_age_28_days": {
+      "control": "c_prune_rule",
+      "expect_red": true
+    },
+    "M21_connections_active_only": {
+      "control": "c_prune_rule",
+      "expect_red": true
+    },
+    "M22_requests_unchecked": {
+      "control": "c_prune_rule",
+      "expect_red": true
+    },
+    "M23_no_recheck_after_lock": {
+      "control": "c_prune_recheck",
+      "expect_red": true
+    },
+    "M24_no_skip_locked": {
+      "control": "c_prune_rule",
+      "expect_red": false
+    },
+    "M25_no_lock": {
+      "control": "c_prune_recheck",
+      "expect_red": false
+    },
+    "M26_no_children_guard": {
+      "control": "c_prune_other_child",
+      "expect_red": true
+    },
+    "M27_cap_1000": {
+      "control": "c_prune_cap",
+      "expect_red": true
+    },
+    "M28_returns_zero": {
+      "control": "c_prune_rule",
+      "expect_red": true
+    },
+    "M30_prune_granted_service_role": {
+      "control": "c_prune_grants",
+      "expect_red": true
+    },
+    "M31_prune_granted_anon": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M32_cron_schedule_changed": {
+      "control": "c_cron",
+      "expect_red": true
+    },
+    "M33_cron_unscheduled": {
+      "control": "c_cron",
+      "expect_red": true
+    },
+    "M34_cron_second_job": {
+      "control": "c_cron",
+      "expect_red": true
+    },
+    "M35_cat_other_function_cost": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M36_cat_function_added": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M37_cat_register_attribute": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M38_cat_refresh_granted_authenticated": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M39_cat_counter_table_granted": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M40_cat_cleanup_not_definer": {
+      "control": "c_catalog",
+      "expect_red": true
+    },
+    "M41_mig_anon_name_swapped": {
+      "control": "c_mig_post",
+      "expect_red": true
+    },
+    "M42_mig_cron_command_changed": {
+      "control": "c_mig_post",
+      "expect_red": true
+    }
+  },
+  "apply_md5": "4c423c0c2efb7efff97a72f010951628",
+  "rollback_md5": "a7b7adeb4ab02110092f516b7dda55ec"
+}
