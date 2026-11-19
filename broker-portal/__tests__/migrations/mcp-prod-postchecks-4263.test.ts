@@ -7,9 +7,9 @@
  *   independently of gen.py), and each file pins exactly the functions its migration defines;
  * - each post-check is one read-only SELECT: no data-changing or schema-changing keyword outside string
  *   literals, no count(*), no literal UUID;
- * - labels: only four kinds may be REPORT ONLY, and no assertion about PUBLIC, anon, authenticated or service_role
- *   is REPORT ONLY (one named service_role exception for tables created before the lane).
- * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod/verify-run.sql and
+ * - labels: only four kinds may be REPORT ONLY, and no assertion about PUBLIC, anon, authenticated, service_role or
+ *   mcp_reader is REPORT ONLY (one named service_role exception for tables created before the lane).
+ * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod-verify/verify-run.sql and
  * verify-controls.sql).
  */
 
