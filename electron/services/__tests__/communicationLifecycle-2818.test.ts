@@ -97,6 +97,7 @@ import {
   LEGACY_NEEDS_REVIEW_CLASSIFICATION,
   type CommunicationLifecycleState,
   type LifecycleFrom,
+  type LifecycleActionId,
   type RemovalFlavor,
 } from "../../types/ipc/communicationLifecycle";
 
@@ -175,6 +176,31 @@ function removalFlavorOf(emailId: string): RemovalFlavor | undefined {
     )
     .get(T, emailId) as { reason: string | null; match_reason: string | null } | undefined;
   return row ? classifyRemoval(row.reason, row.match_reason) : undefined;
+}
+
+/** The contract row ids sharing a key, for naming a failure. */
+function rowsFor(key: string): string {
+  const ids = LIFECYCLE_TRANSITIONS.filter(
+    (t) => lifecycleTransitionKey(t.from, t.to, t.removalFlavor) === key,
+  ).map((t) => t.id);
+  return ids.join("/") || "no row";
+}
+
+/**
+ * Every door published for a move, UNIONED across the rows sharing its key.
+ *
+ * Per key, not per row: T4 and T4b are both `suggested->removed` (the flavour
+ * qualifies the From column only), so the doors that reach that move are the
+ * union of theirs.
+ */
+function publishedActionsFor(key: string): ReadonlySet<LifecycleActionId> {
+  const out = new Set<LifecycleActionId>();
+  for (const t of LIFECYCLE_TRANSITIONS) {
+    if (lifecycleTransitionKey(t.from, t.to, t.removalFlavor) === key) {
+      for (const a of t.actions) out.add(a);
+    }
+  }
+  return out;
 }
 
 type Snapshot = Record<CommunicationLifecycleState, string[]>;
@@ -326,10 +352,25 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
    */
   it("every transition performed is published, and every published transition is performed", async () => {
     const observed = new Map<string, string[]>();
+    const observedActions = new Map<string, Set<LifecycleActionId>>();
 
+    /**
+     * Drive one REAL operation, and attribute every move it causes to the door
+     * that caused it.
+     *
+     * ATTRIBUTION IS PER EMAIL, NOT PER CALL (BACKLOG-2825), because one call is
+     * not one door. The sync's single pass splits its emails between the
+     * confident door (T1) and the address-missing door (T2); the tab's trash on
+     * a mixed thread moves an ordinary linked email (T5) and a legacy
+     * address-missing email (T4b) in the same click. A per-call action id would
+     * have to lie about one of them.
+     *
+     * The attribution is not free narration either — it is checked. Claim a
+     * door for an email and the move lands on a key that door is not published
+     * for, and the action comparison below reds.
+     */
     async function drive(
-      label: string,
-      emailIds: string[],
+      moves: ReadonlyArray<readonly [string, LifecycleActionId]>,
       op: () => Promise<unknown>,
     ): Promise<void> {
       const before = snapshot();
@@ -337,11 +378,11 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
       // suppression row it acted on, so afterwards there is nothing left to
       // classify. This is the only moment the source flavour is observable.
       const flavorBefore = new Map<string, RemovalFlavor | undefined>(
-        emailIds.map((id) => [id, removalFlavorOf(id)]),
+        moves.map(([id]) => [id, removalFlavorOf(id)]),
       );
       await op();
       const after = snapshot();
-      for (const id of emailIds) {
+      for (const [id, action] of moves) {
         const from = stateOf(before, id);
         const to = stateOf(after, id);
         if (from === to) continue;
@@ -356,7 +397,8 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
           expect(flavor).toBeDefined();
         }
         const key = lifecycleTransitionKey(from, to as CommunicationLifecycleState, flavor);
-        observed.set(key, [...(observed.get(key) ?? []), `${label} (${id})`]);
+        observed.set(key, [...(observed.get(key) ?? []), `${action} (${id})`]);
+        observedActions.set(key, (observedActions.get(key) ?? new Set<LifecycleActionId>()).add(action));
       }
     }
 
@@ -366,8 +408,15 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     addEmail("e-reject", "Coffee tomorrow?");
     addEmail("e-trash", `Closing on ${PROPERTY} is set.`);
     await drive(
-      "T1/T2 sync split",
-      ["e-confident", "e-ambiguous", "e-reject", "e-trash"],
+      [
+        // Which door each email took is CLAIMED here and checked below: a
+        // confident-door claim on an email the sync actually queued would land
+        // "sync-confident-split" on new->suggested, which T2 does not publish.
+        ["e-confident", "sync-confident-split"],
+        ["e-trash", "sync-confident-split"],
+        ["e-ambiguous", "sync-address-missing"],
+        ["e-reject", "sync-address-missing"],
+      ],
       () => syncReviewQueueForTransaction({ transactionId: T, reason: "open" }),
     );
     expect(snapshot().suggested.sort()).toEqual(["e-ambiguous", "e-reject"]);
@@ -377,27 +426,27 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     // The contract lists TWO triggers for T1; exercising only the sync half
     // would leave the other door unobserved.
     addEmail("e-manual", "Unrelated, attached by hand");
-    await drive("T1 manual attach", ["e-manual"], () =>
+    await drive([["e-manual", "manual-attach"]], () =>
       linkEmailToTransaction("e-manual", T, "manual", 0.95, "user_confirmed"),
     );
     expect(snapshot().linked).toContain("e-manual");
 
     // -- T3: Confirm on a review card ---------------------------------------
     const ambiguousItem = getReviewState(T).items.find((i) => i.email_id === "e-ambiguous")!;
-    await drive("T3 review confirm", ["e-ambiguous"], () =>
+    await drive([["e-ambiguous", "review-confirm"]], () =>
       approveReviewItems([ambiguousItem.id]),
     );
 
     // -- T4: trash on a review card -----------------------------------------
     const rejectItem = getReviewState(T).items.find((i) => i.email_id === "e-reject")!;
-    await drive("T4 review trash", ["e-reject"], () => rejectReviewItems([rejectItem.id]));
+    await drive([["e-reject", "review-trash"]], () => rejectReviewItems([rejectItem.id]));
     expect(snapshot().removed).toContain("e-reject");
 
     // -- T6: Restore a REVIEW rejection -> back to SUGGESTED ------------------
     const rejectedRow = db
       .prepare("SELECT id FROM ignored_communications WHERE transaction_id=? AND email_id='e-reject'")
       .get(T) as { id: string };
-    await drive("T6 restore review rejection", ["e-reject"], () =>
+    await drive([["e-reject", "removed-card-restore"]], () =>
       restoreRejectedToQueue(rejectedRow.id),
     );
     expect(snapshot().suggested).toContain("e-reject");
@@ -409,7 +458,7 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     const linkRow = db
       .prepare("SELECT id FROM communications WHERE transaction_id=? AND email_id='e-trash'")
       .get(T) as { id: string };
-    await drive("T5 linked-card trash", ["e-trash"], () =>
+    await drive([["e-trash", "linked-card-trash"]], () =>
       transactionService.unlinkCommunication(linkRow.id),
     );
     expect(snapshot().removed).toContain("e-trash");
@@ -422,7 +471,7 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     expect(ordinary.reason).not.toBe(REVIEW_REJECTION_REASON);
 
     // -- T7: Restore an ORDINARY removal -> back to LINKED --------------------
-    await drive("T7 restore ordinary removal", ["e-trash"], () =>
+    await drive([["e-trash", "removed-card-restore"]], () =>
       transactionService.restoreRemovedEmailThread(ordinary.id, "e-trash", T, U),
     );
     expect(snapshot().linked).toContain("e-trash");
@@ -439,7 +488,11 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     // autoLinkService, not invented — and it is then trashed and restored
     // through transactionService, the same two functions the tab's buttons call.
     addEmail("e-legacy", "Sunday brunch?");
-    await drive("T7b setup: legacy 2319 link", ["e-legacy"], () =>
+    // The door is the sync's address-missing half: this is the exact call
+    // autoLinkService makes for the ambiguous half when it is not queueing
+    // (autoLinkService.ts:938 — "auto", the run's confidence, the match reason),
+    // so it is T2's door, not a fourth one.
+    await drive([["e-legacy", "sync-address-missing"]], () =>
       linkEmailToTransaction("e-legacy", T, "auto", 0.5, LEGACY_NEEDS_REVIEW_CLASSIFICATION),
     );
     // Linked by table, SUGGESTED by contract — the case a store-membership
@@ -449,7 +502,10 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     const legacyLink = db
       .prepare("SELECT id FROM communications WHERE transaction_id=? AND email_id='e-legacy'")
       .get(T) as { id: string };
-    await drive("T7b setup: tab trash of a legacy item", ["e-legacy"], () =>
+    // T4b — the SAME door as T5, on an email in a different source state. See
+    // the T4b row for how a legacy address-missing email reaches a card in the
+    // tab's LINKED list.
+    await drive([["e-legacy", "linked-card-trash"]], () =>
       transactionService.unlinkCommunication(legacyLink.id),
     );
 
@@ -460,7 +516,7 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     // row itself. If this were "ordinary" the next step would be T7, not T7b.
     expect(removalFlavorOf("e-legacy")).toBe("ordinary-address-missing");
 
-    await drive("T7b restore of an ordinary address-missing removal", ["e-legacy"], () =>
+    await drive([["e-legacy", "removed-card-restore"]], () =>
       transactionService.restoreRemovedEmailThread(legacyRemoved.id, "e-legacy", T, U),
     );
     // Back in needs-review — NOT linked. This is the whole of the ruling.
@@ -483,23 +539,109 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     // row from the table lands here, named.
     const unexercised = publishedKeys
       .filter((k) => !observed.has(k))
-      .map((k) => {
-        const rows = LIFECYCLE_TRANSITIONS.filter(
-          (t) => lifecycleTransitionKey(t.from, t.to, t.removalFlavor) === k,
-        )
-          .map((t) => t.id)
-          .join("/");
-        return `${k} (${rows || "no row"}) is published but no operation performed it`;
-      });
+      .map((k) => `${k} (${rowsFor(k)}) is published but no operation performed it`);
     expect(unexercised).toEqual([]);
+
+    /* ------- the same two directions, on the DOORS (BACKLOG-2825) -------
+     *
+     * `actions` used to be free text that nothing read: the SR deleted
+     * "manual-attach" from T1 and all six tests stayed green, so the published
+     * Trigger column could drift from the app's real doors in silence. These
+     * two comparisons are what make the column load-bearing.
+     */
+
+    // DIRECTION 3 — an undeclared door: the code reached this move through an
+    // action no row publishes for it. Deleting an action from a row lands here.
+    const undeclaredDoors: string[] = [];
+    for (const key of [...observedActions.keys()].sort()) {
+      const published = publishedActionsFor(key);
+      for (const action of [...observedActions.get(key)!].sort()) {
+        if (!published.has(action)) {
+          undeclaredDoors.push(
+            `${action} performed ${key} but no LIFECYCLE_TRANSITIONS row for that move declares it`,
+          );
+        }
+      }
+    }
+    expect(undeclaredDoors).toEqual([]);
+
+    // DIRECTION 4 — a published door nothing opens: an action on a row that no
+    // operation in this suite actually drove.
+    const undrivenDoors: string[] = [];
+    for (const key of publishedKeys) {
+      const driven = observedActions.get(key) ?? new Set<LifecycleActionId>();
+      for (const action of [...publishedActionsFor(key)].sort()) {
+        if (!driven.has(action)) {
+          undrivenDoors.push(
+            `${action} is declared on ${rowsFor(key)} (${key}) but no operation performed it`,
+          );
+        }
+      }
+    }
+    expect(undrivenDoors).toEqual([]);
 
     // And, stated as one set equality, so the failure diff shows both sides.
     expect(observedKeys).toEqual(publishedKeys);
 
-    // Sanity: every contract row id is distinct and all seven are present, so a
-    // silently truncated table cannot make the comparison above vacuous.
+    // Sanity: every contract row id is distinct and all of them are present, so
+    // a silently truncated table cannot make the comparisons above vacuous.
     expect(LIFECYCLE_TRANSITIONS.map((t) => t.id)).toEqual([
-      "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T7b",
+      "T1", "T2", "T3", "T4", "T4b", "T5", "T6", "T7", "T7b",
+    ]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 4. Completeness — the table can explain its own preconditions
+ * ------------------------------------------------------------------ */
+
+/**
+ * THE CLOSURE PROPERTY OF THE TABLE (BACKLOG-2825).
+ *
+ * A removal's flavour is an INPUT to the rows that leave REMOVED — it is what
+ * selects the destination, which is why T6, T7 and T7b share a source state and
+ * differ only by it. So every flavour the table CONSUMES has to be a flavour the
+ * table also WRITES, or the table is describing a precondition it cannot explain
+ * how anything reaches.
+ *
+ * It failed that, and the failure was invisible. Published with eight rows,
+ * `ordinary-address-missing` was T7b's source and NO row wrote it: T4 documents
+ * `review-rejection`, T5 documents `ordinary`. Read as data, the table could not
+ * answer "how does an item get into that state?" — because the removal that
+ * creates T7b's precondition is a `suggested->removed` move, the same KEY as T4,
+ * and was silently folded into T4's row while writing a different flavour.
+ *
+ * This is checked as DATA, not by execution, and deliberately: it is a property
+ * of the table's shape, so it holds (or fails) without a database, and a `-t`
+ * filtered run of it is honest.
+ */
+describe("COMPLETENESS — every source flavour the table consumes, some row writes", () => {
+  it("no row leaves REMOVED through a flavour no row writes into REMOVED", () => {
+    const written = new Set<RemovalFlavor>();
+    for (const t of LIFECYCLE_TRANSITIONS) {
+      if (t.to === "removed" && t.removalFlavor) written.add(t.removalFlavor);
+    }
+
+    const unproduced = LIFECYCLE_TRANSITIONS.filter(
+      (t) => t.from === "removed" && t.removalFlavor && !written.has(t.removalFlavor),
+    ).map(
+      (t) =>
+        `removed(${t.removalFlavor}) is the source of ${t.id}, but no published row writes ` +
+        `${t.removalFlavor} into REMOVED — the table cannot explain how that state is reached`,
+    );
+    expect(unproduced).toEqual([]);
+
+    // NOT VACUOUS. Asserted as an exact SET, not a count: an emptied or
+    // truncated table would otherwise pass the check above by consuming nothing.
+    const consumed = new Set<RemovalFlavor>(
+      LIFECYCLE_TRANSITIONS.filter((t) => t.from === "removed" && t.removalFlavor).map(
+        (t) => t.removalFlavor!,
+      ),
+    );
+    expect([...consumed].sort()).toEqual([
+      "ordinary",
+      "ordinary-address-missing",
+      "review-rejection",
     ]);
   });
 });
