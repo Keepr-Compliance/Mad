@@ -6,7 +6,9 @@
  * - every function body a post-check pins has the md5 of the body in the migration text (extracted here,
  *   independently of gen.py), and each file pins exactly the functions its migration defines;
  * - each post-check is one read-only SELECT: no data-changing or schema-changing keyword outside string
- *   literals, no count(*), no literal UUID.
+ *   literals, no count(*), no literal UUID;
+ * - labels: only four kinds may be REPORT ONLY, and no assertion about PUBLIC, anon, authenticated or service_role
+ *   is REPORT ONLY (one named service_role exception for tables created before the lane).
  * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod/verify-run.sql and
  * verify-controls.sql).
  */
@@ -23,13 +25,15 @@ const LAST = '20261118190000';
 const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
 const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex');
 
-/** The lane's migrations: every file in the version range, and every later backlog_4263 migration. */
+/**
+ * The lane's migrations: every file in the version range, and every later migration that names an mcp_, _mcp_,
+ * cloud_, _cloud_ or ai_app_ object (it needs its own post-check, or an entry in NOT_LANE with the reason).
+ */
+const NOT_LANE: Record<string, string> = {};
+const LANE_OBJECT = /\b_?(mcp|cloud)_\w+|\bai_app_\w+/;
 const LANE = readdirSync(MIGRATIONS)
-  .filter((f) => f.endsWith('.sql'))
-  .filter((f) => {
-    const v = f.slice(0, 14);
-    return (v >= FIRST && v <= LAST) || (v >= FIRST && f.includes('backlog_4263'));
-  })
+  .filter((f) => f.endsWith('.sql') && f.slice(0, 14) >= FIRST && !(f in NOT_LANE))
+  .filter((f) => f.slice(0, 14) <= LAST || LANE_OBJECT.test(readFileSync(join(MIGRATIONS, f), 'utf8')))
   .sort();
 const VERSIONS = LANE.map((f) => f.slice(0, 14));
 
@@ -90,6 +94,21 @@ function code(pc: string): string {
   return out;
 }
 
+const REPORT_KINDS = [
+  'grants to other roles',
+  'check definition text',
+  'index predicate text',
+  'pre-lane table grants to service_role',
+];
+const API = ['PUBLIC', 'anon', 'authenticated', 'service_role'];
+/** The rows of one VALUES CTE, each as its list of single-quoted values. */
+function cte(pc: string, head: string): string[][] {
+  const i = pc.indexOf(`${head} AS (VALUES\n`);
+  if (i < 0) return [];
+  const body = pc.slice(i, pc.indexOf(')),\n', i) + 2);
+  return [...body.matchAll(/^ {4}\((.*)\),?$/gm)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1]));
+}
+
 const MIG = new Map(LANE.map((f) => [f.slice(0, 14), read(join(MIGRATIONS, f))]));
 const FILE = (k: string): string => join(DIR, `postcheck-${k}.sql`);
 
@@ -142,6 +161,27 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(c.split(';').length).toBe(2);
     expect(c.trim().endsWith(';')).toBe(true);
     expect(pc).toContain(`'POSTCHECK ${k} FAILED: '`);
+  });
+
+  it.each([...VERSIONS, 'final'])('postcheck-%s labels: report-only only for the four named kinds, never for an API role', (k) => {
+    const pc = read(FILE(k));
+    const rules = [...pc.slice(pc.indexOf('rule(kind, must) AS (VALUES'), pc.indexOf('checks(id, kind')).matchAll(/\('([^']+)', (true|false)\)/g)];
+    expect(rules.length).toBeGreaterThan(5);
+    const report = rules.filter((r) => r[2] === 'false').map((r) => r[1]);
+    for (const kind of report) expect(REPORT_KINDS).toContain(kind);
+    expect(pc).toContain('coalesce(r.must, true)');
+    const isReport = (kind: string): boolean => report.includes(kind);
+    const fx = cte(pc, 'fx(sig, role, want, kind)');
+    const rx = cte(pc, 'rx(name, src, role, want, kind)');
+    expect(fx.length + rx.length).toBeGreaterThan(0);
+    for (const [sig, role, , kind] of fx) {
+      if (API.includes(role)) expect(`${sig} ${role} ${isReport(kind)}`).toBe(`${sig} ${role} false`);
+    }
+    for (const [name, src, role, , kind] of rx) {
+      const allowed = role === 'service_role' && src === 'table' && kind === 'pre-lane table grants to service_role';
+      if (API.includes(role) && !allowed) expect(`${name} ${role} ${isReport(kind)}`).toBe(`${name} ${role} false`);
+    }
+    expect(pc).toMatch(/AS postcheck,\n\s+coalesce\(f\.rep, ''\) AS report_only/);
   });
 
   it('the apply file for 20261118100000 holds the migration as it is at HEAD', () => {
