@@ -147,5 +147,6 @@ Expected; each cell lists the MUST HOLD ids that differ.
 | `postcheck-<version>.sql` | Read-only post-check per migration (ten) |
 | `postcheck-final.sql` | Read-only post-check of the state after all ten |
 | `expected.json` | Pinned facts with labels, callable lists per stage, predicted failures |
-| `verify-run.sql` | Test project only: runs the final and the ten files once each, ends in `RAISE` |
-| `verify-controls.sql` | Test project only: breaks the catalogue inside one transaction that ends in `RAISE` (nothing kept) |
+
+Every `.sql` file in this folder is read-only. The test-database harness (`verify-run.sql`, `verify-controls.sql`) is
+in `../backlog-4263-prod-verify/` and is never run on production.
