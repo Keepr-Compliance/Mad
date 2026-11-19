@@ -74,7 +74,7 @@ const absent = (pc: string): string[] =>
  * '' escapes). A "..." identifier keeps its inner text, so a quoted name ("set_config"(...)) is scanned like a bare one. A dollar-quoted body is kept as code (so a DO block's or function's text stays
  * visible to the keyword scan), and the files here must hold none.
  */
-function code(pc: string): string {
+function code(pc: string, quoted?: string[]): string {
   let out = '';
   let i = 0;
   while (i < pc.length) {
@@ -90,6 +90,7 @@ function code(pc: string): string {
       const j = pc.indexOf('"', i + 1);
       if (j < 0) throw new Error('unclosed identifier');
       out += pc.slice(i + 1, j);
+      quoted?.push(pc.slice(i + 1, j));
       i = j + 1;
     } else if (pc[i] === "'") {
       let j = i + 1;
@@ -146,6 +147,11 @@ const ALLOWED_ALIASES = new Set<string>([
   'rule', 'rx', 'sweep_want', 'u', 'x',
 ]);
 const COLS = String.raw`\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*\s*\)`;
+/**
+ * The only quoted identifiers the files use, derived by the same scan (it prints POSTCHECK_QUOTED). Any other "..." —
+ * a quoted function name or keyword such as "exists"( — turns the test red, as does a Unicode-escape name (U& / UESCAPE).
+ */
+const ALLOWED_QUOTED = new Set<string>(['C', 'char']);
 /** `name(` tokens in comment- and literal-free SQL (a schema prefix such as pg_catalog. is dropped). */
 const calls = (c: string): string[] => [...c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((m) => m[1].toLowerCase());
 /** The `name(` tokens that are not allowed at their position. */
@@ -232,6 +238,15 @@ describe('BACKLOG-4263 production post-checks', () => {
     const seen = new Set(per.flatMap(([, names]) => names));
     if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_CALLS ${JSON.stringify([...seen].sort())}`);
     expect(seen.size).toBeGreaterThan(10);
+    const quoted = sql.flatMap((f) => {
+      const q: string[] = [];
+      code(read(join(DIR, f)), q);
+      return q.map((x) => [f, x] as const);
+    });
+    if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_QUOTED ${JSON.stringify([...new Set(quoted.map(([, x]) => x))].sort())}`);
+    expect(quoted.length).toBeGreaterThan(0);
+    for (const [f, x] of quoted) expect(`${f}: "${x}" ${ALLOWED_QUOTED.has(x)}`).toBe(`${f}: "${x}" true`);
+    for (const f of sql) expect(`${f}: ${(code(read(join(DIR, f))).match(/U&|\bUESCAPE\b/gi) || []).join(',')}`).toBe(`${f}: `);
     const allowed = new Set([...ALLOWED_FUNCTIONS, ...ALLOWED_KEYWORDS, ...ALLOWED_ALIASES]);
     expect([...seen].filter((n) => !allowed.has(n))).toEqual([]);
     for (const f of sql) expect(`${f}: ${badCalls(code(read(join(DIR, f)))).join(',')}`).toBe(`${f}: `);
