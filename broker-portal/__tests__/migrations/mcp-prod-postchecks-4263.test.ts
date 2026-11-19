@@ -70,8 +70,8 @@ const absent = (pc: string): string[] =>
   [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+)\(/g)].map((m) => m[1]);
 
 /**
- * The SQL with comments and string literals removed: `--` to end of line, `/* ... *\/` blocks, '...' literals (with ''
- * escapes) and "..." identifiers. A dollar-quoted body is kept as code (so a DO block's or function's text stays
+ * The SQL with comments and string literals removed: `--` to end of line, `/* ... *\/` blocks and '...' literals (with
+ * '' escapes). A "..." identifier keeps its inner text, so a quoted name ("set_config"(...)) is scanned like a bare one. A dollar-quoted body is kept as code (so a DO block's or function's text stays
  * visible to the keyword scan), and the files here must hold none.
  */
 function code(pc: string): string {
@@ -89,7 +89,7 @@ function code(pc: string): string {
     } else if (pc[i] === '"') {
       const j = pc.indexOf('"', i + 1);
       if (j < 0) throw new Error('unclosed identifier');
-      out += '""';
+      out += pc.slice(i + 1, j);
       i = j + 1;
     } else if (pc[i] === "'") {
       let j = i + 1;
@@ -125,21 +125,48 @@ function cte(pc: string, head: string): string[][] {
 }
 
 /**
- * Every name called as `name(` in the production folder's .sql files (function calls, plus CTE and alias column
- * lists, which share the shape). Derived by running the scanner below over the eleven files, not written by hand:
+ * Every name followed by `(` in the production folder's .sql files, in three groups. Derived by running the scanner
+ * below over the eleven files, not written by hand:
  *   POSTCHECK_LIST_CALLS=1 npx jest --config broker-portal/jest.config.js \
  *     broker-portal/__tests__/migrations/mcp-prod-postchecks-4263.test.ts -t 'allowlisted'
- * A name outside this list (set_config, nextval, pg_advisory_lock, dblink, pg_sleep, ...) turns the test red.
+ * A name outside these groups (set_config, nextval, pg_advisory_lock, dblink, pg_sleep, ...) turns the test red.
  */
-const ALLOWED_CALLS = new Set<string>([
-  'acldefault', 'aclexplode', 'all', 'and', 'anon_want', 'array_to_string', 'as', 'auth_want', 'cdef', 'checks',
-  'coalesce', 'col', 'con', 'current_database', 'else', 'exists', 'filter', 'fn', 'format_type', 'from', 'fx',
-  'gone', 'has_function_privilege', 'idx', 'in', 'ipred', 'job', 'lateral', 'led', 'md5', 'pg_get_constraintdef',
-  'pg_get_expr', 'regexp_matches', 'rel', 'rule', 'rx', 'select', 'string_agg', 'substr', 'sweep_want', 'then',
-  'to_regclass', 'to_regprocedure', 'to_regrole', 'u', 'unnest', 'values', 'where', 'x',
+const ALLOWED_FUNCTIONS = new Set<string>([
+  'acldefault', 'aclexplode', 'array_to_string', 'coalesce', 'current_database', 'format_type', 'has_function_privilege',
+  'md5', 'pg_get_constraintdef', 'pg_get_expr', 'regexp_matches', 'string_agg', 'substr', 'to_regclass',
+  'to_regprocedure', 'to_regrole', 'unnest',
 ]);
-/** `name(` tokens in comment- and literal-free SQL; a schema prefix (pg_catalog.) is dropped. */
+const ALLOWED_KEYWORDS = new Set<string>(['all', 'and', 'as', 'else', 'exists', 'filter', 'from', 'in', 'lateral', 'select', 'then', 'values', 'where']);
+/**
+ * CTE and alias names. Accepted only where they are defined, with a list of plain column names: `name(a, b) AS (` (a CTE)
+ * or `) name(a, b)` / `ORDINALITY name(a, b)` (an alias). Anywhere else the same name is a call and turns the test red.
+ */
+const ALLOWED_ALIASES = new Set<string>([
+  'anon_want', 'auth_want', 'cdef', 'checks', 'col', 'con', 'fn', 'fx', 'gone', 'idx', 'ipred', 'job', 'led', 'rel',
+  'rule', 'rx', 'sweep_want', 'u', 'x',
+]);
+const COLS = String.raw`\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*\s*\)`;
+/** `name(` tokens in comment- and literal-free SQL (a schema prefix such as pg_catalog. is dropped). */
 const calls = (c: string): string[] => [...c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((m) => m[1].toLowerCase());
+/** The `name(` tokens that are not allowed at their position. */
+function badCalls(c: string): string[] {
+  const bad: string[] = [];
+  for (const m of c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    const name = m[1].toLowerCase();
+    if (ALLOWED_FUNCTIONS.has(name) || ALLOWED_KEYWORDS.has(name)) continue;
+    if (ALLOWED_ALIASES.has(name)) {
+      const at = m.index! + m[0].length - 1;
+      const before = c.slice(0, m.index!);
+      const after = c.slice(at);
+      const cols = new RegExp(`^${COLS}`).exec(after);
+      const cteDef = cols !== null && /^\s*AS\s*\(/i.test(after.slice(cols[0].length));
+      const aliasDef = cols !== null && /(\)|\bORDINALITY)\s*$/i.test(before);
+      if (cteDef || aliasDef) continue;
+    }
+    bad.push(name);
+  }
+  return bad;
+}
 /** Row locks and SELECT ... INTO, which the write-keyword list does not cover. */
 const NOT_READ_ONLY = /\bINTO\b|\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b/i;
 /** Write statements and anything that can change state; matched after comments and literals are removed. */
@@ -205,7 +232,15 @@ describe('BACKLOG-4263 production post-checks', () => {
     const seen = new Set(per.flatMap(([, names]) => names));
     if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_CALLS ${JSON.stringify([...seen].sort())}`);
     expect(seen.size).toBeGreaterThan(10);
-    for (const [f, names] of per) expect(`${f}: ${names.filter((n) => !ALLOWED_CALLS.has(n)).join(',')}`).toBe(`${f}: `);
+    const allowed = new Set([...ALLOWED_FUNCTIONS, ...ALLOWED_KEYWORDS, ...ALLOWED_ALIASES]);
+    expect([...seen].filter((n) => !allowed.has(n))).toEqual([]);
+    for (const f of sql) expect(`${f}: ${badCalls(code(read(join(DIR, f)))).join(',')}`).toBe(`${f}: `);
+  });
+
+  it('the production folder holds no backslash (no E-string can shift the literal scan)', () => {
+    const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
+    expect(sql.length).toBe(VERSIONS.length + 1);
+    for (const f of sql) expect(`${f}: ${read(join(DIR, f)).includes('\\')}`).toBe(`${f}: false`);
   });
 
   it('the test-database controls file starts with the guard that refuses production, before any write', () => {
