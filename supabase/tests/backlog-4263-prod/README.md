@@ -11,9 +11,8 @@ It returns one row with the value `ok`, or it fails with an error whose text nam
 invalid input syntax for type integer: "POSTCHECK <version> FAILED: <id>: want <x>, got <y> | <id>: want <x>, got <y>"
 ```
 
-Style: one `SELECT`, not a `DO` block. A `SELECT` cannot change anything, returns a visible `ok` row through any SQL
-client (including ones that drop notices), and fails with a message by casting the list of differences to `integer`,
-which only runs when there is a difference.
+Style: one `SELECT` (no `DO` block) that calls no function with a side effect. The error is produced by casting the
+list of differences to `integer`, which happens only when there is a difference.
 
 Catalogue views read: `pg_catalog.pg_proc`, `pg_language`, `pg_class`, `pg_attribute`, `pg_constraint`, `pg_index`,
 `pg_policy`, `pg_sequence`, `pg_namespace`, the functions `to_regprocedure`, `to_regclass`, `aclexplode`, `acldefault`,

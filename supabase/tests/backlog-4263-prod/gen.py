@@ -501,6 +501,28 @@ def predicted_failures(k, j):
 
 PRED = {k: {j: predicted_failures(k, j) for j in VERSIONS if j > k} for k in VERSIONS}
 
+# A body a later migration replaces is never compared with a catalogue by verify-run (the file fails at the final state).
+# Each such md5 must be the one the replacing migration's own pre-check requires (those pre-checks ran on the test project).
+SUPERSEDED = {}
+for k in VERSIONS:
+    for i in predicted_failures(k, 'final'):
+        if i.endswith(' md5'):
+            sig = i[len('function '):-len(' md5')]
+            later = [j for j in VERSIONS if j > k and sig in per[j]['fn']]
+            assert later and WANT[k][i] in rd(per[later[0]]['file']), ('superseded body md5 not required by the replacing migration', k, sig)
+            SUPERSEDED[f'{k} {sig}'] = {'md5': WANT[k][i], 'pre_check_of': later[0]}
+
+# The internal-prefix sweep at an early stage covers functions the lane replaces only later; each such function that
+# existed before the lane must have been revoked from PUBLIC, anon and authenticated before the lane.
+PRE_LANE_PREFIXED = {}
+for sig, x in FINAL['fn'].items():
+    name = sig.split('(')[0]
+    if re.match(r'(ai_app_|_mcp_|_cloud_)', name) and x['pre_lane']:
+        hits = [f[:14] for f in PRE_LANE if re.search(r'^REVOKE ALL ON FUNCTION public\.' + re.escape(name) + r'\([^)]*\) FROM PUBLIC, anon, authenticated',
+                                                       open(os.path.join(MIGDIR, f), encoding='utf-8').read(), re.M)]
+        assert hits, ('pre-lane prefixed function with no pre-lane revoke', sig)
+        PRE_LANE_PREFIXED[sig] = hits
+
 # ------------------------------------------------------------------------------------------------ default-dependent assertions
 for v in VERSIONS:
     for sig in per[v]['fn']:
@@ -811,6 +833,8 @@ expected = {
     'expected_at_final_state': {k: ('ok' if not predicted_failures(k, 'final') else predicted_failures(k, 'final')) for k in VERSIONS},
     'rests_on_default_or_pre_lane_state': {k: default_dep[k] for k in sorted(default_dep) if any(k in WANT[x] for x in RUN_ORDER)},
     'controls': {c[0]: {'postcheck': c[1], 'message_names': CONTROL_WANT[c[0]]} for c in CONTROLS},
+    'superseded_bodies_required_by_later_pre_checks': SUPERSEDED,
+    'pre_lane_prefixed_functions_revoked_before_the_lane': PRE_LANE_PREFIXED,
 }
 assert not predicted_failures('final', 'final')
 
@@ -841,9 +865,8 @@ It returns one row with the value `ok`, or it fails with an error whose text nam
 invalid input syntax for type integer: "POSTCHECK <version> FAILED: <id>: want <x>, got <y> | <id>: want <x>, got <y>"
 ```
 
-Style: one `SELECT`, not a `DO` block. A `SELECT` cannot change anything, returns a visible `ok` row through any SQL
-client (including ones that drop notices), and fails with a message by casting the list of differences to `integer`,
-which only runs when there is a difference.
+Style: one `SELECT` (no `DO` block) that calls no function with a side effect. The error is produced by casting the
+list of differences to `integer`, which happens only when there is a difference.
 
 Catalogue views read: `pg_catalog.pg_proc`, `pg_language`, `pg_class`, `pg_attribute`, `pg_constraint`, `pg_index`,
 `pg_policy`, `pg_sequence`, `pg_namespace`, the functions `to_regprocedure`, `to_regclass`, `aclexplode`, `acldefault`,

@@ -2364,5 +2364,50 @@
       "postcheck": "final",
       "message_names": "cron job cloud-todo-purge"
     }
+  },
+  "superseded_bodies_required_by_later_pre_checks": {
+    "20261118100000 _mcp_r_list_all_deals(text,date,date,uuid)": {
+      "md5": "6ea286c67274464080b19fa439b5d9ac",
+      "pre_check_of": "20261118110000"
+    },
+    "20261118110000 cloud_list_install_rows(uuid,uuid,text,uuid,integer)": {
+      "md5": "e557b64992885fa2b3decff2f5b24781",
+      "pre_check_of": "20261118120000"
+    },
+    "20261118110000 cloud_tombstone(uuid,uuid,text,uuid[])": {
+      "md5": "ac6e76a613b5aa10a0b95743c902c84c",
+      "pre_check_of": "20261118120000"
+    },
+    "20261118110000 _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid)": {
+      "md5": "524eeb351e6a71f7f37a07058a80be96",
+      "pre_check_of": "20261118160000"
+    },
+    "20261118110000 _mcp_r_deal_checklists(uuid,boolean,uuid)": {
+      "md5": "f6a9f0336a1a070adcf66778afecbce7",
+      "pre_check_of": "20261118130000"
+    },
+    "20261118130000 mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)": {
+      "md5": "ab6a9345c55ab69c77347d9b37e92e9d",
+      "pre_check_of": "20261118180000"
+    },
+    "20261118130000 mcp_refresh(text,bytea,text,text,bytea,bytea)": {
+      "md5": "a7797a967b1952dec493c48c62328530",
+      "pre_check_of": "20261118190000"
+    },
+    "20261118130000 mcp_authorize_view(text,bytea)": {
+      "md5": "a9b5a3de003671600e0033d7d952d804",
+      "pre_check_of": "20261118170000"
+    }
+  },
+  "pre_lane_prefixed_functions_revoked_before_the_lane": {
+    "_mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid)": [
+      "20261114110000"
+    ],
+    "_mcp_r_get_deal(uuid)": [
+      "20261114110000"
+    ],
+    "_mcp_r_deal_checklists(uuid,boolean,uuid)": [
+      "20261114110000"
+    ]
   }
 }
