@@ -134,7 +134,7 @@ describe('mcp_authorize_view return keys parity with the newest migration', () =
 
   it('positive: the parser reads the newest definition and its nine keys', () => {
     expect(file >= '20261118130000_backlog_4263_mcp_todo_write_tools.sql').toBe(true);
-    for (const k of ['ok', 'request_id', 'client_name', 'provider', 'redirect_host', 'scope', 'notice_version', 'nonce', 'replaces_existing']) {
+    for (const k of ['ok', 'request_id', 'client_name', 'provider', 'redirect_host', 'scope', 'notice_version', 'nonce', 'replaces_existing', 'age_seconds']) {
       expect(keys).toContain(k);
     }
     expect(new Set(keys).size).toBe(keys.length);
