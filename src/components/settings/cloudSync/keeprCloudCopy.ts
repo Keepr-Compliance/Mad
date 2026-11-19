@@ -47,6 +47,7 @@ export const KEEPR_CLOUD_COPY = {
   // BACKLOG-4263 PR-6 (plan §7, F6)
   turnOffLost: "Changes made by AI apps or on other devices that are not on this computer yet are lost.",
   turnOffArchive: "Deals you deleted in the last 30 days can no longer be restored.",
+  turnOffTodos: "Todos removed in the last 30 days can no longer be restored.",
   turnOffConfirmButton: "Turn off and delete",
   turnOffDone: "Keepr Cloud is off. Your online copy was deleted and AI apps were disconnected.",
   turnOffOffline: "Turning off. Your online copy will be deleted when Keepr can reach the internet.",
