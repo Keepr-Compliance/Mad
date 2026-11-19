@@ -84,6 +84,7 @@ export default async function AiAppsPage() {
   }));
   return (
     <Shell email={email}>
+      <p className="text-sm text-gray-600">{AI_APPS.disconnectHere}</p>
       <AiAppsList rows={rows} />
     </Shell>
   );
