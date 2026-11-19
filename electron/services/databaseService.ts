@@ -111,7 +111,17 @@ import {
   V84_STATE_TABLE_INFO_SQL,
 } from "./db/migrationV84Sql";
 // BACKLOG-4263 PR-11c: migration v85 (who last wrote an item's done and note parts).
-import { V85_ADD_AUTHOR_COLUMNS, V85_ITEMS_TABLE_INFO_SQL } from "./db/migrationV85Sql";
+import {
+  V85_ADD_DONE_BY_APP_SQL,
+  V85_ADD_DONE_BY_AT_SQL,
+  V85_ADD_DONE_BY_KIND_SQL,
+  V85_ADD_DONE_BY_STAMP_SQL,
+  V85_ADD_NOTE_BY_APP_SQL,
+  V85_ADD_NOTE_BY_AT_SQL,
+  V85_ADD_NOTE_BY_DIGEST_SQL,
+  V85_ADD_NOTE_BY_KIND_SQL,
+  V85_ITEMS_TABLE_INFO_SQL,
+} from "./db/migrationV85Sql";
 import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
@@ -2423,9 +2433,15 @@ class DatabaseService implements IDatabaseService {
       // nor write them; a value they write leaves the author mismatched, which reads as not recorded.
       migrate: (d) => {
         const items = d.prepare(V85_ITEMS_TABLE_INFO_SQL).all() as Array<{ name: string }>;
-        for (const [name, ddl] of V85_ADD_AUTHOR_COLUMNS) {
-          if (!items.some((c) => c.name === name)) d.exec(ddl);
-        }
+        const has = (name: string) => items.some((c) => c.name === name);
+        if (!has("done_by_kind")) d.exec(V85_ADD_DONE_BY_KIND_SQL);
+        if (!has("done_by_app")) d.exec(V85_ADD_DONE_BY_APP_SQL);
+        if (!has("done_by_at")) d.exec(V85_ADD_DONE_BY_AT_SQL);
+        if (!has("done_by_stamp")) d.exec(V85_ADD_DONE_BY_STAMP_SQL);
+        if (!has("note_by_kind")) d.exec(V85_ADD_NOTE_BY_KIND_SQL);
+        if (!has("note_by_app")) d.exec(V85_ADD_NOTE_BY_APP_SQL);
+        if (!has("note_by_at")) d.exec(V85_ADD_NOTE_BY_AT_SQL);
+        if (!has("note_by_digest")) d.exec(V85_ADD_NOTE_BY_DIGEST_SQL);
       },
     },
   ];

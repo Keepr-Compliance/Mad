@@ -18,26 +18,20 @@
  */
 export const V85_ITEMS_TABLE_INFO_SQL = "PRAGMA table_info(transaction_checklist_items)";
 
-/** [column name, ALTER statement], in schema.sql order. */
-export const V85_ADD_AUTHOR_COLUMNS: ReadonlyArray<readonly [string, string]> = [
-  [
-    "done_by_kind",
-    "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_kind TEXT CHECK (done_by_kind IS NULL OR done_by_kind IN ('agent', 'ai_app'));",
-  ],
-  [
-    "done_by_app",
-    "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_app TEXT CHECK (done_by_app IS NULL OR done_by_app IN ('anthropic', 'openai'));",
-  ],
-  ["done_by_at", "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_at TEXT;"],
-  ["done_by_stamp", "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_stamp TEXT;"],
-  [
-    "note_by_kind",
-    "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_kind TEXT CHECK (note_by_kind IS NULL OR note_by_kind IN ('agent', 'ai_app'));",
-  ],
-  [
-    "note_by_app",
-    "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_app TEXT CHECK (note_by_app IS NULL OR note_by_app IN ('anthropic', 'openai'));",
-  ],
-  ["note_by_at", "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_at TEXT;"],
-  ["note_by_digest", "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_digest TEXT;"],
-];
+/** One ALTER per column, identical to its column in schema.sql; run in this order (schema.sql order). */
+export const V85_ADD_DONE_BY_KIND_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_kind TEXT CHECK (done_by_kind IS NULL OR done_by_kind IN ('agent', 'ai_app'));";
+export const V85_ADD_DONE_BY_APP_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_app TEXT CHECK (done_by_app IS NULL OR done_by_app IN ('anthropic', 'openai'));";
+export const V85_ADD_DONE_BY_AT_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_at TEXT;";
+export const V85_ADD_DONE_BY_STAMP_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN done_by_stamp TEXT;";
+export const V85_ADD_NOTE_BY_KIND_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_kind TEXT CHECK (note_by_kind IS NULL OR note_by_kind IN ('agent', 'ai_app'));";
+export const V85_ADD_NOTE_BY_APP_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_app TEXT CHECK (note_by_app IS NULL OR note_by_app IN ('anthropic', 'openai'));";
+export const V85_ADD_NOTE_BY_AT_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_at TEXT;";
+export const V85_ADD_NOTE_BY_DIGEST_SQL =
+  "ALTER TABLE transaction_checklist_items ADD COLUMN note_by_digest TEXT;";
