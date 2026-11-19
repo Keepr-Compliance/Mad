@@ -20,6 +20,7 @@ import { join } from 'path';
 const REPO = join(__dirname, '../../..');
 const MIGRATIONS = join(REPO, 'supabase/migrations');
 const DIR = join(REPO, 'supabase/tests/backlog-4263-prod');
+const VERIFY_DIR = join(REPO, 'supabase/tests/backlog-4263-prod-verify');
 const FIRST = '20261118100000';
 const LAST = '20261118190000';
 const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
@@ -68,7 +69,11 @@ function pinned(pc: string): Map<string, string> {
 const absent = (pc: string): string[] =>
   [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+)\(/g)].map((m) => m[1]);
 
-/** The SQL with comments and single-quoted literals removed. */
+/**
+ * The SQL with comments and string literals removed: `--` to end of line, `/* ... *\/` blocks, '...' literals (with ''
+ * escapes) and "..." identifiers. A dollar-quoted body is kept as code (so a DO block's or function's text stays
+ * visible to the keyword scan), and the files here must hold none.
+ */
 function code(pc: string): string {
   let out = '';
   let i = 0;
@@ -76,6 +81,16 @@ function code(pc: string): string {
     if (pc.startsWith('--', i)) {
       const j = pc.indexOf('\n', i);
       i = j < 0 ? pc.length : j;
+    } else if (pc.startsWith('/*', i)) {
+      const j = pc.indexOf('*/', i + 2);
+      if (j < 0) throw new Error('unclosed comment');
+      out += ' ';
+      i = j + 2;
+    } else if (pc[i] === '"') {
+      const j = pc.indexOf('"', i + 1);
+      if (j < 0) throw new Error('unclosed identifier');
+      out += '""';
+      i = j + 1;
     } else if (pc[i] === "'") {
       let j = i + 1;
       for (;;) {
@@ -100,7 +115,7 @@ const REPORT_KINDS = [
   'index predicate text',
   'pre-lane table grants to service_role',
 ];
-const API = ['PUBLIC', 'anon', 'authenticated', 'service_role'];
+const API = ['PUBLIC', 'anon', 'authenticated', 'service_role', 'mcp_reader'];
 /** The rows of one VALUES CTE, each as its list of single-quoted values. */
 function cte(pc: string, head: string): string[][] {
   const i = pc.indexOf(`${head} AS (VALUES\n`);
@@ -108,6 +123,10 @@ function cte(pc: string, head: string): string[][] {
   const body = pc.slice(i, pc.indexOf(')),\n', i) + 2);
   return [...body.matchAll(/^ {4}\((.*)\),?$/gm)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1]));
 }
+
+/** Write statements and anything that can change state; matched after comments and literals are removed. */
+const WRITE =
+  /\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|REVOKE|TRUNCATE|SET\s+ROLE|SET|DO|COMMENT|SECURITY\s+LABEL|CALL|COPY|REFRESH|VACUUM|LOCK)\b/gi;
 
 const MIG = new Map(LANE.map((f) => [f.slice(0, 14), read(join(MIGRATIONS, f))]));
 const FILE = (k: string): string => join(DIR, `postcheck-${k}.sql`);
@@ -149,10 +168,36 @@ describe('BACKLOG-4263 production post-checks', () => {
     for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
   });
 
+  it('the production folder holds only read-only files: no verify-* file, and no write statement in any .sql file', () => {
+    const files = readdirSync(DIR);
+    expect(files.filter((f) => f.startsWith('verify-'))).toEqual([]);
+    const sql = files.filter((f) => f.endsWith('.sql')).sort();
+    expect(sql.length).toBe(VERSIONS.length + 1);
+    for (const f of sql) {
+      const c = code(read(join(DIR, f)));
+      expect(`${f}: ${(c.match(WRITE) || []).join(',')}`).toBe(`${f}: `);
+      expect(`${f}: ${c.includes('$')}`).toBe(`${f}: false`);
+    }
+  });
+
+  it('the test-database controls file starts with the guard that refuses production, before any write', () => {
+    const vc = read(join(VERIFY_DIR, 'verify-controls.sql'));
+    const first = code(vc).trimStart();
+    expect(first.startsWith('DO $guard4263verify$')).toBe(true);
+    const g = vc.slice(vc.indexOf('DO $guard4263verify$'), vc.indexOf('$guard4263verify$;') + 18);
+    expect(code(vc.slice(0, vc.indexOf('DO $guard4263verify$'))).trim()).toBe('');
+    expect(g).toContain("to_regclass('public.pm_backlog_items')");
+    expect(g).toMatch(/IF n > 100 THEN\n\s+RAISE EXCEPTION 'verify-controls\.sql refuses to run: TEST DATABASE ONLY/);
+    expect(g).toMatch(/IF NOT EXISTS \(SELECT 1 FROM auth\.users u WHERE md5\(u\.id::text\) = '[0-9a-f]{32}'\) THEN\n\s+RAISE EXCEPTION/);
+    expect(vc.split('\n')[0]).toContain('must never be run on production');
+    expect(read(join(VERIFY_DIR, 'verify-run.sql')).split('\n')[0]).toContain('must never be run on production');
+  });
+
   it.each([...VERSIONS, 'final'])('postcheck-%s is one read-only SELECT', (k) => {
     const pc = read(FILE(k));
     const c = code(pc);
-    expect(c).not.toMatch(/\b(INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|GRANT|REVOKE|TRUNCATE|COPY|SET|RESET|DO|CALL|VACUUM|LOCK|COMMENT|EXECUTE|PERFORM|BEGIN|COMMIT)\b/i);
+    expect(c).not.toMatch(new RegExp(WRITE.source, 'i'));
+    expect(c).not.toMatch(/\b(EXECUTE|PERFORM|BEGIN|COMMIT|RESET|MERGE)\b/i);
     expect(c).not.toContain('$');
     expect(pc).not.toMatch(/count\s*\(/i);
     expect(pc).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
