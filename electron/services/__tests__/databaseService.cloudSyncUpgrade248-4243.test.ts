@@ -259,8 +259,10 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_tx_insert",
   "trg_cloud_sync_tx_update",
 ];
-/** The latest local schema version this build ships (BACKLOG-4263 PR-6: v84). */
-const LATEST_VERSION = 84;
+/** The latest local schema version this build ships (BACKLOG-4263 PR-11c: v85). */
+const LATEST_VERSION = 85;
+/** BACKLOG-4263 PR-11c: the eight columns v85 appends to transaction_checklist_items, in order. */
+const AUTHOR_COLUMNS = ["done_by_kind", "done_by_app", "done_by_at", "done_by_stamp", "note_by_kind", "note_by_app", "note_by_at", "note_by_digest"];
 const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
 const count = (db: DatabaseType, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
 const dirty = (db: DatabaseType) =>
@@ -344,6 +346,26 @@ function openAs248(file: string): DatabaseType {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.exec(TAG_SCHEMA_SQL);
+  return db;
+}
+
+/**
+ * BACKLOG-4263 PR-11c — a v84 build (int-portal/mcp-write at b5fdc730c), EMULATED like the 2.48.0 connection above:
+ * the same pragmas, then that build's every-open `exec(schemaSql)`. Its schema.sql is this build's without the v85
+ * block (fixture test below pins the result to b5fdc730c's file by sha256). Its chain runs nothing on a v85 file
+ * (every entry is <= 84). Its tick and note statements are the same text as 2.48.0's (WRITES_248).
+ */
+const V84_SCHEMA_SHA256 = "a20726453526e70c70756b1a0cad24ce398bd8fd75da2de19ed5094d14fa14bc";
+const V84_SCHEMA_SQL = (() => {
+  const lines = fs.readFileSync(path.join(__dirname, "..", "..", "database", "schema.sql"), "utf8").split("\n");
+  const start = lines.findIndex((l) => l.includes("BACKLOG-4263 PR-11c (migration v85"));
+  return start < 0 ? "" : [...lines.slice(0, start), ...lines.slice(start + 10)].join("\n");
+})();
+function openAs84(file: string): DatabaseType {
+  const db = openKeyed(file);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.exec(V84_SCHEMA_SQL);
   return db;
 }
 
@@ -788,7 +810,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     expect(before.get("schema_version")!.rows[0]).toContain("79");
     const { svc, db } = await openWithThisBuild();
     expect(versionOf(db)).toBe(LATEST_VERSION);
-    expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
+    expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date", ...AUTHOR_COLUMNS]);
     // The tables are exactly the declared shape (schema.sql, mirrored by CLOUD_SYNC_TABLES_DDL).
     const shape = new RealDatabase(":memory:");
     shape.exec(CLOUD_SYNC_TABLES_DDL);
@@ -918,7 +940,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     const { svc, db } = await openWithThisBuild();
     expect(versionOf(db)).toBe(LATEST_VERSION);
     expect(columns(db, "cloud_sync_settings")).toEqual([...before.get("cloud_sync_settings")!.cols, "install_removed_at"]);
-    expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date"]);
+    expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, "due_date", ...AUTHOR_COLUMNS]);
     expect(db.prepare("SELECT install_removed_at FROM cloud_sync_settings").all()).toEqual([{ install_removed_at: null }]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE due_date IS NOT NULL").get()).toEqual({ n: 0 });
     // Row for row: only the version and the after-migration marks changed.
@@ -1232,6 +1254,78 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     await back.svc.close();
     expect(stateBefore).toHaveLength(1);
   });
+
+  it("FIXTURE (PR-11c): the emulated v84 build's schema.sql is b5fdc730c's byte-for-byte", () => {
+    expect(crypto.createHash("sha256").update(V84_SCHEMA_SQL).digest("hex")).toBe(V84_SCHEMA_SHA256);
+  });
+
+  // BACKLOG-4263 PR-11c (G1). Both older builds are EMULATED (their schema.sql exec on the real driver plus their
+  // transcribed statements), not run from their own source.
+  for (const older of ["v84 build (b5fdc730c)", "2.48.0"] as const) {
+    it(`1i v84 PROFILE: this build runs v85 (eight author columns, NULL), nothing else changes, the next open changes nothing; going back, the ${older} opens the v85 file, its ticks and notes succeed and nothing is lost, and this build then reads those parts' authors as not recorded`, async () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { validDoneBy, validNoteBy, noteDigest } = require("../db/checklistItemAuthor") as typeof import("../db/checklistItemAuthor");
+      const { file } = buildV79Profile(dir);
+      const svcClass = loadService().constructor as { MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }> };
+      const pre = openKeyed(file);
+      pre.exec(fs.readFileSync(path.join(__dirname, "fixtures", "v80-cloud", "cloud-sync-tables.sql"), "utf8"));
+      for (const v of [80, 81, 82, 83, 84]) svcClass.MIGRATIONS.find((m) => m.version === v)!.migrate(pre);
+      pre.prepare("UPDATE schema_version SET version = 84 WHERE id = 1").run();
+      expect(columns(pre, "transaction_checklist_items").filter((c) => AUTHOR_COLUMNS.includes(c))).toEqual([]);
+      const before = snapshot(pre);
+      pre.close();
+
+      const { svc, db } = await openWithThisBuild();
+      expect(versionOf(db)).toBe(LATEST_VERSION);
+      expect(columns(db, "transaction_checklist_items")).toEqual([...before.get("transaction_checklist_items")!.cols, ...AUTHOR_COLUMNS]);
+      for (const c of AUTHOR_COLUMNS) {
+        expect([c, db.prepare(`SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE ${c} IS NOT NULL`).get()]).toEqual([c, { n: 0 }]);
+      }
+      expect(changedTables(db, before)).toEqual(["schema_version"]);
+      // this build records an AI app's tick on I1 and note on I2 (as its pull writes them)
+      db.prepare(
+        "UPDATE transaction_checklist_items SET is_checked = 1, checked_at = '2026-11-01T10:00:00.000Z', done_by_kind = 'ai_app', done_by_app = 'anthropic', done_by_at = '2026-11-01T10:00:00.000Z', done_by_stamp = '2026-11-01T10:00:00.000Z' WHERE id = ?",
+      ).run(I1);
+      db.prepare(
+        "UPDATE transaction_checklist_items SET note = 'from Claude', note_by_kind = 'ai_app', note_by_app = 'anthropic', note_by_at = '2026-11-01T10:00:00.000Z', note_by_digest = ? WHERE id = ?",
+      ).run(noteDigest("from Claude"), I2);
+      const row = (rid: string) => db.prepare("SELECT * FROM transaction_checklist_items WHERE id = ?").get(rid) as never;
+      expect(validDoneBy(row(I1))).toEqual({ kind: "ai_app", app: "anthropic" });
+      expect(validNoteBy(row(I2))).toEqual({ kind: "ai_app", app: "anthropic" });
+      const cookie = db.pragma("schema_version", { simple: true });
+      const after = snapshot(db);
+      await svc.close();
+      const again = await openWithThisBuild();
+      expect(again.db.pragma("schema_version", { simple: true })).toBe(cookie);
+      expect(changedTables(again.db, after)).toEqual([]);
+      await again.svc.close();
+
+      // going back: the older build's open and common writes (a tick of I1, a note on I2, among them) on the v85 file
+      const old = older === "2.48.0" ? openAs248(path.join(dir, "mad.db")) : openAs84(path.join(dir, "mad.db"));
+      expect(versionOf(old)).toBe(LATEST_VERSION);
+      expect(runWrites248(old)).toHaveLength(WRITES_248.length);
+      const written = old.prepare("SELECT id, is_checked, checked_at, note FROM transaction_checklist_items WHERE id IN (?, ?) ORDER BY id").all(I1, I2) as Row[];
+      expect(written.map((r) => [r.id, r.is_checked, r.note])).toEqual([
+        [I1, 1, written[0].note],
+        [I2, written[1].is_checked, "Booked"],
+      ]);
+      expect(written[0].checked_at).not.toBe("2026-11-01T10:00:00.000Z");
+      expect(columns(old, "transaction_checklist_items").slice(-8)).toEqual(AUTHOR_COLUMNS);
+      old.close();
+
+      // this build again: the values the older build wrote are kept; their authors read as not recorded
+      const back = await openWithThisBuild();
+      expect(versionOf(back.db)).toBe(LATEST_VERSION);
+      const r1 = back.db.prepare("SELECT * FROM transaction_checklist_items WHERE id = ?").get(I1) as Row;
+      const r2 = back.db.prepare("SELECT * FROM transaction_checklist_items WHERE id = ?").get(I2) as Row;
+      expect([r1.is_checked, r1.checked_at, r2.note]).toEqual([1, written[0].checked_at, "Booked"]);
+      expect(r1.done_by_kind).toBe("ai_app"); // the stale column is still there ...
+      expect(validDoneBy(r1 as never)).toBeNull(); // ... and is never read as the author
+      expect(r2.note_by_kind).toBe("ai_app");
+      expect(validNoteBy(r2 as never)).toBeNull();
+      await back.svc.close();
+    });
+  }
 
   it("2a GOING BACK, never on: on a profile this build upgraded, 2.48.0's own open and common writes all succeed, no cloud trigger exists, and the cloud tables stay empty", async () => {
     buildV79Profile(dir);

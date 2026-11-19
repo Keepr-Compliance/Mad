@@ -156,9 +156,13 @@ describe("v81 todo due date, install_removed_at and todo tables", () => {
       (d.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string; type: string; notnull: number; pk: number }>).map(
         (c) => `${c.name}:${c.type}:${c.notnull}:${c.pk}`,
       );
+    // BACKLOG-4263 PR-11c: a fresh install also has v85's eight item author columns (appended after due_date);
+    // this upgraded file has run v81 only.
+    const v85 = /^(done|note)_by_(kind|app|at|stamp|digest):/;
     for (const t of ["transaction_checklist_items", "cloud_sync_settings", ...CLOUD_SYNC_TODO_TABLES]) {
-      expect([t, shape(fresh, t)]).toEqual([t, shape(db, t)]);
+      expect([t, shape(fresh, t).filter((c) => t !== "transaction_checklist_items" || !v85.test(c))]).toEqual([t, shape(db, t)]);
     }
+    expect(shape(fresh, "transaction_checklist_items").filter((c) => v85.test(c))).toHaveLength(8);
     db.close();
     fresh.close();
   });
