@@ -967,6 +967,9 @@ const KNOWN_ROUTE_HANDLERS = [
   // request-supplied ids. Claims and their organizations come from the due query.
   'app/api/cron/domain-recheck/route.ts',
   'app/api/cron/email-retry/route.ts',
+  // BACKLOG-4263 PR-10.8: GET only, CRON_SECRET bearer (isAuthorizedCronRequest); no session, no
+  // request-supplied ids. Notices come from ai_app_notice_claim; the answer is counts only.
+  'app/api/cron/ai-app-notices/route.ts',
   // BACKLOG-4237: POST only; MCP_ENABLED, Origin and a Bearer token with a client_id
   // claim are checked first; one tool that reads no user data.
   'app/api/mcp/route.ts',
@@ -1188,7 +1191,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(36); // base 28; BACKLOG-4238: + oauth/authorize, oauth/token; + oauth/metadata, oauth/register; BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3962: + cron/domain-recheck, cron/domain-capture-switch; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(37); // base 28; BACKLOG-4238: + oauth/authorize, oauth/token; + oauth/metadata, oauth/register; BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3962: + cron/domain-recheck, cron/domain-capture-switch; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session; BACKLOG-4263: + cron/ai-app-notices
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {

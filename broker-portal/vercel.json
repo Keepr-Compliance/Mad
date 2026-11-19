@@ -33,6 +33,10 @@
     {
       "path": "/api/cron/domain-capture-switch",
       "schedule": "15 * * * *"
+    },
+    {
+      "path": "/api/cron/ai-app-notices",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

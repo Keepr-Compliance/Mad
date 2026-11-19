@@ -55,6 +55,7 @@ import { GET as emailRetry } from '../../../../app/api/cron/email-retry/route';
 import { GET as paymentReconcile } from '../../../../app/api/cron/payment-reconcile/route';
 import { GET as domainRecheck } from '../../../../app/api/cron/domain-recheck/route';
 import { GET as domainCaptureSwitch } from '../../../../app/api/cron/domain-capture-switch/route';
+import { GET as aiAppNotices } from '../../../../app/api/cron/ai-app-notices/route';
 import { isAuthorizedCronRequest } from '../../../../lib/auth/cronAuth';
 
 const ORIGINAL = process.env.CRON_SECRET;
@@ -84,6 +85,8 @@ const routes: Array<[string, (r: Request) => Promise<Response>, () => jest.Mock]
   ['payment-reconcile', paymentReconcile, () => mockLimit],
   ['domain-recheck', domainRecheck, () => mockRpc],
   ['domain-capture-switch', domainCaptureSwitch, () => mockRpc],
+  // BACKLOG-4263 PR-10.8: starts with the ai_app_notice_claim rpc.
+  ['ai-app-notices', aiAppNotices, () => mockRpc],
 ];
 
 describe.each(routes)('GET /api/cron/%s authorization', (_name, GET, work) => {
