@@ -109,6 +109,27 @@ const OLD_TICK_SQL = `
 `;
 const OLD_NOTE_SQL = "\n  UPDATE transaction_checklist_items SET note = ? WHERE id = ?\n";
 
+/** Runs fn with every argument-less Date 1 ms apart, so a time computed by a second call never equals the first. */
+async function withTickingDate<T>(fn: () => T | Promise<T>): Promise<T> {
+  const RealDate = Date;
+  let tickMs = RealDate.parse("2026-11-19T11:00:00.000Z");
+  class TickDate extends RealDate {
+    constructor(...a: unknown[]) {
+      if (a.length === 0) super(tickMs++);
+      else super(...(a as [string]));
+    }
+    static now(): number {
+      return tickMs++;
+    }
+  }
+  global.Date = TickDate as unknown as DateConstructor;
+  try {
+    return await fn();
+  } finally {
+    global.Date = RealDate;
+  }
+}
+
 afterEach(() => {
   current = null;
 });
@@ -194,6 +215,13 @@ describe(`item authors (v85) [${DRIVER}]`, () => {
       expect(db.prepare("SELECT * FROM cloud_sync_todo_counter").all()).toEqual(counter);
     });
 
+    it("no capture trigger names an author column", async () => {
+      const { db } = await synced();
+      const triggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'transaction_checklist_items'").all() as Array<{ name: string; sql: string }>;
+      expect(triggers.length).toBeGreaterThan(0);
+      expect(triggers.filter((t) => ITEM_AUTHOR_COLUMNS.some((c) => t.sql.includes(c))).map((t) => t.name)).toEqual([]);
+    });
+
     it("a change of the author columns alone creates no outbox op and does not step the counter", async () => {
       const { db } = await synced();
       const counter = db.prepare("SELECT * FROM cloud_sync_todo_counter").all();
@@ -247,23 +275,7 @@ describe(`item authors (v85) [${DRIVER}]`, () => {
       e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: null }, Date.now(), "conn-1", "openai");
       e.server.aiSet(onlineItem(e, I2), "done", { is_checked: true, checked_at: "2026-11-19T10:00:00+00:00" }, Date.now(), "conn-1", "anthropic");
       // every argument-less Date differs by 1 ms, so a stamp computed by a second call can never equal checked_at
-      const RealDate = Date;
-      let tickMs = RealDate.parse("2026-11-19T11:00:00.000Z");
-      class TickDate extends RealDate {
-        constructor(...a: unknown[]) {
-          if (a.length === 0) super(tickMs++);
-          else super(...(a as [string]));
-        }
-        static now(): number {
-          return tickMs++;
-        }
-      }
-      global.Date = TickDate as unknown as DateConstructor;
-      try {
-        await pass(e);
-      } finally {
-        global.Date = RealDate;
-      }
+      await withTickingDate(() => pass(e));
       for (const [id, app] of [[I1, "openai"], [I2, "anthropic"]] as const) {
         const r = item(db, id);
         expect([id, r.is_checked, r.done_by_kind, r.done_by_app, r.done_by_stamp === r.checked_at, typeof r.checked_at]).toEqual([id, 1, "ai_app", app, true, "string"]);
@@ -282,6 +294,11 @@ describe(`item authors (v85) [${DRIVER}]`, () => {
       expect(pick(r, ["note_by_kind", "note_by_app", "note_by_digest"])).toEqual({ note_by_kind: "ai_app", note_by_app: "anthropic", note_by_digest: noteDigest("ordered") });
       expect(pick(r, ["done_by_kind", "done_by_app"])).toEqual({ done_by_kind: "ai_app", done_by_app: "anthropic" });
       expect(r.done_by_stamp).toBe(r.checked_at);
+      const noTime = e.server.aiAdd(onlineList(e, MY), "Book the movers");
+      e.server.aiSet(noTime, "done", { is_checked: true, checked_at: null }, Date.now(), "conn-1", "openai");
+      await withTickingDate(() => pass(e));
+      expect(item(db, noTime.localId).checked_at).toEqual(expect.any(String));
+      expect(item(db, noTime.localId).done_by_stamp).toBe(item(db, noTime.localId).checked_at);
       const plain = e.server.aiAdd(onlineList(e, MY), "Call the inspector");
       await pass(e);
       // a NULL note has no author; the unticked done part records its writer with no stamp
@@ -337,6 +354,25 @@ describe(`item authors (v85) [${DRIVER}]`, () => {
       const r = item(db, I1);
       expect(r.note).toBe("the AI's winner");
       expect(pick(r, NOTE_COLS)).toEqual({ note_by_kind: "ai_app", note_by_app: "openai", note_by_at: "2026-11-19T10:00:00.000Z", note_by_digest: noteDigest("the AI's winner") });
+    });
+
+    it("a lost tick answer with no time: done_by_stamp is the checked_at the same UPDATE wrote", async () => {
+      const { db } = await synced();
+      tick(db, I1, false);
+      tick(db, I1, true);
+      tick(db, I1, false);
+      const row = (db.prepare("SELECT * FROM cloud_sync_todo_outbox WHERE local_id = ? AND part = 'done'").get(I1) as unknown) as OutboxRow;
+      const shadowRev = (db.prepare("SELECT done_rev FROM cloud_sync_todo_state WHERE local_id = ?").get(I1) as { done_rev: number }).done_rev;
+      const answer = {
+        op_id: row.op_id,
+        status: "lost",
+        entity: "item",
+        cloud_id: "c-1",
+        parts: { done: { rev: shadowRev + 1, value: { is_checked: true, checked_at: null }, by: "ai_app:conn-1", app: "anthropic", at: "2026-11-19T10:00:00.000Z", edit_seq: null } },
+      };
+      await withTickingDate(() => todos.confirmTodoAnswer(db, row, answer, actionFor(answer), new Date()));
+      const r = item(db, I1);
+      expect([r.is_checked, r.done_by_kind, r.done_by_app, typeof r.checked_at, r.done_by_stamp === r.checked_at]).toEqual([1, "ai_app", "anthropic", "string", true]);
     });
 
     it("a write-back the local row refuses keeps the old value; the re-apply lands the winner with every note author column NULL", async () => {
