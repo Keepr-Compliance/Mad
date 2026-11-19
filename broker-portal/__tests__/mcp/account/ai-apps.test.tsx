@@ -112,6 +112,28 @@ describe('the list', () => {
     expect(screen.queryByRole('button', { name: AI_APPS.disconnectAll })).toBeNull();
   });
 
+  it('one connection: the disconnect note shows, exact text, above the list, same classes as the signed-in line', async () => {
+    mockRpc.mockResolvedValue(listOk([connectionRow()]));
+    await renderPage();
+    const note = screen.getByText(
+      'Disconnecting in the AI app does not disconnect it here. To disconnect here, use Disconnect on this page.'
+    );
+    // the word after "use " is the page's own button label
+    expect(note.textContent).toContain(`use ${AI_APPS.disconnect} on this page.`);
+    expect(within(rows()[0]).getByRole('button', { name: AI_APPS.disconnect })).toBeInTheDocument();
+    expect(note.tagName).toBe('P');
+    expect(note.className).toBe(screen.getByText(CONSENT.signedInAs(EMAIL)).className);
+    expect(note.compareDocumentPosition(rows()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(CONSENT.signedInAs(EMAIL)).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('no connections: the disconnect note does not show', async () => {
+    mockRpc.mockResolvedValue(listOk([]));
+    const { container } = await renderPage();
+    expect(container.textContent).not.toContain('Disconnecting in the AI app');
+    expect(screen.queryByText(AI_APPS.disconnectHere)).toBeNull();
+  });
+
   it('names the signed-in account under the intro', async () => {
     mockRpc.mockResolvedValue(listOk([]));
     const { container } = await renderPage();

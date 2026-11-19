@@ -90,6 +90,8 @@ export const AI_APPS = {
   accountLink: 'AI apps',
   more: (n: number) => `+${n} more`,
   allDevicesNote: 'This does not disconnect AI apps.',
+  // BACKLOG-4263: shown above the list when at least one connection is listed
+  disconnectHere: 'Disconnecting in the AI app does not disconnect it here. To disconnect here, use Disconnect on this page.',
 } as const;
 
 /** AI apps page and disconnect action messages. */
