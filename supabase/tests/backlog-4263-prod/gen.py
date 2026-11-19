@@ -45,6 +45,13 @@ MIGS = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and FIRST <= f
 VERSIONS = [f[:14] for f in MIGS]
 assert len(MIGS) == 10, MIGS
 PRE_LANE = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and f[:14] < FIRST)
+# The write branch: every later migration that names a lane object (the rule of the jest tripwire). Its post-checks are
+# separate files (postcheck-<version>.sql, postcheck-final-write.sql, expected-write.json); the ten read-only files and
+# expected.json are built from the ten migrations only and do not change.
+LANE_OBJECT = re.compile(r'\b_?(mcp|cloud)_\w+|\bai_app_\w+')
+WMIGS = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and f[:14] > LAST
+               and LANE_OBJECT.search(open(os.path.join(MIGDIR, f), encoding='utf-8').read()))
+WVERSIONS = [f[:14] for f in WMIGS]
 
 
 # ------------------------------------------------------------------------------------------------ statement splitter
@@ -218,10 +225,10 @@ def touch(v, kind, key):
     per[v][kind].append(key) if key not in per[v][kind] else None
 
 
-for f in MIGS:
+def replay(f):
     v = f[:14]
     per[v] = {'file': f'supabase/migrations/{f}', 'file_md5': md5(rd(f'supabase/migrations/{f}')),
-              'fn': [], 'dropped': [], 'tables': [], 'cols': [], 'cons': [], 'idx': [], 'cron': [], 'pretables': []}
+              'fn': [], 'dropped': [], 'tables': [], 'cols': [], 'cons': [], 'idx': [], 'cron': [], 'pretables': [], 'trg': []}
     text = rd(f'supabase/migrations/{f}')
     role = 'postgres'
     stmts = split(text)
@@ -286,6 +293,28 @@ for f in MIGS:
                         privs.get(r, set()).discard(priv.upper())
             else:
                 assert obj == 'public' and priv.upper() == 'CREATE' and roles == ['mcp_reader'], s
+            continue
+        m = re.match(r'DROP TRIGGER IF EXISTS (\w+) ON public\.(\w+)$', s, re.I)
+        if m:
+            state.setdefault('trg', {}).pop(f'{m.group(2)}.{m.group(1)}', None)
+            continue
+        m = re.match(r'CREATE TRIGGER (\w+) (BEFORE|AFTER) (.+?) ON public\.(\w+) FOR EACH ROW EXECUTE FUNCTION public\.(\w+)\(\)$', s, re.I)
+        if m:
+            name, timing, events, t, fname = m.groups()
+            ev, cols = set(), []
+            for e in re.split(r'\s+OR\s+(?=INSERT|UPDATE|DELETE|TRUNCATE)', events, flags=re.I):
+                mu = re.fullmatch(r'(INSERT|UPDATE|DELETE|TRUNCATE)(?: OF (.+))?', e.strip(), re.I)
+                assert mu, ('trigger event', e)
+                ev.add(mu.group(1).lower())
+                cols += [c.strip() for c in (mu.group(2) or '').split(',') if c.strip()]
+            assert sig_of(fname, []) in state['fn'], ('trigger function not created by the lane', fname)
+            key = f'{t}.{name}'
+            state.setdefault('trg', {})[key] = (f'public.{fname} | {timing.upper()} | '
+                                                + ' '.join(f'{x}={str(x in ev).lower()}' for x in ('insert', 'update', 'delete', 'truncate'))
+                                                + f' | columns {",".join(cols)} | row=true | when=false | enabled=O')
+            touch(v, 'trg', key)
+            if t not in state['tables']:
+                touch(v, 'pretables', t)
             continue
         m = re.match(r'DROP FUNCTION (?:IF EXISTS )?public\.(\w+)\((.*)\)$', s, re.I)
         if m:
@@ -398,6 +427,9 @@ for f in MIGS:
     state['ledger'].add(v)
     per[v]['state'] = json.loads(json.dumps(state, default=lambda o: C(o) if isinstance(o, set) else o))
 
+
+for f in MIGS:
+    replay(f)
 assert set(stmt_kinds) <= {'DO', 'SET', 'INSERT', 'SELECT', 'COMMENT'}, stmt_kinds
 for t, x in state['tables'].items():
     assert not x['privs'], ('a created table keeps default grants; the check would rest on default privileges', t, x['privs'])
@@ -473,10 +505,11 @@ def checkdef(st, k):
 
 
 # ------------------------------------------------------------------------------------------------ pre-lane table grants
-def pre_lane_table_grants(t):
-    """Grants of PUBLIC/anon/authenticated/mcp_reader on a pre-lane table, replayed from the pre-lane migrations."""
+def pre_lane_table_grants(t, any_space=False):
+    """Grants of PUBLIC/anon/authenticated/mcp_reader on a pre-lane table, replayed from the pre-lane migrations.
+    any_space (write layer): any run of spaces between the table name and TO/FROM (3473 pads them)."""
     g = {'PUBLIC': set(), 'anon': {'ALL'}, 'authenticated': {'ALL'}, 'mcp_reader': set()}
-    pat = re.compile(r'^\s*(GRANT|REVOKE) ([A-Z, ]+?) ON (?:TABLE )?public\.' + re.escape(t) + r' (TO|FROM) ([\w, ]+);', re.M)
+    pat = re.compile(r'^\s*(GRANT|REVOKE) ([A-Z, ]+?) ON (?:TABLE )?public\.' + re.escape(t) + (r'\s+' if any_space else ' ') + r'(TO|FROM) ([\w, ]+);', re.M)
     seen = False
     for f in PRE_LANE:
         for m in pat.finditer(open(os.path.join(MIGDIR, f), encoding='utf-8').read()):
@@ -526,8 +559,9 @@ ANON_ID, AUTH_ID = 'anon-callable mcp_ functions', 'authenticated-callable mcp_ 
 SWEEP_ID = 'ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated'
 
 
-def facts(st, keys):
+def facts(st, keys, pre_grants=None, cdef=None):
     """id -> (kind, wanted value), for the objects named in keys, at state st."""
+    pre_grants, cdef = pre_grants or PRE_GRANTS, cdef or checkdef
     out = {}
     for sig in keys['fn']:
         x = st['fn'].get(sig)
@@ -556,7 +590,7 @@ def facts(st, keys):
         else:
             out[f'relation {t} sequence type'] = ('relation sequence type', x['seqtype'])
     for t in keys['pretables']:
-        g = PRE_GRANTS[t]
+        g = pre_grants[t]
         for r in API_ROLES:
             if r == 'service_role':
                 out[f'table {t} grants service_role'] = (SERVICE_ROLE_EXCEPTION, '')
@@ -568,7 +602,7 @@ def facts(st, keys):
     for k in keys['cons']:
         out[f'constraint {k}'] = ('constraint', st['cons'].get(k, '(absent)'))
         if k in st['cons'] and st['cons'][k].startswith('c '):
-            out[f'constraint {k} definition'] = ('check definition text', checkdef(st, k))
+            out[f'constraint {k} definition'] = ('check definition text', cdef(st, k))
     for k in keys['idx']:
         out[f'index {k}'] = ('index', st['idx'][k])
         if st['idx'][k].endswith('partial=true'):
@@ -576,6 +610,10 @@ def facts(st, keys):
     for k in keys['cron']:
         x = st['cron'][k]
         out[f'cron job {k}'] = ('cron job', f"{x['schedule']} | {x['command']} | {x['username']} | active | this database")
+    for k in keys.get('trg', []):
+        out[f'trigger {k}'] = ('pre-lane table trigger', st.get('trg', {}).get(k, '(absent)'))
+    for t in keys.get('trg_tables', []):
+        out[f'table {t} triggers'] = ('pre-lane table trigger list', ','.join(C(x.split('.', 1)[1] for x in st.get('trg', {}) if x.split('.', 1)[0] == t)))
     for v in keys['ledger']:
         out[f'ledger row {v}'] = ('ledger row', 'true')
     out[ANON_ID] = ('anon-callable list', ', '.join(anon_list(st)))
@@ -682,10 +720,11 @@ def values(name, cols, rows):
 row = lambda *xs: '(' + ', '.join(lit(x) for x in xs) + ')'
 
 
-def render(k):
-    keys = keys_of(k) if k != 'final' else FINAL_KEYS
-    want = {i: w for i, (_, w) in WANT[k].items()}
-    st = per[k]['state'] if k != 'final' else FINAL
+def render(k, keys=None, st=None, W=None, kinds=None, checks=None, head_final=None):
+    W = WANT[k] if W is None else W
+    keys = keys if keys is not None else keys_of(k) if k != 'final' else FINAL_KEYS
+    want = {i: w for i, (_, w) in W.items()}
+    st = st if st is not None else per[k]['state'] if k != 'final' else FINAL
     fn_rows, fx_rows = [], []
     for sig in keys['fn']:
         fn_rows.append(row('public.' + sig, *[want[f'function {sig} {a}'] for a in FN_ATTRS]))
@@ -703,7 +742,7 @@ def render(k):
     for t in keys['pretables']:
         for r in API_ROLES:
             kind = SERVICE_ROLE_EXCEPTION if r == 'service_role' else 'pre-lane table grants api role'
-            rx_rows.append(row(t, 'table', r, WANT[k][f'table {t} grants {r}'][1], kind))
+            rx_rows.append(row(t, 'table', r, W[f'table {t} grants {r}'][1], kind))
         rx_rows.append(row(t, 'table', '*', '', 'grants to other roles'))
     col_rows = [row(c.split('.')[0], c.split('.')[1], want['column ' + c]) for c in keys['cols']]
     con_rows = [row(c.split('.')[0], c.split('.')[1], want['constraint ' + c]) for c in keys['cons']]
@@ -715,13 +754,15 @@ def render(k):
     anon_rows = [row('public.' + s) for s in anon_list(st)]
     auth_rows = [row('public.' + s) for s in auth_list(st)]
     sweep_rows = [row('public.' + s) for s in sweep_list(st)]
-    rule_rows = [f"({lit(kind)}, {'false' if kind in REPORT_ONLY else 'true'})" for kind in ALL_KINDS]
-    n_must = sum(1 for kind, _ in WANT[k].values() if label(kind) == 'MUST HOLD')
-    n_rep = len(WANT[k]) - n_must
+    trg_rows = [row(x.split('.', 1)[0], x.split('.', 1)[1], want['trigger ' + x]) for x in keys.get('trg', [])] \
+        + [row(t, '*', want[f'table {t} triggers']) for t in keys.get('trg_tables', [])]
+    rule_rows = [f"({lit(kind)}, {'false' if kind in REPORT_ONLY else 'true'})" for kind in (kinds or ALL_KINDS)]
+    n_must = sum(1 for kind, _ in W.values() if label(kind) == 'MUST HOLD')
+    n_rep = len(W) - n_must
     head = f"""-- postcheck-{k}.sql  (generated by {REL}/gen.py; do not hand-edit)
 -- """ + (f"""State right after migration {per[k]['file']}
---   (migration file md5 {per[k]['file_md5']}). Run it right after that migration, before the next one.""" if k != 'final' else
-           """State after all ten migrations 20261118100000 .. 20261118190000 (each object at its latest definition).""") + f"""
+--   (migration file md5 {per[k]['file_md5']}). Run it right after that migration, before the next one.""" if k not in ('final', 'final-write') else
+           (head_final or """State after all ten migrations 20261118100000 .. 20261118190000 (each object at its latest definition).""")) + f"""
 -- Read-only: one SELECT over pg_catalog, cron.job and supabase_migrations.schema_migrations.
 -- Returns one row (postcheck, report_only). postcheck = 'ok' when every MUST HOLD assertion holds; report_only lists the
 -- differences of the REPORT ONLY assertions ('' when none). A MUST HOLD difference fails with:
@@ -742,9 +783,9 @@ def render(k):
             values('led', 'version', led_rows),
             values('anon_want', 'sig', anon_rows),
             values('auth_want', 'sig', auth_rows),
-            values('sweep_want', 'sig', sweep_rows),
+            values('sweep_want', 'sig', sweep_rows)] + ([values('trg', 'tbl, name, want', trg_rows)] if checks else []) + [
             'rule(kind, must) AS (VALUES\n    ' + ',\n    '.join(rule_rows) + ')',
-            CHECKS]
+            checks or CHECKS]
     return head + 'WITH\n' + ',\n'.join(ctes) + '\n' + FINAL_SELECT.replace('@@LABEL@@', k)
 
 
@@ -1248,9 +1289,181 @@ Every `.sql` file in this folder is read-only. The test-database harness (`verif
 in `../backlog-4263-prod-verify/` and is never run on production.
 """
 
+# ------------------------------------------------------------------------------------------------ the write branch
+# Migrations after 20261118190000 that name a lane object (WVERSIONS). Replayed on top of the ten; written to their own
+# files so that the read-only release (the ten post-checks, postcheck-final.sql, expected.json) stays byte-identical.
+# New here: a trigger on a table created before the lane (pinned from pg_trigger: function, timing, events, column list,
+# row level, no WHEN, enabled; and the full list of triggers on that table), and the grants of a pre-lane table whose
+# GRANT/REVOKE lines pad spaces before TO/FROM.
+WFILES, WOUT = {}, {}
+for f in WMIGS:
+    replay(f)
+assert set(stmt_kinds) <= {'DO', 'SET', 'INSERT', 'SELECT', 'COMMENT'}, stmt_kinds
+for t, x in state['tables'].items():
+    assert not x['privs'], ('a created table keeps default grants', t, x['privs'])
+if WVERSIONS:
+    WLAST = WVERSIONS[-1]
+    WFINAL = per[WLAST]['state']
+    # predicted by PostgreSQL's deparser; the pr11 harness compares each with pg_get_constraintdef after the apply
+    MEASURED_CHECKDEF_W = {
+        'cloud_deal_checklist_items.cloud_deal_checklist_items_done_app_ck': "CHECK (((done_app IS NULL) OR (done_app = ANY (ARRAY['anthropic'::text, 'openai'::text]))))",
+        'cloud_deal_checklist_items.cloud_deal_checklist_items_note_app_ck': "CHECK (((note_app IS NULL) OR (note_app = ANY (ARRAY['anthropic'::text, 'openai'::text]))))",
+        'submission_checklist_items.submission_checklist_items_attribution_v_ck': 'CHECK (((attribution_v IS NULL) OR (attribution_v = 1)))',
+        'submission_checklist_items.submission_checklist_items_note_by_kind_ck': "CHECK (((note_by_kind IS NULL) OR (note_by_kind = ANY (ARRAY['agent'::text, 'ai_app'::text]))))",
+        'submission_checklist_items.submission_checklist_items_note_by_app_ck': "CHECK (((note_by_app IS NULL) OR (note_by_app = ANY (ARRAY['anthropic'::text, 'openai'::text]))))",
+        'submission_checklist_items.submission_checklist_items_note_by_app_kind_ck': "CHECK (((note_by_app IS NULL) OR (note_by_kind = 'ai_app'::text)))",
+        'submission_checklist_items.submission_checklist_items_note_by_note_ck': "CHECK (((note_by_kind IS NULL) OR (NULLIF(btrim(note), ''::text) IS NOT NULL)))",
+        'submission_checklist_items.submission_checklist_items_note_by_v_ck': 'CHECK (((note_by_kind IS NULL) OR (attribution_v = 1)))',
+    }
+    new_cons = {k for v in WVERSIONS for k in per[v]['cons']}
+    assert set(MEASURED_CHECKDEF_W) == {k for k in new_cons if WFINAL['cons'].get(k, '').startswith('c ')}, set(MEASURED_CHECKDEF_W) ^ new_cons
+    for k, text in MEASURED_CHECKDEF_W.items():
+        assert C(set(lits_ordered(text))) == check_literals(WFINAL['conexpr'][k]), k
+    for k in MEASURED_CHECKDEF:  # the write branch leaves every read-only CHECK as it is
+        assert WFINAL['conexpr'][k] == FINAL['conexpr'][k], k
+
+    def checkdef_w(st, k):
+        if k in MEASURED_CHECKDEF_W:
+            assert st['conexpr'][k] == WFINAL['conexpr'][k], k
+            return MEASURED_CHECKDEF_W[k]
+        return checkdef(st, k)
+
+    new_pre = sorted({t for v in WVERSIONS for t in per[v]['pretables']} - set(PRE_GRANTS))
+    PRE_GRANTS_W = {**PRE_GRANTS, **{t: pre_lane_table_grants(t, any_space=True) for t in new_pre}}
+    for t in PRE_GRANTS:  # the padded-space reading gives the same grants for the six read-only pre-lane tables
+        assert pre_lane_table_grants(t, any_space=True) == PRE_GRANTS[t], t
+
+    def keys_w(v):
+        k = keys_of(v)
+        k['trg'] = list(per[v]['trg'])
+        k['trg_tables'] = sorted({x.split('.', 1)[0] for x in per[v]['trg']})
+        return k
+
+    WFINAL_KEYS = {k: list(xs) for k, xs in FINAL_KEYS.items()}
+    WFINAL_KEYS.update({'trg': [], 'trg_tables': []})
+    for v in WVERSIONS:
+        for k, xs in keys_w(v).items():
+            for x in xs:
+                k2 = 'dropped' if k == 'fn' and x not in WFINAL['fn'] else 'fn' if k == 'dropped' and x in WFINAL['fn'] else k
+                if k2 == 'dropped' and x in WFINAL_KEYS['fn']:
+                    WFINAL_KEYS['fn'].remove(x)
+                if k2 == 'fn' and x in WFINAL_KEYS['dropped']:
+                    WFINAL_KEYS['dropped'].remove(x)
+                if x not in WFINAL_KEYS[k2]:
+                    WFINAL_KEYS[k2].append(x)
+    WFINAL_KEYS['cons'] = [c for c in WFINAL_KEYS['cons'] if c in WFINAL['cons']]
+    WFINAL_KEYS['trg'] = [x for x in WFINAL_KEYS['trg'] if x in WFINAL.get('trg', {})]
+
+    WANT_W = {v: facts(per[v]['state'], keys_w(v), PRE_GRANTS_W, checkdef_w) for v in WVERSIONS}
+    WANT_W['final-write'] = facts(WFINAL, WFINAL_KEYS, PRE_GRANTS_W, checkdef_w)
+    ALL_KINDS_W = sorted(set(ALL_KINDS) | {kind for w in WANT_W.values() for kind, _ in w.values()})
+    # the write branch leaves the callable lists and the internal-prefix sweep as the ten left them
+    assert anon_list(WFINAL) == anon_list(FINAL) and auth_list(WFINAL) == auth_list(FINAL) and sweep_list(WFINAL) == []
+
+    def predicted_w(k, j, must_only=True):
+        """ids of write post-check k that differ in the state right after migration j (j in WVERSIONS or 'final-write')."""
+        st = WFINAL if j == 'final-write' else per[j]['state']
+        now = facts(st, keys_w(k) if k != 'final-write' else WFINAL_KEYS, PRE_GRANTS_W, checkdef_w)
+        return [i for i, (kind, w) in WANT_W[k].items() if (i not in now or now[i][1] != w) and (label(kind) == 'MUST HOLD') == must_only]
+
+    # what each read-only post-check reports after each write migration (the replaced bodies)
+    PRED_RO_AFTER_W = {k: {j: predicted_diffs(k, j) for j in WVERSIONS} for k in RUN_ORDER}
+    # the differences the write branch adds to what each read-only file already reports at the end of the ten
+    NEW_RO_AFTER_W = {k: {j: [i for i in PRED_RO_AFTER_W[k][j] if i not in predicted_diffs(k, 'final')] for j in WVERSIONS} for k in RUN_ORDER}
+    SUPERSEDED_W = {}
+    for k in RUN_ORDER:
+        for j in WVERSIONS:
+            for i in NEW_RO_AFTER_W[k][j]:
+                assert i.endswith(' md5'), ('a write migration changes more than a body of a read-only post-check', k, j, i)
+                sig = i[len('function '):-len(' md5')]
+                assert sig in per[j]['fn'] and WANT[k][i][1] in rd(per[j]['file']), ('replaced body md5 not pre-checked by the write migration', k, sig)
+                SUPERSEDED_W[f'{k} {sig}'] = {'md5': WANT[k][i][1], 'pre_check_of': j}
+    assert all(not predicted_w(v, 'final-write') for v in WVERSIONS)
+    TEST_REPORT_W = {k: sorted({i for i, (kind, _) in WANT_W[k].items() if kind == SERVICE_ROLE_EXCEPTION}
+                               | set(predicted_w(k, 'final-write', must_only=False) if k != 'final-write' else []))
+                     for k in WVERSIONS + ['final-write']}
+    TRG_CHECKS = """  SELECT 'trigger ' || g.tbl || '.' || g.name, 'pre-lane table trigger', g.want,
+         coalesce((SELECT (SELECT n.nspname::text || '.' || p.proname::text FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                            WHERE p.oid = t.tgfoid)
+                          || ' | ' || CASE WHEN t.tgtype::int & 2 = 2 THEN 'BEFORE' WHEN t.tgtype::int & 64 = 64 THEN 'INSTEAD OF' ELSE 'AFTER' END
+                          || ' | insert=' || (t.tgtype::int & 4 = 4)::text || ' update=' || (t.tgtype::int & 16 = 16)::text
+                          || ' delete=' || (t.tgtype::int & 8 = 8)::text || ' truncate=' || (t.tgtype::int & 32 = 32)::text
+                          || ' | columns ' || coalesce((SELECT string_agg(a.attname::text, ',' ORDER BY u.ord) FROM unnest(t.tgattr::int2[]) WITH ORDINALITY u(n, ord)
+                                                         JOIN pg_catalog.pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = u.n), '')
+                          || ' | row=' || (t.tgtype::int & 1 = 1)::text || ' | when=' || (t.tgqual IS NOT NULL)::text || ' | enabled=' || t.tgenabled::text
+                     FROM pg_catalog.pg_trigger t
+                    WHERE t.tgrelid = pg_catalog.to_regclass('public.' || g.tbl) AND t.tgname = g.name AND NOT t.tgisinternal), '(absent)')
+    FROM trg g WHERE g.name <> '*'
+  UNION ALL
+  SELECT 'table ' || g.tbl || ' triggers', 'pre-lane table trigger list', g.want,
+         coalesce((SELECT string_agg(t.tgname::text, ',' ORDER BY t.tgname::text COLLATE "C") FROM pg_catalog.pg_trigger t
+                    WHERE t.tgrelid = pg_catalog.to_regclass('public.' || g.tbl) AND NOT t.tgisinternal), '')
+    FROM trg g WHERE g.name = '*'"""
+    CHECKS_W = CHECKS[:CHECKS.rindex('\n)')] + '\n  UNION ALL\n' + TRG_CHECKS + '\n)'
+    HEAD_W = (f"State after the ten read-only migrations {FIRST} .. {LAST} and the write branch {WVERSIONS[0]} .. {WLAST}\n"
+              "--   (each object at its latest definition). Not part of the read-only release.")
+    for v in WVERSIONS:
+        WFILES[v] = render(v, keys=keys_w(v), st=per[v]['state'], W=WANT_W[v], kinds=ALL_KINDS_W, checks=CHECKS_W)
+    WFILES['final-write'] = render('final-write', keys=WFINAL_KEYS, st=WFINAL, W=WANT_W['final-write'], kinds=ALL_KINDS_W, checks=CHECKS_W,
+                                   head_final=HEAD_W)
+
+    def counts_w(k):
+        keys = keys_w(k) if k != 'final-write' else WFINAL_KEYS
+        n_must = sum(1 for kind, _ in WANT_W[k].values() if label(kind) == 'MUST HOLD')
+        return {'functions': len(keys['fn']), 'functions_absent': len(keys['dropped']), 'tables_or_sequences': len(keys['tables']),
+                'pre_lane_tables': len(keys['pretables']), 'columns_added': len(keys['cols']), 'constraints': len(keys['cons']),
+                'indexes': len(keys['idx']), 'cron_jobs': len(keys['cron']), 'triggers': len(keys['trg']), 'ledger_rows': len(keys['ledger']),
+                'must_hold': n_must, 'report_only': len(WANT_W[k]) - n_must}
+
+    expected_w = {
+        'generated_by': f'{REL}/gen.py',
+        'read_only_release': {'files': [f'postcheck-{k}.sql' for k in RUN_ORDER] + ['expected.json'], 'note': 'built from the ten migrations only; unchanged by the write branch'},
+        'migrations': {v: {'file': per[v]['file'], 'file_md5': per[v]['file_md5']} for v in WVERSIONS},
+        'labels': {'default': 'MUST HOLD', 'report_only_kinds': REPORT_ONLY, 'kinds': {kind: label(kind) for kind in ALL_KINDS_W}},
+        'anon_callable_mcp_after_write': anon_list(WFINAL), 'authenticated_callable_mcp_after_write': auth_list(WFINAL),
+        'postchecks': {k: {'file': f'postcheck-{k}.sql', 'counts': counts_w(k),
+                           'pins': {i: {'label': label(kind), 'kind': kind, 'want': w} for i, (kind, w) in WANT_W[k].items()}}
+                       for k in WVERSIONS + ['final-write']},
+        'read_only_postchecks_after_write': {k: {j: (PRED_RO_AFTER_W[k][j] or 'passes') for j in WVERSIONS} for k in RUN_ORDER},
+        'read_only_postchecks_new_differences_after_write': {k: {j: NEW_RO_AFTER_W[k][j] for j in WVERSIONS if NEW_RO_AFTER_W[k][j]} for k in RUN_ORDER},
+        'superseded_bodies_required_by_write_pre_checks': SUPERSEDED_W,
+        'report_only_expected_on_keepr_test': TEST_REPORT_W,
+        'pre_lane_table_grants_from_pre_lane_migrations': {t: PRE_GRANTS_W[t] for t in new_pre},
+    }
+    WOUT = {f'postcheck-{k}.sql': WFILES[k] for k in WVERSIONS + ['final-write']}
+    WOUT['expected-write.json'] = json.dumps(expected_w, indent=2, ensure_ascii=False) + '\n'
+    wrows = [f'| `postcheck-{k}.sql` | ' + '<br>'.join(f'{j}: ' + ('passes' if not PRED_RO_AFTER_W[k][j] else 'FAILS (' + '; '.join(PRED_RO_AFTER_W[k][j]) + ')')
+                                                      for j in WVERSIONS) + ' |' for k in RUN_ORDER]
+    readme = readme.replace('\n## Files\n', f"""
+## The write branch ({', '.join(WVERSIONS)}; not part of the read-only release)
+
+`postcheck-<version>.sql` for each write-branch migration and `postcheck-final-write.sql` (the state after the ten and
+the write branch) are generated from the same migration files; their pins are in `expected-write.json`. The ten
+read-only files, `postcheck-final.sql` and `expected.json` are built from the ten migrations only and do not change.
+These files also pin a trigger on a table created before the lane (`pre-lane table trigger`: function, timing, events,
+column list, row level, no WHEN, enabled) and the full list of triggers on that table (`pre-lane table trigger list`).
+
+| File | MUST HOLD | REPORT ONLY | Functions | Pre-lane tables | Added columns | Constraints | Triggers |
+|---|---|---|---|---|---|---|---|
+""" + '\n'.join(f"| `postcheck-{k}.sql` | {counts_w(k)['must_hold']} | {counts_w(k)['report_only']} | {counts_w(k)['functions']} | {counts_w(k)['pre_lane_tables']} | "
+                f"{counts_w(k)['columns_added']} | {counts_w(k)['constraints']} | {counts_w(k)['triggers']} |" for k in WVERSIONS + ['final-write']) + """
+
+Read-only post-checks run after the write branch (expected; each cell lists the MUST HOLD ids that differ; the ids the
+write branch adds to the table above are in `expected-write.json` → `read_only_postchecks_new_differences_after_write`):
+
+| Post-check | Result after each write-branch migration |
+|---|---|
+""" + '\n'.join(wrows) + '\n\n## Files\n')
+    readme = readme.replace("| `expected.json` | Pinned facts with labels, callable lists per stage, predicted failures |\n",
+                            "| `expected.json` | Pinned facts with labels, callable lists per stage, predicted failures |\n"
+                            "| `postcheck-<write version>.sql`, `postcheck-final-write.sql` | Read-only post-checks of the write branch |\n"
+                            "| `expected-write.json` | Pinned facts of the write branch |\n")
+
+
 OUTS = {f'postcheck-{k}.sql': FILES[k] for k in RUN_ORDER}
 OUTS['expected.json'] = json.dumps(expected, indent=2, ensure_ascii=False) + '\n'
 OUTS['README.md'] = readme
+OUTS.update(WOUT)
 VERIFY_README = f"""# Test-database harness for the BACKLOG-4263 production post-checks
 
 **TEST DATABASE ONLY. Never run on production.** Generated by `../backlog-4263-prod/gen.py`; do not hand-edit.
@@ -1362,4 +1575,6 @@ for k, v in ALL_OUTS.items():
     open(k, 'w', encoding='utf-8').write(v)
 for k in RUN_ORDER:
     print(f'postcheck-{k}.sql', md5(OUTS[f"postcheck-{k}.sql"]), counts(k))
+for k in WFILES:
+    print(f'postcheck-{k}.sql', md5(WFILES[k]))
 print('statement kinds outside the modelled ones:', stmt_kinds)
