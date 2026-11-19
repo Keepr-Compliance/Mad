@@ -108,7 +108,8 @@ function seedRows(db: TestDb): void {
 
 describe(`migration v85: item author columns (${DRIVER})`, () => {
   it("V85-FIXTURE: this build's schema.sql without the v85 block is b5fdc730c's schema.sql byte-for-byte", () => {
-    expect(crypto.createHash("sha256").update(v84Schema()).digest("hex")).toBe(V84_SCHEMA_SHA256);
+    // compared with LF line ends, as git stores the file (a Windows checkout may convert them)
+    expect(crypto.createHash("sha256").update(v84Schema().replace(/\r\n/g, "\n")).digest("hex")).toBe(V84_SCHEMA_SHA256);
   });
 
   it("V85a a v84 table gains the eight columns at the end, in order, NULL on every row; no existing value changes", () => {

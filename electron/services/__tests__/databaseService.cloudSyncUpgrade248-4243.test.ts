@@ -350,10 +350,12 @@ function openAs248(file: string): DatabaseType {
 }
 
 /**
- * BACKLOG-4263 PR-11c — a v84 build (int-portal/mcp-write at b5fdc730c), EMULATED like the 2.48.0 connection above:
- * the same pragmas, then that build's every-open `exec(schemaSql)`. Its schema.sql is this build's without the v85
- * block (fixture test below pins the result to b5fdc730c's file by sha256). Its chain runs nothing on a v85 file
- * (every entry is <= 84). Its tick and note statements are the same text as 2.48.0's (WRITES_248).
+ * BACKLOG-4263 PR-11c — a v84 build (int-portal/mcp-write at b5fdc730c). Run for real, not emulated: this build's
+ * open path with the v85 entry removed from MIGRATIONS, which is b5fdc730c's list (`git diff b5fdc730c` on
+ * databaseService.ts adds only the v85 entry and its import). The open execs this build's schema.sql; on an existing
+ * file that equals b5fdc730c's (they differ only inside CREATE TABLE IF NOT EXISTS transaction_checklist_items, a
+ * no-op on a file that has the table; the fixture test below pins V84_SCHEMA_SQL to b5fdc730c's file by sha256, and
+ * openAs84 execs it too). Its tick and note statements are the same text as 2.48.0's (WRITES_248).
  */
 const V84_SCHEMA_SHA256 = "a20726453526e70c70756b1a0cad24ce398bd8fd75da2de19ed5094d14fa14bc";
 const V84_SCHEMA_SQL = (() => {
@@ -361,12 +363,16 @@ const V84_SCHEMA_SQL = (() => {
   const start = lines.findIndex((l) => l.includes("BACKLOG-4263 PR-11c (migration v85"));
   return start < 0 ? "" : [...lines.slice(0, start), ...lines.slice(start + 10)].join("\n");
 })();
-function openAs84(file: string): DatabaseType {
-  const db = openKeyed(file);
-  db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
+async function openWithV84Build(): Promise<{ svc: AnyService; db: DatabaseType }> {
+  const svc = loadService();
+  const chain = (svc.constructor as { MIGRATIONS: Array<{ version: number }> }).MIGRATIONS;
+  expect(chain[chain.length - 1].version).toBe(85);
+  chain.pop();
+  expect(chain[chain.length - 1].version).toBe(84);
+  await expect(svc.initialize()).resolves.toBe(true);
+  const db = svc.db as DatabaseType;
   db.exec(V84_SCHEMA_SQL);
-  return db;
+  return { svc, db };
 }
 
 interface Write248 {
@@ -1256,11 +1262,12 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
   });
 
   it("FIXTURE (PR-11c): the emulated v84 build's schema.sql is b5fdc730c's byte-for-byte", () => {
-    expect(crypto.createHash("sha256").update(V84_SCHEMA_SQL).digest("hex")).toBe(V84_SCHEMA_SHA256);
+    // compared with LF line ends, as git stores the file (a Windows checkout may convert them)
+    expect(crypto.createHash("sha256").update(V84_SCHEMA_SQL.replace(/\r\n/g, "\n")).digest("hex")).toBe(V84_SCHEMA_SHA256);
   });
 
-  // BACKLOG-4263 PR-11c (G1). Both older builds are EMULATED (their schema.sql exec on the real driver plus their
-  // transcribed statements), not run from their own source.
+  // BACKLOG-4263 PR-11c (G1). The v84 build runs this build's real open path with b5fdc730c's migration list;
+  // 2.48.0 is EMULATED (its schema.sql on the real driver plus its transcribed statements), as in 1h.
   for (const older of ["v84 build (b5fdc730c)", "2.48.0"] as const) {
     it(`1i v84 PROFILE: this build runs v85 (eight author columns, NULL), nothing else changes, the next open changes nothing; going back, the ${older} opens the v85 file, its ticks and notes succeed and nothing is lost, and this build then reads those parts' authors as not recorded`, async () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1301,7 +1308,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       await again.svc.close();
 
       // going back: the older build's open and common writes (a tick of I1, a note on I2, among them) on the v85 file
-      const old = older === "2.48.0" ? openAs248(path.join(dir, "mad.db")) : openAs84(path.join(dir, "mad.db"));
+      const v84 = older === "2.48.0" ? null : await openWithV84Build();
+      const old = v84 ? v84.db : openAs248(path.join(dir, "mad.db"));
       expect(versionOf(old)).toBe(LATEST_VERSION);
       expect(runWrites248(old)).toHaveLength(WRITES_248.length);
       const written = old.prepare("SELECT id, is_checked, checked_at, note FROM transaction_checklist_items WHERE id IN (?, ?) ORDER BY id").all(I1, I2) as Row[];
@@ -1311,7 +1319,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       ]);
       expect(written[0].checked_at).not.toBe("2026-11-01T10:00:00.000Z");
       expect(columns(old, "transaction_checklist_items").slice(-8)).toEqual(AUTHOR_COLUMNS);
-      old.close();
+      if (v84) await v84.svc.close();
+      else old.close();
 
       // this build again: the values the older build wrote are kept; their authors read as not recorded
       const back = await openWithThisBuild();

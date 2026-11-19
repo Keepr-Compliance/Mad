@@ -32,7 +32,7 @@ import {
   checkedItemArgs,
   noteItemArgs,
 } from "../../db/checklistSql";
-import { ITEM_AUTHOR_COLUMNS, noteDigest, validDoneBy, validNoteBy } from "../../db/checklistItemAuthor";
+import { authorFromPart, ITEM_AUTHOR_COLUMNS, noteDigest, validDoneBy, validNoteBy } from "../../db/checklistItemAuthor";
 
 let current: TestDb | null = null;
 jest.mock("../../db/core/dbConnection", () => ({
@@ -235,6 +235,21 @@ describe(`item authors (v85) [${DRIVER}]`, () => {
 
   // ================================================================ PULL
   describe("PULL: the author comes from the pulled part", () => {
+    it("the mapping: ai_app:* -> ai_app (app only anthropic/openai), desktop:* -> agent, anything else or a part with no readable time -> no author", () => {
+      const at = "2026-11-19T10:00:00+00:00";
+      const iso = "2026-11-19T10:00:00.000Z";
+      expect(authorFromPart("ai_app:conn-1", "anthropic", at)).toEqual({ kind: "ai_app", app: "anthropic", at: iso });
+      expect(authorFromPart("ai_app:conn-1", "openai", at)).toEqual({ kind: "ai_app", app: "openai", at: iso });
+      for (const app of [null, undefined, "", "Anthropic", "claude", 1]) expect(authorFromPart("ai_app:x", app, at)).toEqual({ kind: "ai_app", app: null, at: iso });
+      expect(authorFromPart(`desktop:${fid(98, 9)}`, "openai", at)).toEqual({ kind: "agent", app: null, at: iso });
+      for (const by of [null, "", "system:restore", "AI_APP:x", " ai_app:x", "desktop", "mcp:x"]) expect([by, authorFromPart(by, "openai", at)]).toEqual([by, null]);
+      // the fake's and the server's "-infinity" (a time that is not known): no author, not a guessed one
+      for (const t of ["-infinity", "", null, "not a time"]) {
+        expect([t, authorFromPart("ai_app:x", "openai", t)]).toEqual([t, null]);
+        expect([t, authorFromPart("desktop:x", null, t)]).toEqual([t, null]);
+      }
+    });
+
     it("an AI app's note: ai_app with the part's app, the server's time and the digest of the pulled text; same statement as the value", async () => {
       const { db, e } = await synced();
       const at = Date.parse("2026-11-19T10:00:00.000Z");
