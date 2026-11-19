@@ -1,0 +1,154 @@
+/**
+ * BACKLOG-4263 — CI tripwire for the production post-checks in supabase/tests/backlog-4263-prod/.
+ *
+ * WHAT THIS CAN PROVE: that the post-check files agree with the migration files at HEAD. CI has no database.
+ * - one post-check per hosted-MCP migration (a new one without a post-check turns this red);
+ * - every function body a post-check pins has the md5 of the body in the migration text (extracted here,
+ *   independently of gen.py), and each file pins exactly the functions its migration defines;
+ * - each post-check is one read-only SELECT: no data-changing or schema-changing keyword outside string
+ *   literals, no count(*), no literal UUID.
+ * The post-checks themselves were run on the test project (supabase/tests/backlog-4263-prod/verify-run.sql and
+ * verify-controls.sql).
+ */
+
+import { createHash } from 'crypto';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+
+const REPO = join(__dirname, '../../..');
+const MIGRATIONS = join(REPO, 'supabase/migrations');
+const DIR = join(REPO, 'supabase/tests/backlog-4263-prod');
+const FIRST = '20261118100000';
+const LAST = '20261118190000';
+const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
+const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex');
+
+/** The lane's migrations: every file in the version range, and every later backlog_4263 migration. */
+const LANE = readdirSync(MIGRATIONS)
+  .filter((f) => f.endsWith('.sql'))
+  .filter((f) => {
+    const v = f.slice(0, 14);
+    return (v >= FIRST && v <= LAST) || (v >= FIRST && f.includes('backlog_4263'));
+  })
+  .sort();
+const VERSIONS = LANE.map((f) => f.slice(0, 14));
+
+/** name -> body (dollar-quoted text exactly as written) of each top-level CREATE FUNCTION, last definition wins. */
+function bodies(sql: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const re = /^CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sql)) !== null) {
+    const as = /\bAS (\$[A-Za-z_]*\$)/g;
+    as.lastIndex = m.index;
+    const a = as.exec(sql);
+    if (!a) throw new Error(`${m[1]}: no body`);
+    const start = a.index + a[0].length;
+    const end = sql.indexOf(a[1], start);
+    if (end < 0) throw new Error(`${m[1]}: body not closed`);
+    out.set(m[1], sql.slice(start, end));
+  }
+  return out;
+}
+const dropped = (sql: string): string[] => [...sql.matchAll(/^DROP FUNCTION (?:IF EXISTS )?public\.(\w+)\(/gm)].map((m) => m[1]);
+
+/** The function rows a post-check pins: name -> md5. */
+function pinned(pc: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of pc.matchAll(/^ {4}\('public\.(\w+)\([^)]*\)', '([0-9a-f]{32})',/gm)) {
+    if (out.has(m[1])) throw new Error(`${m[1]} pinned twice`);
+    out.set(m[1], m[2]);
+  }
+  return out;
+}
+const absent = (pc: string): string[] =>
+  [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+)\(/g)].map((m) => m[1]);
+
+/** The SQL with comments and single-quoted literals removed. */
+function code(pc: string): string {
+  let out = '';
+  let i = 0;
+  while (i < pc.length) {
+    if (pc.startsWith('--', i)) {
+      const j = pc.indexOf('\n', i);
+      i = j < 0 ? pc.length : j;
+    } else if (pc[i] === "'") {
+      let j = i + 1;
+      for (;;) {
+        j = pc.indexOf("'", j);
+        if (j < 0) throw new Error('unclosed literal');
+        if (pc[j + 1] === "'") j += 2;
+        else break;
+      }
+      out += "''";
+      i = j + 1;
+    } else {
+      out += pc[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
+const MIG = new Map(LANE.map((f) => [f.slice(0, 14), read(join(MIGRATIONS, f))]));
+const FILE = (k: string): string => join(DIR, `postcheck-${k}.sql`);
+
+describe('BACKLOG-4263 production post-checks', () => {
+  it('has one post-check per hosted-MCP migration, and no other', () => {
+    expect(VERSIONS.length).toBeGreaterThanOrEqual(10);
+    const files = readdirSync(DIR)
+      .filter((f) => /^postcheck-\d{14}\.sql$/.test(f))
+      .map((f) => f.slice(10, 24))
+      .sort();
+    expect(files).toEqual(VERSIONS);
+    expect(existsSync(FILE('final'))).toBe(true);
+  });
+
+  it.each(VERSIONS)('postcheck-%s pins exactly the functions its migration defines, at the body md5 of the migration text', (v) => {
+    const pc = read(FILE(v));
+    const defined = bodies(MIG.get(v)!);
+    const pins = pinned(pc);
+    expect(defined.size).toBeGreaterThan(0);
+    expect([...pins.keys()].sort()).toEqual([...defined.keys()].sort());
+    for (const [name, body] of defined) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
+    expect(absent(pc).sort()).toEqual(dropped(MIG.get(v)!).filter((n) => !defined.has(n)).sort());
+    expect(pc).toContain(`(migration file md5 ${md5(MIG.get(v)!)})`);
+  });
+
+  it('postcheck-final pins every function of the lane at its latest body, and the dropped ones as absent', () => {
+    const latest = new Map<string, string>();
+    for (const v of VERSIONS) {
+      for (const n of dropped(MIG.get(v)!)) latest.delete(n);
+      for (const [n, b] of bodies(MIG.get(v)!)) latest.set(n, b);
+    }
+    const pc = read(FILE('final'));
+    const pins = pinned(pc);
+    expect([...pins.keys()].sort()).toEqual([...latest.keys()].sort());
+    for (const [name, body] of latest) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
+    const everDropped = VERSIONS.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
+    expect(absent(pc).sort()).toEqual([...new Set(everDropped)].sort());
+    for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
+  });
+
+  it.each([...VERSIONS, 'final'])('postcheck-%s is one read-only SELECT', (k) => {
+    const pc = read(FILE(k));
+    const c = code(pc);
+    expect(c).not.toMatch(/\b(INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|GRANT|REVOKE|TRUNCATE|COPY|SET|RESET|DO|CALL|VACUUM|LOCK|COMMENT|EXECUTE|PERFORM|BEGIN|COMMIT)\b/i);
+    expect(c).not.toContain('$');
+    expect(pc).not.toMatch(/count\s*\(/i);
+    expect(pc).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    expect(pc).not.toMatch(/@[a-z0-9-]+\.[a-z]/i);
+    expect(c.trim()).toMatch(/^WITH\b/);
+    expect(c.split(';').length).toBe(2);
+    expect(c.trim().endsWith(';')).toBe(true);
+    expect(pc).toContain(`'POSTCHECK ${k} FAILED: '`);
+  });
+
+  it('the apply file for 20261118100000 holds the migration as it is at HEAD', () => {
+    const apply = read(join(REPO, 'supabase/tests/backlog-4263/apply-20261118100000.sql'));
+    const mig = MIG.get(FIRST)!;
+    expect(apply).toContain(`file md5 ${md5(mig)}`);
+    expect(apply.includes(mig)).toBe(true);
+    expect(apply).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  });
+});
