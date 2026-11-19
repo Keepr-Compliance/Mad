@@ -234,11 +234,13 @@ describe("Settings › Keepr Cloud — PR-6", () => {
   });
 
   describe("turn-off", () => {
-    it("adds the lost-changes line; the archive line only when deals deleted here could still be restored", async () => {
+    it("adds the lost-changes line; the removed-todos line always, last; the archive line only when deals deleted here could still be restored", async () => {
       const { unmount } = await renderOn();
       fireEvent.click(screen.getByRole("switch"));
       let dialog = await screen.findByRole("alertdialog");
-      expect(dialog).toHaveTextContent(`${C.turnOffConfirm} ${C.turnOffLost}`);
+      expect(C.turnOffTodos).toBe("Todos removed in the last 30 days can no longer be restored.");
+      expect(dialog.textContent).toContain(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffTodos}`);
+      expect(dialog.textContent).toMatch(/restored\.Cancel/);
       expect(dialog).not.toHaveTextContent(C.turnOffArchive);
       unmount();
       svc.listRemovedDeals.mockResolvedValue([HERE]);
@@ -246,7 +248,8 @@ describe("Settings › Keepr Cloud — PR-6", () => {
       await screen.findByTestId("cloud-removed-deal-1");
       fireEvent.click(screen.getByRole("switch"));
       dialog = await screen.findByRole("alertdialog");
-      expect(dialog).toHaveTextContent(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffArchive}`);
+      expect(dialog.textContent).toContain(`${C.turnOffConfirm} ${C.turnOffLost} ${C.turnOffArchive} ${C.turnOffTodos}`);
+      expect(dialog.textContent).toMatch(/restored\.Cancel/);
     });
   });
 });

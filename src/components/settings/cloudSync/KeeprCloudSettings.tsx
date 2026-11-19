@@ -253,7 +253,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
       <ConfirmationDialog
         open={dialog === "off"}
         title={C.turnOffConfirmTitle}
-        description={[C.turnOffConfirm, C.turnOffLost, ...(removed.here.length > 0 ? [C.turnOffArchive] : [])].join(" ")}
+        description={[C.turnOffConfirm, C.turnOffLost, ...(removed.here.length > 0 ? [C.turnOffArchive] : []), C.turnOffTodos].join(" ")}
         confirmLabel={C.turnOffConfirmButton}
         cancelLabel={C.cancel}
         isDestructive
