@@ -15,5 +15,8 @@ The refusal raises when either holds:
 
 Run with `~/.claude/bin/kt-sql <file>`, then `~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()"`.
 Read the result with `python3 ../backlog-4263-prod/gen.py report <output>`.
-`python3 ../backlog-4263-prod/gen.py guard-control <out>` writes the refusal control: two mutant guards (one forcing
-each refusal) must refuse before the first write, then the unmodified `verify-controls.sql` runs to its rollback.
+The same two checks are the first statements inside the block that writes, so a client that runs one statement at a
+time and continues past an error still stops there.
+`python3 ../backlog-4263-prod/gen.py guard-control <out>` writes the refusal control: four mutants (each refusal
+forced, in the top-level guard and in the writing block) must refuse before the first write, then the unmodified
+`verify-controls.sql` runs to its rollback.

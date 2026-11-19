@@ -124,6 +124,24 @@ function cte(pc: string, head: string): string[][] {
   return [...body.matchAll(/^ {4}\((.*)\),?$/gm)].map((m) => [...m[1].matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1]));
 }
 
+/**
+ * Every name called as `name(` in the production folder's .sql files (function calls, plus CTE and alias column
+ * lists, which share the shape). Derived by running the scanner below over the eleven files, not written by hand:
+ *   POSTCHECK_LIST_CALLS=1 npx jest --config broker-portal/jest.config.js \
+ *     broker-portal/__tests__/migrations/mcp-prod-postchecks-4263.test.ts -t 'allowlisted'
+ * A name outside this list (set_config, nextval, pg_advisory_lock, dblink, pg_sleep, ...) turns the test red.
+ */
+const ALLOWED_CALLS = new Set<string>([
+  'acldefault', 'aclexplode', 'all', 'and', 'anon_want', 'array_to_string', 'as', 'auth_want', 'cdef', 'checks',
+  'coalesce', 'col', 'con', 'current_database', 'else', 'exists', 'filter', 'fn', 'format_type', 'from', 'fx',
+  'gone', 'has_function_privilege', 'idx', 'in', 'ipred', 'job', 'lateral', 'led', 'md5', 'pg_get_constraintdef',
+  'pg_get_expr', 'regexp_matches', 'rel', 'rule', 'rx', 'select', 'string_agg', 'substr', 'sweep_want', 'then',
+  'to_regclass', 'to_regprocedure', 'to_regrole', 'u', 'unnest', 'values', 'where', 'x',
+]);
+/** `name(` tokens in comment- and literal-free SQL; a schema prefix (pg_catalog.) is dropped. */
+const calls = (c: string): string[] => [...c.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((m) => m[1].toLowerCase());
+/** Row locks and SELECT ... INTO, which the write-keyword list does not cover. */
+const NOT_READ_ONLY = /\bINTO\b|\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b/i;
 /** Write statements and anything that can change state; matched after comments and literals are removed. */
 const WRITE =
   /\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|REVOKE|TRUNCATE|SET\s+ROLE|SET|DO|COMMENT|SECURITY\s+LABEL|CALL|COPY|REFRESH|VACUUM|LOCK)\b/gi;
@@ -177,7 +195,17 @@ describe('BACKLOG-4263 production post-checks', () => {
       const c = code(read(join(DIR, f)));
       expect(`${f}: ${(c.match(WRITE) || []).join(',')}`).toBe(`${f}: `);
       expect(`${f}: ${c.includes('$')}`).toBe(`${f}: false`);
+      expect(`${f}: ${(c.match(NOT_READ_ONLY) || []).join(',')}`).toBe(`${f}: `);
     }
+  });
+
+  it('the production folder calls only allowlisted names', () => {
+    const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
+    const per = sql.map((f) => [f, calls(code(read(join(DIR, f))))] as const);
+    const seen = new Set(per.flatMap(([, names]) => names));
+    if (process.env.POSTCHECK_LIST_CALLS) console.log(`POSTCHECK_CALLS ${JSON.stringify([...seen].sort())}`);
+    expect(seen.size).toBeGreaterThan(10);
+    for (const [f, names] of per) expect(`${f}: ${names.filter((n) => !ALLOWED_CALLS.has(n)).join(',')}`).toBe(`${f}: `);
   });
 
   it('the test-database controls file starts with the guard that refuses production, before any write', () => {
@@ -187,7 +215,18 @@ describe('BACKLOG-4263 production post-checks', () => {
     const g = vc.slice(vc.indexOf('DO $guard4263verify$'), vc.indexOf('$guard4263verify$;') + 18);
     expect(code(vc.slice(0, vc.indexOf('DO $guard4263verify$'))).trim()).toBe('');
     expect(g).toContain("to_regclass('public.pm_backlog_items')");
-    expect(g).toMatch(/IF n > 100 THEN\n\s+RAISE EXCEPTION 'verify-controls\.sql refuses to run: TEST DATABASE ONLY/);
+    expect(g).toMatch(/IF n > 100 OR coalesce\(\(SELECT s\.n_live_tup FROM pg_catalog\.pg_stat_user_tables s [^\n]*\) > 100 THEN\n\s+RAISE EXCEPTION 'verify-controls\.sql refuses to run: TEST DATABASE ONLY/);
+    // the same checks are the first statements inside the block that writes
+    const head = 'DO $guard4263verify$\nDECLARE n bigint := 0;\nBEGIN\n';
+    expect(g.startsWith(head)).toBe(true);
+    const checks = g.slice(head.length, g.indexOf('END\n$guard4263verify$'));
+    expect(checks).toContain('RAISE EXCEPTION');
+    const block = vc.slice(vc.indexOf('DO $controls4263prod$'));
+    expect(block.length).toBeGreaterThan(0);
+    const body = block.slice(block.indexOf('\nBEGIN\n') + '\nBEGIN\n'.length);
+    expect(body.startsWith(checks)).toBe(true);
+    const between = code(vc.slice(vc.indexOf('$guard4263verify$;') + 18, vc.indexOf('DO $controls4263prod$'))).trim();
+    expect(between).toBe("SET LOCAL lock_timeout = '';");
     expect(g).toMatch(/IF NOT EXISTS \(SELECT 1 FROM auth\.users u WHERE md5\(u\.id::text\) = '[0-9a-f]{32}'\) THEN\n\s+RAISE EXCEPTION/);
     expect(vc.split('\n')[0]).toContain('must never be run on production');
     expect(read(join(VERIFY_DIR, 'verify-run.sql')).split('\n')[0]).toContain('must never be run on production');
