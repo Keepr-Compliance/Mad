@@ -141,6 +141,16 @@ export function seedFullDeal(db: SqlDb, user: string, deal: string, k = 1): Deal
         checked_at: "2026-11-02T10:00:00Z",
         due_date: "2026-12-01",
         sort_order: 0,
+        // BACKLOG-4263 PR-11c: the author columns ride along with the archive and the restore
+        note: "Booked by the agent",
+        done_by_kind: "ai_app",
+        done_by_app: "anthropic",
+        done_by_at: "2026-11-02T10:00:00.000Z",
+        done_by_stamp: "2026-11-02T10:00:00Z",
+        note_by_kind: "agent",
+        note_by_app: null,
+        note_by_at: "2026-11-02T09:00:00.000Z",
+        note_by_digest: "7b10b6869d6c10792f1cc4248edc0ffca1b0804195cc1a4a0f20305a6317387f",
       },
     ],
     transaction_checklist_links: [

@@ -40,6 +40,7 @@ import type { SqlDb } from "./cloudSyncSqlDb";
 import type { JsonValue } from "../cloudSync/jcs";
 import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
 import { MY_ITEMS_TEMPLATE_ID } from "./checklistPrivacy";
+import { authorColumns, authorFromPart, type PartAuthor } from "./checklistItemAuthor";
 import { dealLockReason } from "../transactionEligibility";
 import { archivedDealRemovedOnline, restoreArchivedDeal, type RestoreArgs } from "./cloudSyncDealArchive";
 import {
@@ -75,6 +76,13 @@ export interface PulledPart {
   by: string | null;
   /** The part's effective time as the server feed sent it (PR-6: the AI-app marker). */
   at?: string | null;
+  /** PR-11c: the AI app's provider on an item's done and note parts (absent from a server without 20261119100000). */
+  app?: string | null;
+}
+
+/** PR-11c: the author of a pulled part (checklistItemAuthor.ts authorFromPart). */
+function pulledAuthor(p: PulledPart | undefined): PartAuthor | null {
+  return p ? authorFromPart(p.by, p.app ?? null, p.at ?? null) : null;
 }
 
 export interface PullPage {
@@ -139,7 +147,7 @@ function pulledParts(row: Row): Partial<Record<StatePart, PulledPart>> {
     const v = obj(parts[p]);
     const rev = v ? num(v.rev) : null;
     if (!v || rev === null) continue;
-    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by), at: str(v.at) };
+    out[p] = { rev, value: (v.value ?? null) as JsonValue, by: str(v.by), at: str(v.at), app: str(v.app) };
   }
   return out;
 }
@@ -375,13 +383,19 @@ class Page {
       .run(text, this.ctx.projectRef, this.ctx.userId, localId);
   }
 
+  /**
+   * PR-11c: an item's done or note value and its author in ONE statement. `author` null (a re-applied failed write)
+   * writes NULL into the part's author columns. The stamp is the `checked_at` of this same `set`.
+   */
   private writeLocal(
     entity: string,
     localId: string,
     part: TodoPart,
     value: JsonValue,
+    author: PartAuthor | null,
   ): void {
-    const set = partColumns(part, value);
+    const values = partColumns(part, value);
+    const set = entity === "item" ? { ...values, ...authorColumns(part, values, author) } : values;
     const table =
       entity === "item"
         ? "transaction_checklist_items"
@@ -753,7 +767,7 @@ class Page {
         writes.push({ part: p, value: a.value });
       }
       this.writeShadow(entity, localId, tx, cloudId, cloudDealId, parts, skip);
-      for (const w of writes) this.writeLocal(entity, localId, w.part, w.value);
+      for (const w of writes) this.writeLocal(entity, localId, w.part, w.value, pulledAuthor(parts[w.part]));
       if (entity === "item") this.markChanged(localId, writes.map((w) => ({ part: w.part, pulled: parts[w.part] })));
       if (changed || writes.length > 0) this.counts.applied++;
       else this.counts.unchanged++;
@@ -840,10 +854,15 @@ class Page {
         ? partColumns(p, parts[p]!.value)
         : partColumns(p, partValue(p, old));
     const done = v("done");
+    const note = v("note");
+    // PR-11c: a part from the page carries its author; a part filled from the trash has none (NULL).
+    const doneBy = authorColumns("done", done, pulledAuthor(parts.done));
+    const noteBy = authorColumns("note", note, pulledAuthor(parts.note));
     this.db
       .prepare(
-        `INSERT INTO transaction_checklist_items (id, checklist_id, title, description, is_required, expected_document_type, is_checked, checked_at, note, due_date, sort_order, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, coalesce(?, CURRENT_TIMESTAMP))`,
+        `INSERT INTO transaction_checklist_items (id, checklist_id, title, description, is_required, expected_document_type, is_checked, checked_at, note, due_date, sort_order, created_at,
+           done_by_kind, done_by_app, done_by_at, done_by_stamp, note_by_kind, note_by_app, note_by_at, note_by_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, coalesce(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         localId,
@@ -854,10 +873,18 @@ class Page {
         str(row.expected_document_type) ?? str(old.expected_document_type),
         done.is_checked,
         done.checked_at,
-        v("note").note,
+        note.note,
         v("due").due_date,
         v("order").sort_order ?? 0,
         str(old.created_at) ?? str(row.local_created_at) ?? null,
+        doneBy.done_by_kind,
+        doneBy.done_by_app,
+        doneBy.done_by_at,
+        doneBy.done_by_stamp,
+        noteBy.note_by_kind,
+        noteBy.note_by_app,
+        noteBy.note_by_at,
+        noteBy.note_by_digest,
       );
     this.counts.localWrites++;
   }
@@ -1108,7 +1135,7 @@ class Page {
       try {
         this.db.transaction(() => {
           if (!samePart(part, partValue(part, local), v))
-            this.writeLocal(n.entity, n.local_id, part, v);
+            this.writeLocal(n.entity, n.local_id, part, v, null);
           dismiss.run(this.at, n.id);
         })();
         this.counts.reapplied++;

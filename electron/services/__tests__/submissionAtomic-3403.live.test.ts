@@ -59,6 +59,8 @@ jest.mock("../contactResolutionService", () => ({
 }));
 jest.mock("../db/checklistDbService", () => ({
   getChecklistsForTransaction: async () => ({ checklists: [], requiredDone: 0, requiredTotal: 0 }),
+  // BACKLOG-4263 PR-11c: the snapshot builder reads note authors too
+  getChecklistNoteAuthors: () => new Map(),
 }));
 jest.mock("../db/submissionDbService", () => ({
   ...jest.requireActual("../db/submissionDbService"),

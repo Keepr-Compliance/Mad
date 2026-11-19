@@ -43,6 +43,7 @@
 import { randomUUID } from "crypto";
 
 import { dbAll, dbGet, dbRun, dbTransaction } from "./core/dbConnection";
+import { validNoteBy, type ReadAuthor } from "./checklistItemAuthor";
 import { auditPeriodFromRow } from "../submissionAuditPeriod";
 import {
   isPrivateChecklist,
@@ -89,6 +90,9 @@ import {
   SET_LINK_INCLUDE_OUTSIDE_DATES_SQL,
   SET_CHECKLIST_ITEM_CHECKED_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
+  checkedItemArgs,
+  noteItemArgs,
+  GET_ITEM_NOTE_AUTHORS_BY_TRANSACTION_SQL,
   SET_ITEM_SORT_ORDER_SQL,
   targetsInTransactionSql,
   textLabelSql,
@@ -450,8 +454,7 @@ export function getChecklistsForTransaction(
  * row was updated.
  */
 export function setChecklistItemChecked(itemId: string, checked: boolean): Promise<boolean> {
-  const flag = checked ? 1 : 0;
-  const result = dbRun(SET_CHECKLIST_ITEM_CHECKED_SQL, [flag, flag, itemId]);
+  const result = dbRun(SET_CHECKLIST_ITEM_CHECKED_SQL, checkedItemArgs(checked, itemId));
   return Promise.resolve(result.changes > 0);
 }
 
@@ -468,8 +471,23 @@ export function setChecklistItemDueDate(itemId: string, dueDate: string | null):
 }
 
 export function setChecklistItemNote(itemId: string, note: string | null): Promise<boolean> {
-  const result = dbRun(SET_CHECKLIST_ITEM_NOTE_SQL, [note, itemId]);
+  const result = dbRun(SET_CHECKLIST_ITEM_NOTE_SQL, noteItemArgs(note, itemId));
   return Promise.resolve(result.changes > 0);
+}
+
+/**
+ * BACKLOG-4263 PR-11c: each item's note and its valid note author on one transaction, keyed by item id. The author is
+ * null when it is not recorded (checklistItemAuthor.ts validNoteBy). The submission snapshot builder is the only caller.
+ */
+export function getChecklistNoteAuthors(transactionId: string): Map<string, { note: string | null; noteBy: ReadAuthor | null }> {
+  const rows = dbAll<{
+    id: string;
+    note: string | null;
+    note_by_kind: string | null;
+    note_by_app: string | null;
+    note_by_digest: string | null;
+  }>(GET_ITEM_NOTE_AUTHORS_BY_TRANSACTION_SQL, [transactionId]);
+  return new Map(rows.map((r) => [r.id, { note: r.note, noteBy: validNoteBy(r) }]));
 }
 
 /**

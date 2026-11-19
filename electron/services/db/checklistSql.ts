@@ -40,6 +40,7 @@
 import { sql } from "./core/sqlText";
 import { placeholderList } from "./core/sqlFragments";
 import { NOT_PRIVATE_CHECKLIST_SQL } from "./checklistPrivacy";
+import { isBlankNote, noteDigest } from "./checklistItemAuthor";
 import type { SafeSql } from "./core/sqlText";
 import type { ChecklistLinkKind, ChecklistLinkWriteKind } from "../../types/checklist";
 
@@ -227,6 +228,19 @@ export const GET_CHECKLIST_ITEMS_SQL = sql`
 `;
 
 /**
+ * BACKLOG-4263 PR-11c: each item's note and note author on one transaction's
+ * checklists. One bound parameter (transaction id). Read only by the
+ * submission snapshot builder, which applies the validity rule
+ * (checklistItemAuthor.ts validNoteBy) before anything leaves this computer.
+ */
+export const GET_ITEM_NOTE_AUTHORS_BY_TRANSACTION_SQL = sql`
+  SELECT i.id, i.note, i.note_by_kind, i.note_by_app, i.note_by_digest
+  FROM transaction_checklist_items i
+  JOIN transaction_checklists c ON c.id = i.checklist_id
+  WHERE c.transaction_id = ?
+`;
+
+/**
  * Every evidence group of one checklist, in display order. One bound parameter
  * (the checklist id).
  */
@@ -313,25 +327,60 @@ export const GET_CHECKLIST_LINK_MEMBERS_SQL = sql`
 `;
 
 /**
- * Tick or untick one item. Three bound parameters, in order: is_checked (0/1),
- * is_checked again, item id.
+ * Tick or untick one item. Bind with `checkedItemArgs(checked, itemId)`.
  *
  * `checked_at` is written in the SAME statement as `is_checked` and derived
  * from it, so the paired CHECK in schema.sql cannot be reached with the two
  * disagreeing. A second statement setting `checked_at` separately would be a
  * window in which the row is invalid; there is no such window here.
+ *
+ * BACKLOG-4263 PR-11c: the same statement records the agent as the author of
+ * the done part. `done_by_stamp` is the same expression as `checked_at`
+ * (CURRENT_TIMESTAMP is fixed for one statement), so the two are equal on a
+ * tick and both NULL on an untick (checklistItemAuthor.ts).
  */
 export const SET_CHECKLIST_ITEM_CHECKED_SQL = sql`
   UPDATE transaction_checklist_items
   SET is_checked = ?,
-      checked_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+      checked_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+      done_by_kind = 'agent',
+      done_by_app = NULL,
+      done_by_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      done_by_stamp = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
   WHERE id = ?
 `;
 
-/** Set or clear one item's note. Two bound parameters, in order: note, item id. */
+/** The bound parameters of SET_CHECKLIST_ITEM_CHECKED_SQL, in order. */
+export function checkedItemArgs(checked: boolean | 0 | 1, itemId: string): [number, number, number, string] {
+  const flag = checked === true || checked === 1 ? 1 : 0;
+  return [flag, flag, flag, itemId];
+}
+
+/**
+ * Set or clear one item's note. Bind with `noteItemArgs(note, itemId)`.
+ *
+ * BACKLOG-4263 PR-11c: the same statement records the note's author. In SQLite
+ * the SET expressions read the row as it was, so:
+ *   - a NULL or blank note clears all four note_by_* columns;
+ *   - the same text as before keeps the author it had;
+ *   - any other text records the agent, with the sha256 of the exact bound
+ *     text (computed in TS by noteItemArgs).
+ */
 export const SET_CHECKLIST_ITEM_NOTE_SQL = sql`
-  UPDATE transaction_checklist_items SET note = ? WHERE id = ?
+  UPDATE transaction_checklist_items
+  SET note = ?,
+      note_by_kind   = CASE WHEN ? IS NULL THEN NULL WHEN note IS ? THEN note_by_kind   ELSE 'agent' END,
+      note_by_app    = CASE WHEN ? IS NULL THEN NULL WHEN note IS ? THEN note_by_app    ELSE NULL END,
+      note_by_at     = CASE WHEN ? IS NULL THEN NULL WHEN note IS ? THEN note_by_at     ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END,
+      note_by_digest = CASE WHEN ? IS NULL THEN NULL WHEN note IS ? THEN note_by_digest ELSE ? END
+  WHERE id = ?
 `;
+
+/** The bound parameters of SET_CHECKLIST_ITEM_NOTE_SQL, in order. The digest is NULL for a NULL or blank note. */
+export function noteItemArgs(note: string | null, itemId: string): Array<string | null> {
+  const digest = isBlankNote(note) ? null : noteDigest(note as string);
+  return [note, digest, note, digest, note, digest, note, digest, note, digest, itemId];
+}
 
 /**
  * BACKLOG-4263 PR-6: an item's due date (YYYY-MM-DD or NULL; the column CHECK holds 2000-2100). Two bound

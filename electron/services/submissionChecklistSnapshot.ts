@@ -64,7 +64,8 @@
  */
 
 import * as Sentry from "@sentry/electron/main";
-import { getChecklistsForTransaction } from "./db/checklistDbService";
+import { getChecklistNoteAuthors, getChecklistsForTransaction } from "./db/checklistDbService";
+import { isBlankNote, type ReadAuthor } from "./db/checklistItemAuthor";
 import { memberLocalId } from "./submissionChecklistLinkGaps";
 import logService from "./logService";
 import type { ChecklistLinkKind, ChecklistsForTransaction } from "../types/checklist";
@@ -101,6 +102,24 @@ export interface SnapshotItemPayload {
   note: string | null;
   sort_order: number;
   links: SnapshotLinkPayload[];
+  /** BACKLOG-4263 PR-11c: the attribution format of this item; always 1. */
+  attribution_v: 1;
+  /**
+   * BACKLOG-4263 PR-11c: who last wrote the note, when the note is not blank and its recorded author is valid
+   * (checklistItemAuthor.ts validNoteBy); `null` otherwise. `kind` is never defaulted. No tick author is sent.
+   */
+  note_by: { kind: ReadAuthor["kind"]; app: ReadAuthor["app"] } | null;
+}
+
+/** BACKLOG-4263 PR-11c: each item's note and valid note author, keyed by local item id (getChecklistNoteAuthors). */
+export type SnapshotNoteAuthors = ReadonlyMap<string, { note: string | null; noteBy: ReadAuthor | null }>;
+
+/** The note author sent for one item: only for the same non-blank note text the author row was read with. */
+function noteByFor(itemId: string, note: string | null, authors?: SnapshotNoteAuthors): SnapshotItemPayload["note_by"] {
+  if (isBlankNote(note)) return null;
+  const a = authors?.get(itemId);
+  if (!a || a.note !== note || !a.noteBy) return null;
+  return { kind: a.noteBy.kind, app: a.noteBy.app };
 }
 
 /** One checklist, as the function reads it (migration §6). */
@@ -234,7 +253,9 @@ export function buildChecklistSnapshotPayload(
   local: ChecklistsForTransaction,
   sent?: SnapshotSentSets,
   /** Filled with `linkId:localId` of every member held back. */
-  withheld?: string[]
+  withheld?: string[],
+  /** BACKLOG-4263 PR-11c: absent, every item sends `note_by: null`. */
+  noteAuthors?: SnapshotNoteAuthors
 ): SnapshotChecklistPayload[] {
   // BACKLOG-3968: texts are sent only on the capability check's yes; with no
   // `sent` there is no answer, so they are held.
@@ -286,6 +307,8 @@ export function buildChecklistSnapshotPayload(
             // 'text' — a held text link is never in the payload, even empty.
             !(link.kind === "text" && textsHeld),
         ),
+      attribution_v: 1 as const,
+      note_by: noteByFor(item.id, item.note, noteAuthors),
     })),
   }));
 }
@@ -305,11 +328,14 @@ export async function snapshotSubmissionChecklists(
   let payload: SnapshotChecklistPayload[];
   const withheld: string[] = [];
   try {
+    // BACKLOG-4263 PR-11c: both reads run before the first await, so no write lands between them; an author is
+    // still sent only for the same note text it was read with (noteByFor).
+    const noteAuthors = getChecklistNoteAuthors(transactionId);
     const local = await getChecklistsForTransaction(transactionId, "broker");
     // BACKLOG-3607: a transaction with no checklist still sends [] - the
     // snapshot is the agent's whole set, and the server records a checklist
     // the agent removed since the previous version only when it is told.
-    payload = buildChecklistSnapshotPayload(local, sent, withheld);
+    payload = buildChecklistSnapshotPayload(local, sent, withheld, noteAuthors);
   } catch (err) {
     // The local read is not retried: the rest of the submit reads the same DB.
     return recordFailure(

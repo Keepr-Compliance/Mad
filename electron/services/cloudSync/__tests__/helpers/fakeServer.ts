@@ -311,6 +311,11 @@ export class FakeServer {
   historyCalls = 0;
   /** The server's clock for receive times (ms). */
   serverNow = () => Date.parse("2026-11-14T12:00:05.000Z");
+  /**
+   * BACKLOG-4263 PR-11c: false behaves like a server without 20261119100000: the parts carry no 'app' key, exactly
+   * the 20261118110000 _cloud_todo_item_json shape (migration :331-349: rev, value, at, by, edit_seq).
+   */
+  partApp = true;
   /** PR-4b: the owner's feed head (cloud_todo_feed_head: last_seq, forgotten_through_seq, forgotten_at). */
   feed = new Map<string, { last: number; forgotThrough: number; forgotAt: number }>();
   events: FakeEvent[] = [];
@@ -651,7 +656,7 @@ export class FakeServer {
     for (const [k, p] of Object.entries(t.parts)) {
       parts[k] = { rev: p.rev, value: p.value, at: Number.isFinite(p.at) ? new Date(p.at).toISOString() : "-infinity", by: p.by, edit_seq: p.edit_seq };
       // BACKLOG-4263 PR-11a: _cloud_todo_item_json carries 'app' on the done and note parts of an item only.
-      if (t.entity === "item" && (k === "done" || k === "note")) (parts[k] as Record<string, JsonValue>).app = p.app ?? null;
+      if (this.partApp && t.entity === "item" && (k === "done" || k === "note")) (parts[k] as Record<string, JsonValue>).app = p.app ?? null;
     }
     return parts;
   }

@@ -37,7 +37,7 @@ import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import { pullTodos } from "../todos/puller";
 import { CloudClient, type RpcTransport } from "../cloudClient";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
-import { GET_CHECKLIST_ITEMS_SQL, INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
+import { GET_CHECKLIST_ITEMS_SQL, INSERT_CHECKLIST_ITEM_SQL, INSERT_CHECKLIST_SQL, INSERT_PRIVATE_CHECKLIST_SQL, SET_CHECKLIST_ITEM_CHECKED_SQL, SET_CHECKLIST_ITEM_NOTE_SQL, checkedItemArgs, noteItemArgs } from "../../db/checklistSql";
 import type { JsonValue } from "../jcs";
 
 type Row = Record<string, unknown>;
@@ -122,7 +122,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("this computer's own change comes back with the rev the answer already gave: nothing is written locally and no op is made", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       const r = await pass(e);
       expect(onlineItem(e, I1).parts.note.value).toBe("mine");
       expect(r.pull).toMatchObject({ outcome: "done", localWrites: 0 });
@@ -135,7 +135,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
   describe("PEND: a waiting local part is never overwritten (W2, W26)", () => {
     it("a part whose op is still waiting keeps the local value and the shadow's rev while another side's change to it is pulled; the server then judges the op", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("local, waiting", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("local, waiting", I1));
       const shadowRev = shadow(db, I1)!.note_rev;
       e.server.aiSet(onlineItem(e, I1), "note", "from the phone", Date.now() - 60_000);
       e.server.aiSet(onlineItem(e, I1), "title", "Inspection report");
@@ -158,7 +158,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("W26: an AI app removes an item while a local note edit waits: after one pass the item is gone here, its note is in the trash and online (kept for a restore), nothing waits", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("edited offline", I2);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("edited offline", I2));
       e.server.removeOnline(onlineItem(e, I2));
       await pass(e);
       expect(item(db, I2)).toBeUndefined();
@@ -247,7 +247,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(allOps(e)).toHaveLength(before);
       // the daily scan finds nothing to send for it
       expect(todos.scanTodosIfAllowed(db, PROJECT, USER_A, new Date())).toBe(0);
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, added.id);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, added.id));
       await pass(e);
       expect(allOps(e).slice(before).map((o) => `${o.kind}:${o.part}`)).toEqual(["set:done"]);
       expect((onlineItem(e, added.id).parts.done.value as Row).is_checked).toBe(true);
@@ -318,7 +318,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(shadow(db, I1)!.note_json).toBe("null");
       expect(cursor(db)).toEqual(c0);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_applying")).toBe(0);
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I2);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, I2));
       expect(outbox(db).map((r) => r.part)).toEqual(["done"]);
       await pass(e);
       expect(item(db, I1)!.note).toBe("from the phone");
@@ -373,7 +373,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       setTransport(e, async (fn, args, signal) => {
         if (fn === "cloud_todo_pull" && !edited) {
           edited = true;
-          db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("typed during the pull", I1);
+          db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("typed during the pull", I1));
         }
         return t(fn, args, signal);
       });
@@ -492,7 +492,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("on a deal that is not locked, the same losing answer writes the winner locally (unchanged rule)", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       const row = outbox(db)[0];
       db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
       e.server.aiSet(onlineItem(e, I1), "note", "online, newer");
@@ -506,7 +506,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("a conflict event becomes one notice; a re-delivered pull adds none", async () => {
       const { db, e } = await synced();
       // a newer phone change, then this computer's older edit of the same part (made before, sent after)
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine, older", I1));
       const row = outbox(db)[0];
       db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
       e.server.aiSet(onlineItem(e, I1), "note", "phone, newer");
@@ -525,7 +525,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
   describe("EVT6: old conflicts after the records are cleared (PR-6)", () => {
     async function withConflict() {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine, older", I1));
       const row = outbox(db)[0];
       db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
       e.server.aiSet(onlineItem(e, I1), "note", "phone, newer");
@@ -617,11 +617,11 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(item(db, I1)!.is_checked).toBe(1);
       expect(mark(db, I1)).toEqual({ part: "done", by: "ai_app:conn-1", at: new Date(at).toISOString() });
       // another part changed here does not clear it
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       await pass(e);
       expect(mark(db, I1)).toMatchObject({ part: "done" });
       // this computer unticks it: kept online, the marker goes
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(0, I1));
       await pass(e);
       expect(item(db, I1)!.is_checked).toBe(0);
       expect(mark(db, I1)).toBeNull();
@@ -684,7 +684,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("the restore pull raises the rewound counter to install_max_edit_seq and clears rewound_at; the next edit outranks this computer's stored edit_seq", async () => {
       const { db, e } = await synced();
       for (let i = 0; i < 4; i++) {
-        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(`v${i}`, I1);
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs(`v${i}`, I1));
         await pass(e);
       }
       const stored = onlineItem(e, I1).parts.note.edit_seq as number;
@@ -693,7 +693,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter WHERE rewound_at IS NOT NULL")).toBe(1);
       await pass(e);
       expect(db.prepare("SELECT edit_seq, rewound_at FROM cloud_sync_todo_counter").get()).toEqual({ edit_seq: stored, rewound_at: null });
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after the restore", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("after the restore", I1));
       expect((outbox(db)[0].edit_seq as number) > stored).toBe(true);
     });
 
@@ -729,8 +729,8 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       e.server.override = null;
       expect(outbox(db)).toEqual([]);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("note on it", fid(4, 9));
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, fid(4, 9));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("note on it", fid(4, 9)));
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, fid(4, 9)));
       const before = allOps(e).length;
       await pass(e);
       await pass(e);
@@ -748,7 +748,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       e.server.aiSet(onlineItem(e, I1), "note", "the winner");
       await pass(e);
       // as a confirm whose write-back failed leaves it: shadow on the winner, local row on the old value, a notice
-      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("the loser", I1));
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("the loser", I1)));
       db.prepare(
         "INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, part, kind, created_at) VALUES (?, ?, 'item', ?, 'note', 'local_write_failed', 'x')",
       ).run(PROJECT, USER_A, I1);
@@ -776,7 +776,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       expect(serverB.deals.map((d) => d.install)).toEqual([INSTALL]);
       // another computer removes A's copy of this computer
       e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("while removed", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("while removed", I1));
       const r = await pass(e);
       expect(r.outcome).toBe("install_removed");
       expect(todos.installRemovedAt(db, PROJECT, USER_A)).not.toBeNull();
@@ -827,7 +827,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("the once-per-launch status check resumes a stopped user whose copy was restored elsewhere (no register row), on the same install id", async () => {
       const { db, e } = await synced();
       e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("kept", I1));
       expect((await pass(e)).outcome).toBe("install_removed");
       // restored from another computer: the register row is gone and the deals are live again
       e.server.removedInstalls.clear();
@@ -906,7 +906,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("the once-per-launch status check is spent only on an answer: a failed call is tried again on the next pass", async () => {
       const { db, e } = await synced();
       e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("kept", I1));
       expect((await pass(e)).outcome).toBe("install_removed");
       e.server.removedInstalls.clear();
       const t = e.server.transport;
@@ -932,12 +932,12 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
   describe("KIND: whose value wins in a pull", () => {
     it("R2: an incremental pull writes the cloud's value locally even for a part this computer wrote last", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("sent from here", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("sent from here", I1));
       await pass(e);
       const online = onlineItem(e, I1).parts.note;
       expect(online.by).toBe(`desktop:${INSTALL}`);
       // the shadow one rev behind and the local row on another value, with no op waiting (as after a lost write-back)
-      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("stale here", I1));
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("stale here", I1)));
       db.prepare("UPDATE cloud_sync_todo_state SET note_rev = ? WHERE local_id = ?").run(online.rev - 1, I1);
       onlineItem(e, I1).changeSeq = e.server.nextSeq(USER_A);
       await pass(e);
@@ -951,8 +951,8 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       await pass(e);
       const old = { cursor: cursor(db)!, shadow: shadow(db, I1)!, note: item(db, I1)!.note };
       // newer values sent from this computer after that point
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer, from here", I1);
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("newer, from here", I1));
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, I1));
       await pass(e);
       expect(onlineItem(e, I1).parts.note.value).toBe("newer, from here");
       // a purge online moves the horizon past the old cursor
@@ -1167,7 +1167,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     it("I2: an ok status answer without removed:false keeps the user stopped", async () => {
       const { db, e } = await synced();
       e.server.respond("cloud_delete_install", { p_expected_user_id: USER_A, p_source_install_id: INSTALL });
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("kept", I1));
       expect((await pass(e)).outcome).toBe("install_removed");
       e.server.override = (fn) => (fn === "cloud_install_status" ? { data: { ok: true }, error: null, status: 200 } : undefined);
       const calls = e.server.calls.length;
@@ -1203,11 +1203,11 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
     async function rolledBack() {
       const { db, e } = await synced();
       const old = { shadow: shadow(db, I1)!, counter: (db.prepare("SELECT edit_seq FROM cloud_sync_todo_counter").get() as { edit_seq: number }).edit_seq };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer, from here", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("newer, from here", I1));
       await pass(e);
       expect(onlineItem(e, I1).parts.note.edit_seq as number).toBeGreaterThan(old.counter);
       quietly(db, () => {
-        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(null, I1);
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs(null, I1));
         db.prepare("UPDATE cloud_sync_todo_state SET note_rev = ?, note_json = ? WHERE local_id = ?").run(old.shadow.note_rev, old.shadow.note_json, I1);
         db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = ?").run(old.counter);
       });
@@ -1284,9 +1284,9 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("R6: a reclaim on a file that is NOT behind stays keep-local: a local value of a part this computer wrote last, never sent, reaches the cloud", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("sent", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("sent", I1));
       await pass(e);
-      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("never sent", I1));
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("never sent", I1)));
       reclaimInstallForUser(db, PROJECT, USER_A, new Date());
       await pass(e);
       expect(onlineItem(e, I1).parts.note.value).toBe("never sent");
@@ -1318,7 +1318,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
       const t = onlineItem(e, I1);
       expect(e.server.aiSet(t, "note", "from Claude")).toBe("applied");
       // this computer holds another value it never sent (as a restored file would), then a keep-local full pull
-      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("local, never sent", I1));
+      quietly(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("local, never sent", I1)));
       reclaimInstallForUser(db, PROJECT, USER_A, new Date());
       expect(cursor(db)).toMatchObject({ full_pull_owed: 1, full_pull_kind: null });
       await pass(e);
@@ -1329,7 +1329,7 @@ describe(`Keepr Cloud todo puller [${DRIVER}]`, () => {
 
     it("(a) second actor on different parts during a send: the AI app's done survives this computer's note push and the next pull", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk note", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("desk note", I1));
       e.server.aiSet(onlineItem(e, I1), "done", { is_checked: true, checked_at: "2026-11-18T00:00:00.000Z" });
       await pass(e);
       await pass(e);
