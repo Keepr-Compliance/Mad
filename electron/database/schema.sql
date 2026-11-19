@@ -1978,6 +1978,16 @@ CREATE TABLE IF NOT EXISTS transaction_checklist_items (
   -- date, YYYY-MM-DD between 2000 and 2100. No index/trigger/view may name it
   -- here (see v75).
   due_date               TEXT CHECK (due_date IS NULL OR (date(due_date) IS due_date AND due_date BETWEEN '2000-01-01' AND '2100-12-31')),
+  -- BACKLOG-4263 PR-11c (migration v85 adds them to existing databases, in this order): who last wrote the done
+  -- and note parts. Read only through checklistItemAuthor.ts's validity rule. No index/trigger/view names them.
+  done_by_kind           TEXT CHECK (done_by_kind IS NULL OR done_by_kind IN ('agent', 'ai_app')),
+  done_by_app            TEXT CHECK (done_by_app IS NULL OR done_by_app IN ('anthropic', 'openai')),
+  done_by_at             TEXT,
+  done_by_stamp          TEXT,
+  note_by_kind           TEXT CHECK (note_by_kind IS NULL OR note_by_kind IN ('agent', 'ai_app')),
+  note_by_app            TEXT CHECK (note_by_app IS NULL OR note_by_app IN ('anthropic', 'openai')),
+  note_by_at             TEXT,
+  note_by_digest         TEXT,
   CHECK ((is_checked = 0) = (checked_at IS NULL)),
   FOREIGN KEY (checklist_id) REFERENCES transaction_checklists(id) ON DELETE CASCADE
 );
