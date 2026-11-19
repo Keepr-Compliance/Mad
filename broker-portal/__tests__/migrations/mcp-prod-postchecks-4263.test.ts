@@ -3,6 +3,8 @@
  *
  * WHAT THIS CAN PROVE: that the post-check files agree with the migration files at HEAD. CI has no database.
  * - one post-check per hosted-MCP migration (a new one without a post-check turns this red);
+ * - postcheck-final.sql covers the ten read-only migrations up to LAST; postcheck-final-write.sql covers those and every
+ *   later lane migration (the write branch);
  * - every function body a post-check pins has the md5 of the body in the migration text (extracted here,
  *   independently of gen.py), and each file pins exactly the functions its migration defines;
  * - each post-check is one read-only SELECT: no data-changing or schema-changing keyword outside string
@@ -37,6 +39,13 @@ const LANE = readdirSync(MIGRATIONS)
   .filter((f) => f.slice(0, 14) <= LAST || LANE_OBJECT.test(readFileSync(join(MIGRATIONS, f), 'utf8')))
   .sort();
 const VERSIONS = LANE.map((f) => f.slice(0, 14));
+/** The read-only release: the versions up to LAST. postcheck-final.sql pins exactly these. */
+const RO_VERSIONS = VERSIONS.filter((v) => v <= LAST);
+/** The two final-state files and the versions each one covers. */
+const FINALS: Array<[string, string[]]> = [
+  ['final', RO_VERSIONS],
+  ['final-write', VERSIONS],
+];
 
 /** name -> body (dollar-quoted text exactly as written) of each top-level CREATE FUNCTION, last definition wins. */
 function bodies(sql: string): Map<string, string> {
@@ -144,7 +153,7 @@ const ALLOWED_KEYWORDS = new Set<string>(['all', 'and', 'as', 'else', 'exists', 
  */
 const ALLOWED_ALIASES = new Set<string>([
   'anon_want', 'auth_want', 'cdef', 'checks', 'col', 'con', 'fn', 'fx', 'gone', 'idx', 'ipred', 'job', 'led', 'rel',
-  'rule', 'rx', 'sweep_want', 'u', 'x',
+  'rule', 'rx', 'sweep_want', 'trg', 'u', 'x',
 ]);
 const COLS = String.raw`\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*\s*\)`;
 /**
@@ -191,6 +200,8 @@ describe('BACKLOG-4263 production post-checks', () => {
       .sort();
     expect(files).toEqual(VERSIONS);
     expect(existsSync(FILE('final'))).toBe(true);
+    expect(existsSync(FILE('final-write'))).toBe(true);
+    expect(RO_VERSIONS.length).toBe(10);
   });
 
   it.each(VERSIONS)('postcheck-%s pins exactly the functions its migration defines, at the body md5 of the migration text', (v) => {
@@ -204,26 +215,27 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(pc).toContain(`(migration file md5 ${md5(MIG.get(v)!)})`);
   });
 
-  it('postcheck-final pins every function of the lane at its latest body, and the dropped ones as absent', () => {
+  it.each(FINALS)('postcheck-%s pins every function of its migrations at its latest body, and the dropped ones as absent', (k, versions) => {
     const latest = new Map<string, string>();
-    for (const v of VERSIONS) {
+    for (const v of versions) {
       for (const n of dropped(MIG.get(v)!)) latest.delete(n);
       for (const [n, b] of bodies(MIG.get(v)!)) latest.set(n, b);
     }
-    const pc = read(FILE('final'));
+    const pc = read(FILE(k));
     const pins = pinned(pc);
     expect([...pins.keys()].sort()).toEqual([...latest.keys()].sort());
     for (const [name, body] of latest) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
-    const everDropped = VERSIONS.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
+    const everDropped = versions.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
     expect(absent(pc).sort()).toEqual([...new Set(everDropped)].sort());
-    for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
+    for (const v of versions) expect(pc).toContain(`('${v}')`);
+    for (const v of VERSIONS.filter((x) => !versions.includes(x))) expect(pc).not.toContain(`('${v}')`);
   });
 
   it('the production folder holds only read-only files: no verify-* file, and no write statement in any .sql file', () => {
     const files = readdirSync(DIR);
     expect(files.filter((f) => f.startsWith('verify-'))).toEqual([]);
     const sql = files.filter((f) => f.endsWith('.sql')).sort();
-    expect(sql.length).toBe(VERSIONS.length + 1);
+    expect(sql.length).toBe(VERSIONS.length + FINALS.length);
     for (const f of sql) {
       const c = code(read(join(DIR, f)));
       expect(`${f}: ${(c.match(WRITE) || []).join(',')}`).toBe(`${f}: `);
@@ -254,7 +266,7 @@ describe('BACKLOG-4263 production post-checks', () => {
 
   it('the production folder holds no backslash (no E-string can shift the literal scan)', () => {
     const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
-    expect(sql.length).toBe(VERSIONS.length + 1);
+    expect(sql.length).toBe(VERSIONS.length + FINALS.length);
     for (const f of sql) expect(`${f}: ${read(join(DIR, f)).includes('\\')}`).toBe(`${f}: false`);
   });
 
@@ -282,7 +294,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(read(join(VERIFY_DIR, 'verify-run.sql')).split('\n')[0]).toContain('must never be run on production');
   });
 
-  it.each([...VERSIONS, 'final'])('postcheck-%s is one read-only SELECT', (k) => {
+  it.each([...VERSIONS, ...FINALS.map(([k]) => k)])('postcheck-%s is one read-only SELECT', (k) => {
     const pc = read(FILE(k));
     const c = code(pc);
     expect(c).not.toMatch(new RegExp(WRITE.source, 'i'));
@@ -297,7 +309,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(pc).toContain(`'POSTCHECK ${k} FAILED: '`);
   });
 
-  it.each([...VERSIONS, 'final'])('postcheck-%s labels: report-only only for the four named kinds, never for an API role', (k) => {
+  it.each([...VERSIONS, ...FINALS.map(([k]) => k)])('postcheck-%s labels: report-only only for the four named kinds, never for an API role', (k) => {
     const pc = read(FILE(k));
     const rules = [...pc.slice(pc.indexOf('rule(kind, must) AS (VALUES'), pc.indexOf('checks(id, kind')).matchAll(/\('([^']+)', (true|false)\)/g)];
     expect(rules.length).toBeGreaterThan(5);

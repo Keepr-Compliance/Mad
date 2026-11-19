@@ -1311,9 +1311,9 @@ if WVERSIONS:
         'submission_checklist_items.submission_checklist_items_attribution_v_ck': 'CHECK (((attribution_v IS NULL) OR (attribution_v = 1)))',
         'submission_checklist_items.submission_checklist_items_note_by_kind_ck': "CHECK (((note_by_kind IS NULL) OR (note_by_kind = ANY (ARRAY['agent'::text, 'ai_app'::text]))))",
         'submission_checklist_items.submission_checklist_items_note_by_app_ck': "CHECK (((note_by_app IS NULL) OR (note_by_app = ANY (ARRAY['anthropic'::text, 'openai'::text]))))",
-        'submission_checklist_items.submission_checklist_items_note_by_app_kind_ck': "CHECK (((note_by_app IS NULL) OR (note_by_kind = 'ai_app'::text)))",
+        'submission_checklist_items.submission_checklist_items_note_by_app_kind_ck': "CHECK (((note_by_app IS NULL) OR ((note_by_kind IS NOT NULL) AND (note_by_kind = 'ai_app'::text))))",
         'submission_checklist_items.submission_checklist_items_note_by_note_ck': "CHECK (((note_by_kind IS NULL) OR (NULLIF(btrim(note), ''::text) IS NOT NULL)))",
-        'submission_checklist_items.submission_checklist_items_note_by_v_ck': 'CHECK (((note_by_kind IS NULL) OR (attribution_v = 1)))',
+        'submission_checklist_items.submission_checklist_items_note_by_v_ck': 'CHECK (((note_by_kind IS NULL) OR ((attribution_v IS NOT NULL) AND (attribution_v = 1))))',
     }
     new_cons = {k for v in WVERSIONS for k in per[v]['cons']}
     assert set(MEASURED_CHECKDEF_W) == {k for k in new_cons if WFINAL['cons'].get(k, '').startswith('c ')}, set(MEASURED_CHECKDEF_W) ^ new_cons
