@@ -15,6 +15,7 @@ import { checklistJson, CLOCK_STEP_SECONDS, itemJson, SEED_TODO_COUNTER_SQL } fr
 import type { AnswerAction } from "../cloudSync/todos/answers";
 import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
 import { dealLockReason } from "../transactionEligibility";
+import { authorColumns, authorFromPart } from "./checklistItemAuthor";
 import {
   isPart,
   ITEM_PARTS,
@@ -606,6 +607,10 @@ export function clearInstallRemoved(db: SqlDb, projectRef: string, userId: strin
 interface AnswerPart {
   rev: number;
   value: JsonValue;
+  /** PR-11c: the part's author as the server answered it (checklistItemAuthor.ts authorFromPart). */
+  by: unknown;
+  app: unknown;
+  at: unknown;
 }
 
 function answerParts(answer: Record<string, unknown>): Partial<Record<StatePart, AnswerPart>> {
@@ -617,7 +622,8 @@ function answerParts(answer: Record<string, unknown>): Partial<Record<StatePart,
     if (!v || typeof v !== "object" || Array.isArray(v)) continue;
     const rev = (v as Record<string, unknown>).rev;
     if (typeof rev !== "number" || !Number.isFinite(rev)) continue;
-    out[p] = { rev, value: ((v as Record<string, unknown>).value ?? null) as JsonValue };
+    const o = v as Record<string, unknown>;
+    out[p] = { rev, value: (o.value ?? null) as JsonValue, by: o.by, app: o.app, at: o.at };
   }
   return out;
 }
@@ -761,7 +767,9 @@ export function confirmTodoAnswer(
         if (!a || !local || others.has(p) || heldBack(p)) continue;
         if (oldRev !== null && oldRev !== undefined && a.rev < oldRev) continue;
         if (samePart(p, partValue(p, local), a.value)) continue;
-        const set = partColumns(p, a.value);
+        const values = partColumns(p, a.value);
+        // PR-11c: the value and its author (from the answer part) in the same UPDATE; the stamp is this set's checked_at.
+        const set = row.entity === "item" ? { ...values, ...authorColumns(p, values, authorFromPart(a.by, a.app, a.at)) } : values;
         const table = row.entity === "item" ? "transaction_checklist_items" : "transaction_checklists";
         try {
           db.transaction(() => {

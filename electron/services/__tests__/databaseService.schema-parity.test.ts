@@ -1263,6 +1263,29 @@ describe("schema baseline parity — schema.sql vs frozen chain-v69 transcript (
       expect(divergences.map((d: Divergence) => `[${d.key}] ${d.detail}`)).toEqual([]);
     });
 
+    // BACKLOG-4263 PR-11c: the fingerprint above is keyed by column name, so it cannot see column ORDER. v85 appends
+    // eight columns to transaction_checklist_items; schema.sql must declare them at the end, in the same order.
+    it("transaction_checklist_items has the same columns IN THE SAME ORDER on a fresh install and an upgraded database", () => {
+      const fresh = buildFresh();
+      applyMigrations(fresh, 70);
+      const upgraded = replayFrozen();
+      execSchemaSqlAsRunMigrationsDoes(upgraded);
+      applyMigrations(upgraded, 70);
+      const order = (db: DatabaseType) =>
+        (db.prepare("PRAGMA table_info(transaction_checklist_items)").all() as Array<{ name: string }>).map((c) => c.name);
+      expect(order(upgraded)).toEqual(order(fresh));
+      expect(order(fresh).slice(-8)).toEqual([
+        "done_by_kind",
+        "done_by_app",
+        "done_by_at",
+        "done_by_stamp",
+        "note_by_kind",
+        "note_by_app",
+        "note_by_at",
+        "note_by_digest",
+      ]);
+    });
+
     it("both paths carry the migration-only objects that schema.sql cannot deliver", () => {
       for (const [label, build] of [
         ["fresh", buildFresh],

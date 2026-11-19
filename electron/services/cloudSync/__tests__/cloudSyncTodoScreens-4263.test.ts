@@ -35,6 +35,8 @@ import {
   INSERT_CHECKLIST_SQL,
   INSERT_PRIVATE_CHECKLIST_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
+  checkedItemArgs,
+  noteItemArgs,
 } from "../../db/checklistSql";
 import type { JsonValue } from "../jcs";
 
@@ -134,7 +136,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const ctx = await synced();
       const { db, e } = ctx;
       e.server.connections = [{ id: "conn-1", client_name: "Claude", provider: "anthropic", redirect_host: "claude.ai", consented_at: "2026-11-01T00:00:00Z", last_used_at: null }];
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine, older", I1));
       const row = outbox(db)[0];
       db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 3_600_000).toISOString(), row.op_id);
       e.server.aiSet(onlineItem(e, I1), "note", "from Claude, newer");
@@ -151,7 +153,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
         expect.objectContaining({ kind: "conflict", itemId: I1, part: "note", otherText: "mine, older", otherValue: "mine, older", who: "Claude" }),
       ]);
       // the renderer's "Use this version" is the ordinary note write (checklists:set-item-note), then dismiss
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(got.notices[0].otherValue as string, I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs(got.notices[0].otherValue as string, I1));
       expect(outbox(db).map((o) => `${o.local_id}:${o.part}:${JSON.parse(o.value_json as string).note}`)).toEqual([`${I1}:note:mine, older`]);
       expect(await s.dismissNotice(got.notices[0].id)).toEqual({ success: true });
       expect((await s.forDeal(deal)).notices).toEqual([]);
@@ -212,7 +214,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       await pass(e);
       expect((await s.forDeal(deal)).markers[I1]).toMatchObject({ kind: "ticked" });
       e.online.value = false;
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(0, I1));
       expect(outbox(db).map((o) => o.part)).toEqual(["done"]);
       expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
       e.online.value = true;
@@ -225,7 +227,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const { db, deal, e, s } = await synced();
       e.server.aiSet(onlineItem(e, I1), "note", "from the AI");
       await pass(e);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       expect((await s.forDeal(deal)).markers[I1]).toBeUndefined();
     });
 
@@ -234,7 +236,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const t = e.server.aiAdd(onlineList(e, MY), "From the AI app");
       await pass(e);
       e.online.value = false;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", t.id);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", t.id));
       expect(outbox(db).map((o) => `${o.local_id}|${o.part}`)).toEqual([`${t.id}|note`]);
       expect((await s.forDeal(deal)).markers[t.id]).toMatchObject({ kind: "added", who: "an AI app" });
     });
@@ -243,7 +245,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const { db, deal, e, s } = await synced();
       e.server.aiSet(onlineItem(e, I1), "note", "ai one", Date.now() - 120_000);
       await pass(e);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine, older", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine, older", I1));
       const row = outbox(db)[0];
       db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = ? WHERE op_id = ?").run(new Date(Date.now() - 60_000).toISOString(), row.op_id);
       e.server.aiSet(onlineItem(e, I1), "note", "ai two", Date.now());
@@ -537,7 +539,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
 
     it("the wait is bounded: a slow pass (3 s send, then 3 s pull) does not hold the turn-off for both", async () => {
       const { db, e } = await synced();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("unsent", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("unsent", I1));
       const slow = (fn: string, args: Record<string, JsonValue>) =>
         new Promise((r) => setTimeout(() => r({ data: e.server.respond(fn, args), error: null, status: 200 }), 3_000)) as never;
       e.server.override = (fn, args) => (fn === "cloud_todo_push" || fn === "cloud_todo_pull" ? slow(fn, args) : undefined);

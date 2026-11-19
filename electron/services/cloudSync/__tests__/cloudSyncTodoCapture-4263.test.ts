@@ -38,6 +38,8 @@ import {
   SET_CHECKLIST_ITEM_CHECKED_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
   SET_ITEM_SORT_ORDER_SQL,
+  checkedItemArgs,
+  noteItemArgs,
 } from "../../db/checklistSql";
 import { DRIVER, openTestDb } from "./helpers/sqlite";
 import { dealId, freshDb, insertDeal, PROJECT, SCHEMA_SQL, seedUser, USER_A, USER_B } from "./helpers/fixtures";
@@ -115,10 +117,10 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     expect(outbox(db).map(keyOf).sort()).toEqual([`checklist:${CL}:create`, `checklist:${MY}:create`]);
     const I = item(1);
     expect(opsOf(db, () => addItem(db, I, MY, "Call lender"))).toEqual([`item:${I}:create`]);
-    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I))).toEqual([`item:${I}:done`]);
-    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I))).toEqual([`item:${I}:done`]);
+    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, I)))).toEqual([`item:${I}:done`]);
+    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(0, I)))).toEqual([`item:${I}:done`]);
     expect(opsOf(db, () => db.prepare(RENAME_PRIVATE_ITEM_SQL).run("Call the lender", I, DEAL_A, MY_ITEMS_TEMPLATE_ID))).toEqual([`item:${I}:title`]);
-    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("Tuesday", I))).toEqual([`item:${I}:note`]);
+    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("Tuesday", I)))).toEqual([`item:${I}:note`]);
     expect(opsOf(db, () => db.prepare("UPDATE transaction_checklist_items SET due_date = ? WHERE id = ?").run("2026-12-01", I))).toEqual([`item:${I}:due`]);
     expect(opsOf(db, () => db.prepare(SET_ITEM_SORT_ORDER_SQL).run(3, I, MY))).toEqual([`item:${I}:order`]);
     expect(opsOf(db, () => db.prepare("UPDATE transaction_checklists SET sort_order = 5 WHERE id = ?").run(CL))).toEqual([`checklist:${CL}:order`]);
@@ -139,11 +141,11 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     const db = setup();
     const I = item(2);
     addItem(db, I, MY, "Same", 4);
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("Same note", I);
-    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("Same note", I))).toEqual([]);
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("Same note", I));
+    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("Same note", I)))).toEqual([]);
     expect(opsOf(db, () => db.prepare(SET_ITEM_SORT_ORDER_SQL).run(4, I, MY))).toEqual([]);
     expect(opsOf(db, () => db.prepare(RENAME_PRIVATE_ITEM_SQL).run("Same", I, DEAL_A, MY_ITEMS_TEMPLATE_ID))).toEqual([]);
-    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I))).toEqual([]);
+    expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(0, I)))).toEqual([]);
     db.close();
   });
 
@@ -154,12 +156,12 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     db.prepare(
       "INSERT INTO cloud_sync_todo_state (project_ref, owner_user_id, entity, local_id, note_rev, updated_at) VALUES (?, ?, 'item', ?, 7, 'x')",
     ).run(PROJECT, USER_A, I);
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("first", I);
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("first", I));
     const first = outbox(db).find((r) => keyOf(r) === `item:${I}:note`)!;
     expect(first).toMatchObject({ base_rev: 7, generation: 1 });
     // A pull may not move the shadow of a part with a pending op; even if it did, the base stays.
     db.prepare("UPDATE cloud_sync_todo_state SET note_rev = 9 WHERE local_id = ?").run(I);
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("second", I);
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("second", I));
     const rows = outbox(db).filter((r) => keyOf(r) === `item:${I}:note`);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ base_rev: 7, generation: 2, value_json: JSON.stringify({ note: "second" }) });
@@ -175,7 +177,7 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     expect(counter(db)).toMatchObject({ edit_seq: 2, clock_epoch: 0 }); // the two checklist creates
     addItem(db, item(41), CL, "A");
     addItem(db, item(42), CL, "B");
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("n", item(41));
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("n", item(41)));
     // One UPDATE changing two parts of one item is one change: both parts share its edit_seq.
     db.prepare("UPDATE transaction_checklist_items SET note = 'm', sort_order = 9 WHERE id = ?").run(item(42));
     const seqs = outbox(db).map((r) => [keyOf(r), r.edit_seq]);
@@ -200,14 +202,14 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     // The clock is now 60 s behind the highest time seen: not a step.
     const at60 = ahead(60);
     db.prepare("UPDATE cloud_sync_todo_counter SET max_wall_seen = ?").run(at60);
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("a", item(51));
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("a", item(51)));
     expect(counter(db)).toMatchObject({ clock_epoch: 0, max_wall_seen: at60 });
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(51)}:note`)!.clock_epoch).toBe(0);
     // 10 minutes behind: a step. The epoch moves, the op carries the new one, and the clock is re-anchored.
     const at600 = ahead(600);
     db.prepare("UPDATE cloud_sync_todo_counter SET max_wall_seen = ?").run(at600);
     const before = Date.now();
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("b", item(51));
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("b", item(51)));
     const after = Date.now();
     const c = counter(db)!;
     expect(c.clock_epoch).toBe(1);
@@ -221,7 +223,7 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     // An earlier op keeps its older epoch (the runner flags it, PR-4a).
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(51)}:create`)!.clock_epoch).toBe(0);
     // Moving forward again: no bump; max_wall_seen follows the clock.
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("c", item(51));
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("c", item(51)));
     expect(counter(db)!.clock_epoch).toBe(1);
     db.close();
   });
@@ -232,7 +234,7 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
       if (how === "row deleted") db.exec("DELETE FROM cloud_sync_todo_counter");
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(0);
       expect(opsOf(db, () => addItem(db, item(61), MY))).toEqual([`item:${item(61)}:create`]);
-      expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", item(61)))).toEqual([`item:${item(61)}:note`]);
+      expect(opsOf(db, () => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("x", item(61))))).toEqual([`item:${item(61)}:note`]);
       expect(opsOf(db, () => db.prepare(DELETE_PRIVATE_ITEM_SQL).run(item(61), DEAL_A, MY_ITEMS_TEMPLATE_ID))).toEqual([`item:${item(61)}:removed`]);
       expect(outbox(db).filter((r) => (r.local_id as string) === item(61)).every((r) => r.edit_seq === null && r.clock_epoch === null)).toBe(true);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(0);
@@ -246,8 +248,8 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     expect(() => {
       addItem(db, item(71), MY_B, "Theirs");
       addItem(db, item(72), CL_B, "Template item");
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, item(72));
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", item(72));
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, item(72)));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", item(72)));
       db.prepare(RENAME_PRIVATE_ITEM_SQL).run("Theirs 2", item(71), DEAL_B, MY_ITEMS_TEMPLATE_ID);
       db.prepare(SET_ITEM_SORT_ORDER_SQL).run(2, item(72), CL_B);
       db.prepare(DELETE_PRIVATE_ITEM_SQL).run(item(71), DEAL_B, MY_ITEMS_TEMPLATE_ID);
@@ -280,7 +282,7 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     const counterBefore = counter(db);
     db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, '2026-11-17T00:00:00.000Z')").run();
     addItem(db, item(84), CL, "Pulled");
-    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("pulled", item(83));
+    db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("pulled", item(83)));
     db.prepare("UPDATE transaction_checklists SET sort_order = 7 WHERE id = ?").run(CL);
     db.prepare(DELETE_PRIVATE_ITEM_SQL).run(item(82), DEAL_A, MY_ITEMS_TEMPLATE_ID);
     db.prepare(DELETE_CHECKLIST_IN_TRANSACTION_SQL).run(CL, DEAL_A);
@@ -375,13 +377,13 @@ describe(`Keepr Cloud todo capture [${DRIVER}]`, () => {
     const seq = counter(db);
     expect(() =>
       db.transaction(() => {
-        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("lost", item(101));
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("lost", item(101)));
         throw new Error("rollback");
       })(),
     ).toThrow("rollback");
     expect(fingerprint(db)).toEqual(ops);
     expect(counter(db)).toEqual(seq);
-    db.transaction(() => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", item(101)))();
+    db.transaction(() => db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("kept", item(101))))();
     expect(outbox(db).find((r) => keyOf(r) === `item:${item(101)}:note`)!.edit_seq).toBe((seq!.edit_seq as number) + 1);
     db.close();
   });

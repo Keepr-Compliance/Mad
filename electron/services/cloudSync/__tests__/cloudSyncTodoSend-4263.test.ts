@@ -40,6 +40,8 @@ import {
   SET_CHECKLIST_ITEM_CHECKED_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
   SET_ITEM_SORT_ORDER_SQL,
+  checkedItemArgs,
+  noteItemArgs,
 } from "../../db/checklistSql";
 import type { JsonValue } from "../jcs";
 import type { RpcTransport } from "../cloudClient";
@@ -124,16 +126,16 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       // one of every trigger-made shape
       db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 9), deal, "tpl-2", "Two", 2);
       db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 9), fid(3, 9), "Walk", "Desc", 1, "other", 3);
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I1);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("Booked", I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, I1));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("Booked", I1));
       db.prepare(SET_ITEM_SORT_ORDER_SQL).run(7, I1, CL);
       db.prepare(RENAME_PRIVATE_ITEM_SQL).run("Call the lender", I2, deal, MY_ITEMS_TEMPLATE_ID);
       db.prepare("UPDATE transaction_checklist_items SET due_date = '2026-12-01' WHERE id = ?").run(I2);
       db.prepare("UPDATE transaction_checklists SET sort_order = 4 WHERE id = ?").run(CL);
       shapes.push(...outbox(db));
       db.exec("DELETE FROM cloud_sync_todo_outbox");
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(0, 0, I1);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(null, I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(0, I1));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs(null, I1));
       db.prepare("UPDATE transaction_checklist_items SET due_date = NULL WHERE id = ?").run(I2);
       db.prepare(DELETE_PRIVATE_ITEM_SQL).run(I2, deal, MY_ITEMS_TEMPLATE_ID);
       db.prepare("DELETE FROM transaction_checklists WHERE id = ?").run(fid(3, 9));
@@ -191,8 +193,8 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       e.online.value = false;
       db.prepare(INSERT_CHECKLIST_SQL).run(fid(3, 5), deal.id, "tpl-5", "Five", 5);
       db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 5), fid(3, 5), "Five a", null, 0, null, 0);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("n", fid(4, 5));
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("later", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("n", fid(4, 5)));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("later", I1));
       db.prepare("DELETE FROM transaction_checklist_items WHERE id = ?").run(I2);
       db.prepare("DELETE FROM transaction_checklists WHERE id = ?").run(fid(3, 5));
       e.online.value = true;
@@ -250,13 +252,13 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
     it("R4: an edit made while the push is in flight keeps its outbox row (generation changed): base_rev moves to the returned rev, the next pass sends it, causally applied", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("first", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("first", I1));
       const sentGen = outbox(db)[0].generation;
       const real = e.server.transport;
       setTransport(e, async (f, a, s) => {
         const r = await real(f, a, s);
         // the user types again while the answer is on its way (an awaited callback on the same connection)
-        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("second", I1);
+        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("second", I1));
         return r;
       });
       await pass(e);
@@ -273,12 +275,12 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
     it("SR R1: a DIFFERENT part edited while another part's op is in flight survives that op's confirm and is sent next pass", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(1, 1, I1);
+      db.prepare(SET_CHECKLIST_ITEM_CHECKED_SQL).run(...checkedItemArgs(1, I1));
       expect(keys(outbox(db))).toEqual([`item:${I1}:done`]);
       const real = e.server.transport;
       setTransport(e, async (f, a, sig) => {
         const r = await real(f, a, sig);
-        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("typed during the tick", I1);
+        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("typed during the tick", I1));
         return r;
       });
       await pass(e);
@@ -295,11 +297,11 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       const baseBefore = (shadow(db, I1)!.note_rev as number);
       const t = onlineItem(e, I1)!;
       t.parts.note = { rev: t.parts.note.rev + 1, value: "later, elsewhere", at: Date.now() + 600_000, by: "ai_app:conn-1", edit_seq: null };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk 1", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("desk 1", I1));
       const real = e.server.transport;
       setTransport(e, async (f, a, sig) => {
         const r = await real(f, a, sig);
-        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk 2", I1);
+        if (f === "cloud_todo_push") db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("desk 2", I1));
         return r;
       });
       await pass(e);
@@ -317,7 +319,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       // another side changed the note later (as an AI app will from PR-5): later effective time, another actor
       const t = onlineItem(e, I1)!;
       t.parts.note = { rev: t.parts.note.rev + 1, value: "from the phone", at: Date.now() + 60_000, by: "ai_app:conn-1", edit_seq: null };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("desk", I1));
       await pass(e);
       const ans = (e.server.todoLedger.get([...e.server.todoLedger.keys()].pop() as string) as Row).status;
       expect(ans).toBe("lost");
@@ -331,7 +333,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       const { db, e } = await sentOnce();
       const t = onlineItem(e, I1)!;
       t.parts.note = { rev: t.parts.note.rev + 1, value: "an hour ago elsewhere", at: Date.now() - 3_600_000, by: "ai_app:conn-1", edit_seq: null };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("just now here", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("just now here", I1));
       await pass(e);
       expect(onlineItem(e, I1)!.parts.note.value).toBe("just now here");
       expect(item(db, I1).note).toBe("just now here");
@@ -349,7 +351,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
         row.transaction_id,
         JSON.stringify("newest"),
       );
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newest", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("newest", I1));
       const note = outbox(db).find((r) => r.local_id === I1 && r.part === "note")!;
       const stale = { op_id: note.op_id, status: "lost", entity: "item", cloud_id: "c-1", parts: { note: { rev: 3, value: "old winner" } } };
       todos.confirmTodoAnswer(db, note, stale, actionFor(stale), new Date());
@@ -375,7 +377,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
         const ops = a.p_ops as Array<Record<string, JsonValue>>;
         return { data: { ok: true, results: ops.map((o) => ({ op_id: o.op_id, status: "rejected", reason: "invalid_value", field: "note" })) }, error: null };
       };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x".repeat(10), I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("x".repeat(10), I1));
       await pass(e);
       expect(outbox(db)).toEqual([]);
       expect(db.prepare("SELECT kind, part FROM cloud_sync_todo_notices").all()).toEqual([{ kind: "rejected", part: "note" }]);
@@ -389,7 +391,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
   describe("ACID: a crash at any point leaves a state the next pass repairs", () => {
     it("before the send (no answer, the server never saw it): every row stays; the next pass sends the same op_ids once", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("a", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("a", I1));
       const before = outbox(db).map((r) => `${r.op_id}#${r.generation}`);
       e.server.override = (fn) => (fn === "cloud_todo_push" ? new Error("network") : undefined);
       await pass(e);
@@ -426,8 +428,8 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
     it("between two confirms: the confirmed answer stays confirmed, the other row stays with its op_id and is confirmed by the replay next pass; no guard row is left", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("one", I1);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("two", I2);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("one", I1));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("two", I2));
       const realPrepare = db.prepare.bind(db);
       let confirms = 0;
       (db as { prepare: TestDb["prepare"] }).prepare = (sql: string) => {
@@ -449,7 +451,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       const { db, e } = await sentOnce();
       const t = onlineItem(e, I1)!;
       t.parts.note = { rev: t.parts.note.rev + 1, value: "winner", at: Date.now() + 600_000, by: "ai_app:conn-1", edit_seq: null };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       const before = { sh: JSON.stringify(shadow(db, I1)), it: JSON.stringify(item(db, I1)), ob: JSON.stringify(outbox(db)) };
       const realPrepare = db.prepare.bind(db);
       let confirming = false;
@@ -481,8 +483,8 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
 
     it("SR R3: answers are matched by op_id: a missing, reordered, duplicated and an unknown answer confirm only the rows they name", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("one", I1);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("two", I2);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("one", I1));
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("two", I2));
       db.prepare("UPDATE transaction_checklists SET sort_order = 9 WHERE id = ?").run(CL);
       const rows = outbox(db);
       const idOf = (local: string) => rows.find((r) => r.local_id === local)!.op_id;
@@ -509,7 +511,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       const { db, deal, e } = await sentOnce();
       db.prepare("UPDATE cloud_sync_state SET cloud_id = 'not-a-uuid' WHERE entity = 'deal' AND local_id = ?").run(deal);
       db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = '9999-12-31T00:00:00.000Z#99'").run();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("x", I1));
       await pass(e);
       expect(opsOf(e)[0]).toMatchObject({ deal_id: "not-a-uuid" });
       expect(outbox(db)).toEqual([]);
@@ -528,7 +530,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
   describe("R-op: retries reuse the op_id", () => {
     it("not_found (not kept by the server) is retried with the same op_id until it applies", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("later", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("later", I1));
       const id = outbox(db)[0].op_id;
       let refuse = 2;
       const real = e.server.transport;
@@ -581,7 +583,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("stops the sender and persists the stop: no further todo call on later passes; the outbox is kept; turn-off clears the stop (E1)", async () => {
       const { db, e } = await sentOnce();
       e.server.removedInstalls.add(`${USER_A}|${e.service.runner && (db.prepare("SELECT install_id FROM cloud_sync_install").get() as { install_id: string }).install_id}`);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after removal", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("after removal", I1));
       const before = pushes(e).length;
       await pass(e);
       expect(pushes(e)).toHaveLength(before + 1);
@@ -599,15 +601,15 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("a 4a-only build: the restored file's older todo values are never sent over the cloud's (restore, pass, migration scan, trigger repair, daily reconcile)", async () => {
       const { db, e } = await sentOnce();
       // the cloud moved on after the backup: newer values online and in the shadow
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("newer", I1));
       await pass(e);
       expect(onlineItem(e, I1)!.parts.note.value).toBe("newer");
       // the backup has the older value (rewritten under the guard, as a restored file would hold it)
       db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("older (backup)", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("older (backup)", I1));
       db.exec("DELETE FROM cloud_sync_applying");
       // an op from before the backup still in the file
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("older op", I2);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("older op", I2));
       expect(prepareRestoredFile(db)).toBe(true);
       expect(outbox(db)).toEqual([]);
       expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ last_seq: 0, full_pull_owed: 1, horizon: null, full_pull_kind: "restore" });
@@ -629,13 +631,13 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("a scan that bypasses the gate after a restore (a deal the cloud lost, a server reset) sends no edit_seq: the rewound counter cannot outrank a newer value this computer wrote before the restore", async () => {
       const { db, deal, e } = await sentOnce();
       // before the restore: a newer note sent from this computer (same install, edit_seq k)
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("newer", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("newer", I1));
       await pass(e);
       const stored = onlineItem(e, I1)!.parts.note;
       expect(stored).toMatchObject({ value: "newer", by: expect.stringMatching(/^desktop:/) });
       // the restored file: the older note, and a counter well behind (the backup's)
       db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("older (backup)", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("older (backup)", I1));
       db.exec("DELETE FROM cloud_sync_applying");
       db.prepare("UPDATE cloud_sync_todo_counter SET edit_seq = ?").run((stored.edit_seq as number) - 1);
       prepareRestoredFile(db);
@@ -650,7 +652,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("the gate: once no full pull is owed, the same daily scan does send the difference (the predicate is what stops it)", async () => {
       const { db, e } = await sentOnce();
       db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("missed", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("missed", I1));
       db.exec("DELETE FROM cloud_sync_applying");
       // PR-4b: the first pass finished the full pull; owe one again to show the gate
       db.prepare("UPDATE cloud_sync_todo_cursor SET full_pull_owed = 1").run();
@@ -666,7 +668,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       db.prepare(
         "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, 'x', 1, '2026-11-01T00:00:00.000Z')",
       ).run(PROJECT, USER_A);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("pr3 era", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("pr3 era", I1));
       expect(outbox(db).length).toBeGreaterThan(0);
       prepareRestoredFile(db);
       expect(outbox(db)).toEqual([]);
@@ -680,7 +682,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("edit offline, turn off, turn on: no op from before the turn-off is sent; the full pull and the scan after it run in the next pass", async () => {
       const { db, e } = await sentOnce();
       e.online.value = false;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("offline", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("offline", I1));
       const old = outbox(db).map((r) => r.op_id);
       disableForUser(db, PROJECT, USER_A, false);
       for (const t of todos.TODO_USER_TABLES) expect([t, n(db, `SELECT COUNT(*) AS n FROM ${t}`)]).toEqual([t, 0]);
@@ -701,7 +703,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("a machine rebind clears every user's todo rows and every counter row", () => {
       const { db } = profile();
       turnOn(db, USER_B);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("x", I1));
       db.prepare("INSERT INTO cloud_sync_todo_notices (project_ref, owner_user_id, entity, local_id, kind, created_at) VALUES (?, ?, 'item', 'i', 'rejected', 'x')").run(PROJECT, USER_B);
       db.prepare("UPDATE cloud_sync_install SET machine_hash = 'another-computer'").run();
       expect(ensureInstall(db, PROJECT, "device-on-a-new-computer").rebound).toBe(true);
@@ -717,7 +719,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
         "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, 'x', 1, '2026-11-01T00:00:00.000Z')",
       ).run(PROJECT, USER_A);
       db.prepare("INSERT INTO cloud_sync_todo_counter (project_ref, install_id, edit_seq, clock_epoch) VALUES (?, 'old-install-id', 40, 2)").run(PROJECT);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("pr3 era", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("pr3 era", I1));
       db.prepare("DELETE FROM transaction_checklist_items WHERE id = ?").run(I2);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_trash")).toBe(1);
       db.prepare("INSERT INTO cloud_sync_state (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, removed, updated_at) VALUES (?, ?, 'checklist_item', ?, 'd', 'c', 0, 'x')").run(PROJECT, USER_A, I1);
@@ -735,7 +737,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       expect(todos.getTodoCursor(db, PROJECT, USER_A)).toMatchObject({ last_seq: 0, full_pull_owed: 1 });
       for (const id of pr3Ops) expect(outbox(db).map((r) => r.op_id)).not.toContain(id);
       // a new edit after the step, then the next pass's prepare: nothing is cleared again
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("after", I1));
       const fp = outbox(db).map((r) => `${r.op_id}#${r.generation}`);
       expect(todos.prepareTodoPass(db, PROJECT, USER_A, new Date())).toEqual({ oneShot: false });
       expect(outbox(db).map((r) => `${r.op_id}#${r.generation}`)).toEqual(fp);
@@ -750,7 +752,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
       const e = engine(db);
       await startAndPass(e);
       expect(n(db, "SELECT COUNT(*) AS n FROM cloud_sync_todo_counter")).toBe(1);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("counted", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("counted", I1));
       expect(outbox(db)[0].edit_seq).not.toBeNull();
     });
 
@@ -788,7 +790,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
     it("todos already online from this computer: the scan's creates answer exists, the count is unchanged, the local values stand (same install)", async () => {
       const { db, e } = await onlineBeforeThisBuild();
       db.prepare("INSERT INTO cloud_sync_applying (id, started_at) VALUES (1, 'x')").run();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("edited here, never sent", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("edited here, never sent", I1));
       db.exec("DELETE FROM cloud_sync_applying");
       await pass(e);
       expect(e.server.todos).toHaveLength(4);
@@ -924,7 +926,7 @@ describe(`Keepr Cloud todo sender [${DRIVER}]`, () => {
   describe("E2: what the desktop sends for the clock", () => {
     it("ops of an earlier epoch (and scan ops) are sent clock_stepped; current-epoch and counter-less ops are not; a backward step seen at send time bumps the epoch", async () => {
       const { db, e } = await sentOnce();
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("before the step", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("before the step", I1));
       expect(outbox(db)[0].clock_epoch).toBe(0);
       // the wall clock had been 10 minutes ahead (max_wall_seen) and was set back
       db.prepare("UPDATE cloud_sync_todo_counter SET max_wall_seen = ?").run(new Date(Date.now() + 600_000).toISOString());

@@ -25,7 +25,7 @@ import { deleteLikeTheHandler, fz, seedFullDeal, snapshotDeal, type DealFixture 
 import * as archive from "../../db/cloudSyncDealArchive";
 import { enableForUser, disableForUser, forgetOtherProjects } from "../../db/cloudSyncDbService";
 import { prepareCloudSyncAfterOpen, prepareRestoredFile } from "../../db/cloudSyncTriggers";
-import { SET_CHECKLIST_ITEM_NOTE_SQL } from "../../db/checklistSql";
+import { SET_CHECKLIST_ITEM_NOTE_SQL, noteItemArgs } from "../../db/checklistSql";
 import { applyTodoPage } from "../../db/cloudSyncTodoPullDb";
 
 type Row = Record<string, unknown>;
@@ -435,7 +435,7 @@ describe(`Keepr Cloud deal archive and restore [${DRIVER}]`, () => {
     it("an edit waiting to be sent at the delete reaches the cloud after the restore", async () => {
       const { db, fx, e } = await synced();
       e.server.override = (fn) => (fn === "cloud_todo_push" ? new Error("offline") : undefined);
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("written before the delete", fx.item);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("written before the delete", fx.item));
       await pass(e);
       e.server.override = null;
       expect(outbox(db).filter((o) => o.part === "note")).toHaveLength(1);

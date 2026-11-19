@@ -719,6 +719,8 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     const item = (payload[0].items as Row[])[0];
     expect(Object.keys(item).sort()).toEqual(
       [
+        // BACKLOG-4263 PR-11c: the item's attribution format and note author
+        "attribution_v",
         "description",
         "expected_document_type",
         "is_checked",
@@ -726,6 +728,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
         "links",
         "local_item_id",
         "note",
+        "note_by",
         "sort_order",
         "title",
       ],
