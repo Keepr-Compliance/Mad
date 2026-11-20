@@ -135,15 +135,23 @@ describe("BACKLOG-3966 — the private checklist and its audience", () => {
   });
 
   it("BACKLOG-4263 PR-6 (Q6): a due date reaches the agent's read only; a broker read (submission, export) carries no due date at all", async () => {
-    run("UPDATE transaction_checklist_items SET due_date = '2026-11-20' WHERE id IN ('t-0', 'n-1')");
+    // A date no test run can have, so no timestamp written during the run contains it.
+    run("UPDATE transaction_checklist_items SET due_date = '2099-01-02' WHERE id IN ('t-0', 'n-1')");
     const agent = await getChecklistsForTransaction(TX, "agent");
     const byId = new Map(agent.checklists.flatMap((d) => d.items).map((i) => [i.id, i]));
-    expect([byId.get("t-0")?.dueDate, byId.get("n-1")?.dueDate, byId.get("t-1")?.dueDate]).toEqual(["2026-11-20", "2026-11-20", null]);
+    expect([byId.get("t-0")?.dueDate, byId.get("n-1")?.dueDate, byId.get("t-1")?.dueDate]).toEqual(["2099-01-02", "2099-01-02", null]);
     const broker = await getChecklistsForTransaction(TX, "broker");
     const items = broker.checklists.flatMap((d) => d.items);
     expect(items.length).toBeGreaterThan(0);
     expect(items.filter((i) => "dueDate" in i)).toEqual([]);
-    expect(JSON.stringify(broker)).not.toContain("2026-11-20");
+    // No key anywhere in the broker read names a due date (checklistDbService.ts toItem is the only writer: dueDate).
+    const dueKeys: string[] = [];
+    JSON.stringify(broker, (key, value) => {
+      if (/due/i.test(key)) dueKeys.push(key);
+      return value;
+    });
+    expect(dueKeys).toEqual([]);
+    expect(JSON.stringify(broker)).not.toContain("2099-01-02");
   });
 
   it("the audience argument is required, with no default (type level)", () => {

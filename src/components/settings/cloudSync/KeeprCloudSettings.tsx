@@ -8,7 +8,7 @@
  * LearnSettings. Wording: keeprCloudCopy.ts.
  */
 import React, { useState } from "react";
-import { ConfirmationDialog } from "@keepr/ui";
+import { SettingsConfirm } from "./SettingsConfirm";
 import type { UseKeeprCloudSettings } from "./useKeeprCloudSettings";
 import { KEEPR_CLOUD_COPY as C, NOTICE_TEXTS } from "./keeprCloudCopy";
 import { useKeeprCloudRemoved } from "./useKeeprCloudRemoved";
@@ -238,7 +238,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
         </div>
       </div>
 
-      <ConfirmationDialog
+      <SettingsConfirm
         open={dialog === "notice"}
         title={C.title}
         description={noticeText ?? ""}
@@ -250,7 +250,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
           if (view.noticeVersion !== null) void cloud.turnOn(view.noticeVersion).finally(() => setDialog(null));
         }}
       />
-      <ConfirmationDialog
+      <SettingsConfirm
         open={dialog === "off"}
         title={C.turnOffConfirmTitle}
         description={[C.turnOffConfirm, C.turnOffLost, ...(removed.here.length > 0 ? [C.turnOffArchive] : [])].join(" ")}
@@ -261,7 +261,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
         onCancel={() => setDialog(null)}
         onConfirm={() => void cloud.turnOff().finally(() => setDialog(null))}
       />
-      <ConfirmationDialog
+      <SettingsConfirm
         open={dialog === "delete-online" || dialog === "delete-installs"}
         title={C.deleteOnlineConfirmTitle}
         description={dialog === "delete-installs" ? C.deleteInstallsConfirm : C.deleteOnlineConfirm}
@@ -274,7 +274,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
           void (dialog === "delete-online" ? cloud.deleteOnlineNotHere() : cloud.deleteOldInstalls()).finally(() => setDialog(null))
         }
       />
-      <ConfirmationDialog
+      <SettingsConfirm
         open={dialog === "forget"}
         title={C.forget}
         description={C.forgetConfirm}

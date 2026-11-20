@@ -236,6 +236,7 @@ function historyLine(r: CloudTodoHistoryResult["rows"][number]): string {
 }
 
 function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
+  const cloud = useCloudTodos();
   const [res, setRes] = useState<CloudTodoHistoryResult | null>(null);
   useEffect(() => {
     let live = true;
@@ -262,6 +263,11 @@ function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
           ))}
         </ul>
       )}
+      <div className="flex items-center justify-end gap-3 mt-2">
+        <button type="button" className={SOLID_SECONDARY} onClick={() => cloud?.setPanel(null)} data-testid={`checklist-history-dismiss-${item.id}`}>
+          {T.dismiss}
+        </button>
+      </div>
     </div>
   );
 }
