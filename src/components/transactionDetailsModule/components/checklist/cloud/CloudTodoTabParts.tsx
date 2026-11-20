@@ -1,6 +1,6 @@
 /**
  * The Checklist tab's Keepr Cloud parts above and below the checklists — BACKLOG-4263 PR-6 (plan §7): the
- * offline notice (non-blocking, solid OK, once per app session), the one-line notices, and Recently removed.
+ * one-line notices, and Recently removed.
  * Each renders nothing unless Keepr Cloud is on for this user. Banners use the tab's own notice style.
  */
 import React, { useCallback, useEffect, useState } from "react";
@@ -11,38 +11,6 @@ import { CLOUD_TODO_COPY as T } from "./cloudTodoCopy";
 
 const SOLID = "px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-60";
 const SOLID_SECONDARY = "px-3 py-1.5 text-sm font-semibold text-gray-800 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg disabled:opacity-60";
-
-/** Once per app session: the offline notice is not shown again after OK. */
-let offlineAcknowledged = false;
-/** Tests only. */
-export function resetOfflineNoticeForTests(): void {
-  offlineAcknowledged = false;
-}
-
-export function CloudOfflineNotice(): React.ReactElement | null {
-  const cloud = useCloudTodos();
-  const [done, setDone] = useState(offlineAcknowledged);
-  if (!cloud || cloud.online || done) return null;
-  return (
-    <div
-      className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 flex items-center justify-between gap-3"
-      role="status"
-      data-testid="checklist-cloud-offline"
-    >
-      <span>{T.offline}</span>
-      <button
-        type="button"
-        className={SOLID}
-        onClick={() => {
-          offlineAcknowledged = true;
-          setDone(true);
-        }}
-      >
-        {T.ok}
-      </button>
-    </div>
-  );
-}
 
 export function CloudDealNotices(): React.ReactElement | null {
   const cloud = useCloudTodos();
@@ -109,7 +77,7 @@ export function CloudRecentlyRemoved({ locked, reloadKey }: { locked: boolean; r
   };
 
   return (
-    <div className="mt-6" data-testid="checklist-recently-removed">
+    <div data-testid="checklist-recently-removed">
       <h4 className="text-lg font-semibold text-gray-900 mb-2">{T.recentlyRemoved}</h4>
       {!list.success ? (
         <p className="text-sm text-gray-600">{T.removedOffline}</p>

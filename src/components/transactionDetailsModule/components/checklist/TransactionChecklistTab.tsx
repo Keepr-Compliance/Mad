@@ -78,7 +78,7 @@ import { MyItemsSection } from "./MyItemsSection";
 import { templateChecklistHint } from "../../../../utils/checklistPlanHint";
 import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
 import { CloudTodosProvider } from "./cloud/CloudTodosContext";
-import { CloudDealNotices, CloudOfflineNotice, CloudRecentlyRemoved } from "./cloud/CloudTodoTabParts";
+import { CloudDealNotices, CloudRecentlyRemoved } from "./cloud/CloudTodoTabParts";
 
 export interface TransactionChecklistTabProps {
   checklist: UseTransactionChecklistResult;
@@ -393,7 +393,6 @@ export function TransactionChecklistTab({
   return (
     <CloudTodosProvider transactionId={dealIdProp ?? transactionId ?? null} onTodosChanged={() => void checklist.refresh()}>
     <div data-testid="checklist-panel">
-      <CloudOfflineNotice />
       <CloudDealNotices />
       {locked ? (
         <div
@@ -472,6 +471,7 @@ export function TransactionChecklistTab({
           onOpenPicker={setPickerItem}
           onRemoveLink={handleRemoveLink}
         />
+        <CloudRecentlyRemoved locked={locked} reloadKey={data} />
         {chooserElement}
         {!showChooser && templateDetails.map((detail) => (
           <ChecklistSection
@@ -495,8 +495,6 @@ export function TransactionChecklistTab({
           />
         ))}
       </div>
-
-      <CloudRecentlyRemoved locked={locked} reloadKey={data} />
 
       <AttachmentPreviewHost preview={attachmentPreview} />
       {viewingThread && (
