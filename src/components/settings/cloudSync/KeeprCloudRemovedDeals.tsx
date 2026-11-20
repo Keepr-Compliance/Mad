@@ -2,11 +2,11 @@
  * Settings › Keepr Cloud › Removed — BACKLOG-4263 PR-6 (plan §7, §14 F9).
  *
  * Same card rows and solid buttons as KeeprCloudSettings (`ROW`, `SOLID_BUTTON`). "Delete for good" asks first
- * (ConfirmationDialog, destructive). A row being deleted shows "Deleting…" and has no Restore. Wording:
+ * (SettingsConfirm, destructive). A row being deleted shows "Deleting…" and has no Restore. Wording:
  * keeprCloudCopy.ts. Rendered only for a user with Keepr Cloud on (the parent decides).
  */
 import React, { useState } from "react";
-import { ConfirmationDialog } from "@keepr/ui";
+import { SettingsConfirm } from "./SettingsConfirm";
 import { KEEPR_CLOUD_COPY as C } from "./keeprCloudCopy";
 import type { UseKeeprCloudRemoved } from "./useKeeprCloudRemoved";
 
@@ -115,7 +115,7 @@ export function KeeprCloudRemovedDeals({
       )}
       {removed.here.length > 0 && <p className="m-0 text-[13px] text-gray-500">{C.removedFootnote}</p>}
 
-      <ConfirmationDialog
+      <SettingsConfirm
         open={confirmId !== null}
         title={C.deleteForGoodTitle}
         description={C.deleteForGoodConfirm}
