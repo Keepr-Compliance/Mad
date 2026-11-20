@@ -144,6 +144,13 @@ describe("BACKLOG-3966 — the private checklist and its audience", () => {
     const items = broker.checklists.flatMap((d) => d.items);
     expect(items.length).toBeGreaterThan(0);
     expect(items.filter((i) => "dueDate" in i)).toEqual([]);
+    // No key anywhere in the broker read names a due date (checklistDbService.ts toItem is the only writer: dueDate).
+    const dueKeys: string[] = [];
+    JSON.stringify(broker, (key, value) => {
+      if (/due/i.test(key)) dueKeys.push(key);
+      return value;
+    });
+    expect(dueKeys).toEqual([]);
     expect(JSON.stringify(broker)).not.toContain("2099-01-02");
   });
 
