@@ -1,7 +1,8 @@
 /**
  * BACKLOG-4263 PR-6 — the Checklist tab's Keepr Cloud parts (plan §7): the due date ("Due Nov 20" and the
  * editor), the AI-app marker, the notice strip with the other version and "Use this version", History, Recently
- * removed, the offline notice, the one-line notices and the live refresh.
+ * removed (and where it sits), History's Dismiss, the one-line notices and the live refresh. Offline, the tab shows
+ * no notice of its own.
  *
  * Checklists come from the transcribed main fixture (checklistFixture.ts); main's Keepr Cloud answers are the
  * shapes of electron/types/ipc/window-api-cloud-todos.ts, as cloudTodoScreens-4263.test.ts produces them.
@@ -11,14 +12,13 @@
  * or Recently removed calling out while offline; a blending (ghost) action button on a tinted strip.
  */
 import React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { TransactionChecklistTab, type TransactionChecklistTabProps } from "../TransactionChecklistTab";
 import { useTransactionChecklist } from "../../../hooks/useTransactionChecklist";
 import type { ChecklistsForTransaction } from "../../../../../../electron/types/checklist";
 import type { CloudTodoNotice, CloudTodosForDeal } from "../../../../../../electron/types/ipc/window-api-cloud-todos";
 import { fixtureAttachments, fixtureChecklistsWithMyItems, fixtureEmailCommunications } from "./checklistFixture";
-import { resetOfflineNoticeForTests } from "../cloud/CloudTodoTabParts";
 
 jest.mock("../../modals/AttachmentPreviewModal", () => ({ AttachmentPreviewModal: () => null }));
 jest.mock("../../modals/EmailThreadViewModal", () => ({ EmailThreadViewModal: () => null }));
@@ -77,7 +77,6 @@ async function show(answer: CloudTodosForDeal, list: ChecklistsForTransaction = 
 }
 
 beforeEach(() => {
-  resetOfflineNoticeForTests();
   changed = null;
   cloud = {
     getForDeal: jest.fn(),
@@ -232,17 +231,6 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(within(section).queryByRole("button", { name: "Restore" })).toBeNull();
   });
 
-  it("offline: the notice with a solid OK; after OK it stays away for the session", async () => {
-    await show({ ...ON, online: false });
-    const n = screen.getByTestId("checklist-cloud-offline");
-    expect(n).toHaveTextContent(
-      "You're offline. Changes made on your other devices or by AI apps may not show yet. Your changes here are kept and saved online when you're back online.",
-    );
-    expect(n.textContent).not.toMatch(/sync/i);
-    fireEvent.click(within(n).getByRole("button", { name: "OK" }));
-    expect(screen.queryByTestId("checklist-cloud-offline")).toBeNull();
-  });
-
   it("one-line notices say what happened and can be dismissed", async () => {
     await show({
       ...ON,
@@ -280,12 +268,57 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(within(screen.getByTestId(`cloud-item-menu-${T_ITEM.id}`)).getAllByRole("button").map((b) => b.textContent)).toEqual(["History"]);
   });
 
-  it("the offline notice, once OK'd, does not come back when the tab is opened again for another deal", async () => {
+  it("offline: no notice of its own on the tab; History and Recently removed still say they need an internet connection", async () => {
+    cloud.listRemoved.mockResolvedValue({ success: false, error: "offline", items: [] });
+    cloud.history.mockResolvedValueOnce({ success: false, error: "offline", rows: [] });
     await show({ ...ON, online: false });
-    fireEvent.click(within(screen.getByTestId("checklist-cloud-offline")).getByRole("button", { name: "OK" }));
-    cleanup();
-    await show({ ...ON, online: false }, data, { transactionId: "txn-2" });
+    expect(await screen.findByTestId("checklist-recently-removed")).toHaveTextContent("Recently removed needs an internet connection.");
     expect(screen.queryByTestId("checklist-cloud-offline")).toBeNull();
+    expect(screen.queryByText(/You're offline/)).toBeNull();
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
+    expect(await screen.findByText("History needs an internet connection.")).toBeInTheDocument();
+  });
+
+  it("History has one Dismiss that closes it; the due-date editor still opens and closes", async () => {
+    cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "removed", part: null, oldText: null, newText: null, kept: true }] });
+    await show(ON);
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
+    const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
+    await within(list).findByRole("listitem");
+    const buttons = within(list).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Dismiss"]);
+    expect(buttons[0].className).toContain("bg-white border border-gray-300");
+    fireEvent.click(buttons[0]);
+    expect(screen.queryByTestId(`checklist-history-${T_ITEM.id}`)).toBeNull();
+    fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+    fireEvent.click(screen.getByTestId(`cloud-item-due-${T_ITEM.id}`));
+    const editor = screen.getByTestId(`checklist-due-editor-${T_ITEM.id}`);
+    fireEvent.click(within(editor).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId(`checklist-due-editor-${T_ITEM.id}`)).toBeNull();
+  });
+
+  it("Recently removed sits directly under My items: before the template chooser when there is no template checklist", async () => {
+    const onlyMine = fixtureChecklistsWithMyItems();
+    onlyMine.checklists = onlyMine.checklists.filter((d) => d.checklist.isPrivate);
+    cloud.listRemoved.mockResolvedValue({ success: true, items: [{ entity: "item", cloudId: "c-9", title: "Wire", removedAt: null }] });
+    checklists().get.mockResolvedValue({ success: true, checklists: onlyMine });
+    cloud.getForDeal.mockResolvedValue(ON);
+    render(<Harness />);
+    const removed = await screen.findByTestId("checklist-recently-removed");
+    const chooser = await screen.findByTestId("checklist-chooser");
+    expect(removed.compareDocumentPosition(chooser) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const myItems = screen.getByTestId(`checklist-item-${M_ITEM.id}`);
+    expect(myItems.compareDocumentPosition(removed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("Recently removed still shows when the deal has a template checklist, before that checklist", async () => {
+    cloud.listRemoved.mockResolvedValue({ success: true, items: [{ entity: "item", cloudId: "c-9", title: "Wire", removedAt: null }] });
+    await show(ON);
+    const removed = await screen.findByTestId("checklist-recently-removed");
+    expect(screen.queryByTestId("checklist-chooser")).toBeNull();
+    expect(removed.compareDocumentPosition(screen.getByTestId(`checklist-item-${T_ITEM.id}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("History cuts each value at 200 characters (SR probe: a 4,000-character note)", async () => {
