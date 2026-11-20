@@ -231,9 +231,39 @@ describe.each(CASES)("Settings › Keepr Cloud confirm: $name", (c) => {
     expect(document.body.style.pointerEvents).not.toBe("none");
   });
 
-  it("A: it is a dialog named by its title", async () => {
-    await renderCase(c);
-    expect(screen.getByRole("alertdialog", { name: c.title })).toBeInTheDocument();
+  it("A: it is a modal dialog named by its title and described by its text", async () => {
+    const { dialog } = await renderCase(c);
+    expect(screen.getByRole("alertdialog", { name: c.title })).toBe(dialog);
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    const describedBy = dialog.getAttribute("aria-describedby");
+    const description = describedBy ? document.getElementById(describedBy) : null;
+    expect(description).not.toBeNull();
+    expect(dialog).toContainElement(description);
+    expect((description as HTMLElement).textContent?.length ?? 0).toBeGreaterThan(0);
+    expect(dialog).toHaveAccessibleDescription((description as HTMLElement).textContent ?? "");
+  });
+
+  it("A: a click on the backdrop does nothing, also while an action runs", async () => {
+    const { cloud, dialog, rerender, app, closeSettings } = await renderCase(c);
+    const backdrop = dialog.closest(".fixed.inset-0") as HTMLElement;
+    expect(backdrop).not.toBeNull();
+    expect(backdrop).not.toBe(dialog);
+    fireEvent.click(backdrop);
+    await act(async () => undefined);
+    expect(screen.getByRole("alertdialog")).toBe(dialog);
+    if (c.handler) {
+      mockHolder.cloud = { ...(mockHolder.cloud as UseKeeprCloudSettings), busy: true };
+      rerender(<SettingsLayer app={{ ...app }} />);
+    } else {
+      svc.restoreDeal.mockReturnValue(new Promise(() => undefined));
+      fireEvent.click(within(screen.getByTestId("cloud-removed-deal-1")).getByRole("button", { name: C.restore, hidden: true }));
+    }
+    await waitFor(() => expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: C.cancel })).toBeDisabled());
+    fireEvent.click(screen.getByRole("alertdialog").closest(".fixed.inset-0") as HTMLElement);
+    await act(async () => undefined);
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(closeSettings).not.toHaveBeenCalled();
+    expectNothingCalled(cloud);
   });
 
   it("C2: confirm calls its handler once with the same arguments, and nothing else", async () => {

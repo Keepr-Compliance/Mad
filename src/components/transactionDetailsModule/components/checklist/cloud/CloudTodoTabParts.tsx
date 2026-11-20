@@ -77,7 +77,7 @@ export function CloudRecentlyRemoved({ locked, reloadKey }: { locked: boolean; r
   };
 
   return (
-    <div className="mt-6" data-testid="checklist-recently-removed">
+    <div data-testid="checklist-recently-removed">
       <h4 className="text-lg font-semibold text-gray-900 mb-2">{T.recentlyRemoved}</h4>
       {!list.success ? (
         <p className="text-sm text-gray-600">{T.removedOffline}</p>
