@@ -141,7 +141,11 @@ const CASES: Case[] = [
   {
     name: "Turn off",
     view: ON,
-    open: () => fireEvent.click(screen.getByRole("switch")),
+    open: () => {
+      const toggle = screen.getByRole("switch");
+      toggle.focus();
+      fireEvent.click(toggle);
+    },
     title: C.turnOffConfirmTitle,
     confirmLabel: C.turnOffConfirmButton,
     handler: "turnOff",
@@ -303,6 +307,32 @@ describe.each(CASES)("Settings › Keepr Cloud confirm: $name", (c) => {
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(closeSettings).not.toHaveBeenCalled();
     expectNothingCalled(cloud);
+  });
+});
+
+describe("Settings › Keepr Cloud confirm: focus", () => {
+  const turnOff = CASES.find((x) => x.name === "Turn off") as Case;
+
+  it("Tab and Shift+Tab stay on the confirm's two buttons", async () => {
+    const { dialog } = await renderCase(turnOff);
+    const cancel = within(dialog).getByRole("button", { name: C.cancel });
+    const confirm = within(dialog).getByRole("button", { name: turnOff.confirmLabel });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(confirm);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(cancel);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(confirm);
+  });
+
+  it("closing it puts focus back on the control that opened it", async () => {
+    const { dialog } = await renderCase(turnOff);
+    const cancel = within(dialog).getByRole("button", { name: C.cancel });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    fireEvent.click(cancel);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("switch"));
   });
 });
 
