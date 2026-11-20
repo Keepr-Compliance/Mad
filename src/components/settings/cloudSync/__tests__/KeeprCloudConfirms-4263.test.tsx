@@ -332,7 +332,7 @@ describe("Settings › Keepr Cloud confirm: focus", () => {
     await waitFor(() => expect(document.activeElement).toBe(cancel));
     fireEvent.click(cancel);
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(document.activeElement).toBe(screen.getByRole("switch"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("switch")));
   });
 });
 
