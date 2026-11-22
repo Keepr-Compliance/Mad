@@ -193,9 +193,10 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+    // BACKLOG-4263 hand-test fixes 4: two lines per row (line 1 what, with screen-reader "from … to"; line 2 who · when).
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-      "You, on a computer · 5 min ago · Note: from ai → from desk (not kept)",
-      "Claude · removed",
+      "Note from from ai →  to from desk (not kept)You, on a computer · 5 min ago",
+      "RemovedClaude",
     ]);
     cloud.history.mockResolvedValueOnce({ success: false, error: "offline", rows: [] });
     fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
@@ -328,7 +329,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const li = await screen.findByRole("listitem");
-    expect(li.textContent).toBe(`Claude · Note: ${"y".repeat(200)}… → ${"y".repeat(200)}…`);
+    expect(li.textContent).toBe(`Note from ${"y".repeat(200)}… →  to ${"y".repeat(200)}…Claude`);
   });
 
   it("a History row of a kind this screen does not know shows only who (SR probe)", async () => {

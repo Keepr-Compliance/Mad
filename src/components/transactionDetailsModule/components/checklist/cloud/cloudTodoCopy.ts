@@ -28,6 +28,10 @@ export const CLOUD_TODO_COPY = {
   removed: "removed",
   restored: "restored",
   notKept: "(not kept)",
+  showMore: "Show more",
+  // Read by a screen reader only: "Note from start to from ai".
+  historyFrom: "from",
+  historyTo: "to",
   recentlyRemoved: "Recently removed",
   removedOn: (when: string) => `removed ${when}`,
   restore: "Restore",
