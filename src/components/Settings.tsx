@@ -348,7 +348,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
             {learnAvailable && <LearnSettings onStart={onStartLearn} onSeeScore={onSeeLearnScore} />}
 
             {/* BACKLOG-4243: Keepr Cloud and the AI apps row. Hidden unless main says otherwise. */}
-            <KeeprCloudSettings cloud={cloud} />
+            <KeeprCloudSettings cloud={cloud} listed={visibleTabIds.includes("settings-cloud")} />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}
             <FeatureGate requires="ai_addon">

@@ -64,12 +64,34 @@ function statusLine(view: CloudSyncView): string | null {
 const SOLID_BUTTON =
   "inline-flex h-9 flex-none items-center rounded-md bg-sky-700 px-4 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50";
 
-export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }): React.ReactElement | null {
+/**
+ * @param listed BACKLOG-4263: the session lists the Keepr Cloud tab. While this view is still loading, the
+ *   section's heading and anchor render with a loading line, so the tab and the panel row land on it.
+ */
+export function KeeprCloudSettings({
+  cloud,
+  listed = false,
+}: {
+  cloud: UseKeeprCloudSettings;
+  listed?: boolean;
+}): React.ReactElement | null {
   const [dialog, setDialog] = useState<"notice" | "off" | "forget" | "delete-online" | "delete-installs" | null>(null);
   const view = cloud.view;
   const isOn = !!view && (view.status === "on" || view.status === "error" || view.status === "paused");
   // BACKLOG-4263 PR-6: Settings › Keepr Cloud › Removed (Keepr Cloud users only; the online list only when on and online)
   const removed = useKeeprCloudRemoved(isOn, view?.status === "on" || view?.status === "error");
+  if (!view && listed) {
+    return (
+      <div id="settings-cloud" className="mb-8" data-testid="settings-cloud">
+        <div className="flex flex-col gap-1">
+          <h3 className="m-0 text-xl font-semibold leading-7 text-gray-900">{C.title}</h3>
+          <p className="m-0 text-sm text-gray-500" data-testid="cloud-loading">
+            {C.loading}
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (!view || view.status === "hidden") return null;
 
   const noticeText = view.noticeVersion !== null ? NOTICE_TEXTS[view.noticeVersion] : undefined;

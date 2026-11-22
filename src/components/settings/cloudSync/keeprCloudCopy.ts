@@ -17,6 +17,8 @@ export const NOTICE_TEXTS: Readonly<Record<number, string>> = Object.freeze({
 
 export const KEEPR_CLOUD_COPY = {
   title: "Keepr Cloud",
+  // BACKLOG-4263: the section is listed (session answer) but its own view has not arrived yet.
+  loading: "Loading…",
   switchLabel: "Keepr Cloud",
   offDescription:
     "Save a copy of your deals online so AI apps you connect, like Claude or ChatGPT, can answer questions about them.",
