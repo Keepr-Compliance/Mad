@@ -29,7 +29,6 @@ import { KeeprCloudSettings } from "./settings/cloudSync/KeeprCloudSettings";
 import { useKeeprCloudSettings } from "./settings/cloudSync/useKeeprCloudSettings";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
-import { OfflineNotice } from './common/OfflineNotice';
 import { settingsService } from '../services';
 import logger from '../utils/logger';
 import type { ImportSource } from '../services/settingsService';
@@ -219,9 +218,6 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   return (
     <div className="flex h-full min-h-0 flex-col bg-gray-50" data-testid="settings-page">
         <SettingsPageHeader onBack={onClose} tabs={visibleTabs} activeTabId={activeTabId} onTabClick={handleTabClick} />
-        <div className="flex-none bg-white">
-          <OfflineNotice />
-        </div>
 
         {/* One column of section cards (mock: max 760px). Each direct section
             child gets the kit Card recipe here (rounded-lg border bg-card
