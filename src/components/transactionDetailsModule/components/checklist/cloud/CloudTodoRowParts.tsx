@@ -3,7 +3,7 @@
  * this user (useCloudTodos). Styles are ChecklistItemRow's own: the due chip is its Required pill, the strip,
  * editor and History are its Note block and note editor; action buttons are solid.
  */
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ChecklistItem } from "../../../../../../electron/types/checklist";
 import type { CloudTodoHistoryResult } from "../../../../../../electron/types/ipc/window-api-cloud-todos";
 import cloudTodosService from "../../../../../services/cloudTodosService";
@@ -267,15 +267,23 @@ function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
   const cloud = useCloudTodos();
   const [res, setRes] = useState<CloudTodoHistoryResult | null>(null);
   const [all, setAll] = useState(false);
-  useEffect(() => {
-    let live = true;
-    void cloudTodosService.history(item.id).then((r) => {
-      if (live) setRes(r);
-    });
-    return () => {
-      live = false;
-    };
+  // Read again when a pass changed this deal's todos (`cloud-todos:changed`). Only the latest answer lands; rows
+  // already shown stay while it loads, and a failed or offline re-read leaves them in place. "Show more" stays.
+  const seq = useRef(0);
+  const load = useCallback(async () => {
+    const n = ++seq.current;
+    const r = await cloudTodosService.history(item.id);
+    if (n !== seq.current) return;
+    setRes((prev) => (prev?.success && !r.success ? prev : r));
   }, [item.id]);
+  useEffect(() => {
+    void load();
+    const off = cloudTodosService.onChanged(() => void load());
+    return () => {
+      seq.current++;
+      off();
+    };
+  }, [load]);
   return (
     <div className={BLOCK} data-testid={`checklist-history-${item.id}`}>
       <div className="flex items-center justify-between mb-1">

@@ -247,3 +247,96 @@ describe("History: a plain × on the heading line closes it (C2, addition E)", (
     expect(screen.getByTestId(`checklist-history-${T1.id}`)).toBeInTheDocument();
   });
 });
+
+describe("History reads again when the deal's todos change (C4, addition F)", () => {
+  const fireChanged = async () => {
+    await act(async () => {
+      for (const cb of [...changed]) cb();
+    });
+  };
+  const deferred = () => {
+    let resolve!: (r: CloudTodoHistoryResult) => void;
+    const promise = new Promise<CloudTodoHistoryResult>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+  const A = [NOTE_AI];
+  const B = [TITLE, NOTE_AI];
+
+  it("panel open: the event asks again and the new rows show", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: A });
+    expect(cloud.history).toHaveBeenCalledTimes(1);
+    cloud.history.mockResolvedValueOnce({ success: true, rows: B });
+    await fireChanged();
+    expect(cloud.history).toHaveBeenCalledTimes(2);
+    expect(cloud.history).toHaveBeenLastCalledWith({ itemId: T1.id });
+    await waitFor(() => expect(rowsIn(panel)).toHaveLength(2));
+  });
+
+  it("panel closed: the event asks nothing, and closing removed the panel's listener", async () => {
+    await show();
+    const before = changed.length;
+    const panel = await openHistory({ success: true, rows: A });
+    expect(changed.length).toBe(before + 1);
+    fireEvent.click(within(panel).getByRole("button", { name: "Close history" }));
+    expect(changed.length).toBe(before);
+    await fireChanged();
+    expect(cloud.history).toHaveBeenCalledTimes(1);
+  });
+
+  it("a slower earlier answer does not overwrite a newer one", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: A });
+    const slow = deferred();
+    const fast = deferred();
+    cloud.history.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
+    await fireChanged();
+    await fireChanged();
+    await act(async () => fast.resolve({ success: true, rows: B }));
+    await act(async () => slow.resolve({ success: true, rows: rowsOf(3) }));
+    expect(rowsIn(panel)).toHaveLength(2);
+    expect(within(rowsIn(panel)[0]).getByTestId("checklist-history-what")).toHaveTextContent("Name");
+  });
+
+  it("rows stay on screen while the re-read loads", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: A });
+    const pending = deferred();
+    cloud.history.mockReturnValueOnce(pending.promise);
+    await fireChanged();
+    expect(rowsIn(panel)).toHaveLength(1);
+    await act(async () => pending.resolve({ success: true, rows: B }));
+    expect(rowsIn(panel)).toHaveLength(2);
+  });
+
+  it.each([
+    ["offline", { success: false, error: "offline", rows: [] } as CloudTodoHistoryResult],
+    ["failed", { success: false, error: "unavailable", rows: [] } as CloudTodoHistoryResult],
+  ])("a %s re-read keeps the rows already shown, with no error line", async (_n, answer) => {
+    await show();
+    const panel = await openHistory({ success: true, rows: A });
+    cloud.history.mockResolvedValueOnce(answer);
+    await fireChanged();
+    await waitFor(() => expect(cloud.history).toHaveBeenCalledTimes(2));
+    await act(async () => undefined);
+    expect(rowsIn(panel)).toHaveLength(1);
+    expect(panel).not.toHaveTextContent("History needs an internet connection.");
+    expect(panel).not.toHaveTextContent("History could not be loaded.");
+  });
+
+  it("Show more stays expanded after a re-read", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: rowsOf(12) });
+    fireEvent.click(more()!);
+    cloud.history.mockResolvedValueOnce({ success: true, rows: rowsOf(8) });
+    await fireChanged();
+    await waitFor(() => expect(rowsIn(panel)).toHaveLength(8));
+    expect(more()).toBeNull();
+  });
+
+  it("offline at first open still shows the offline line", async () => {
+    await show();
+    const panel = await openHistory({ success: false, error: "offline", rows: [] });
+    expect(panel).toHaveTextContent("History needs an internet connection.");
+  });
+});
