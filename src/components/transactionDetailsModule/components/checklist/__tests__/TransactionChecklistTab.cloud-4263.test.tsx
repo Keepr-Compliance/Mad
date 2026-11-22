@@ -379,6 +379,48 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(await screen.findByTestId("checklist-removed-c-own")).toHaveTextContent("Order the appraisal");
   });
 
+  describe("the event while the user is editing (it now follows his own edits about once a minute)", () => {
+    const fireAsOverIpc = async () => {
+      checklists().get.mockImplementation(async () => ({ success: true, checklists: fixtureChecklistsWithMyItems() }));
+      cloud.getForDeal.mockImplementation(async () => ({ ...ON, notices: [], markers: {} }));
+      const gets = checklists().get.mock.calls.length;
+      await act(async () => changed!());
+      await waitFor(() => expect(checklists().get.mock.calls.length).toBeGreaterThan(gets));
+      await act(async () => undefined);
+    };
+
+    it("a note being typed keeps its text", async () => {
+      await show(ON);
+      fireEvent.click(screen.queryByTestId(`checklist-add-note-${T_ITEM.id}`) ?? screen.getByTestId(`checklist-edit-note-${T_ITEM.id}`));
+      const box = within(screen.getByTestId(`checklist-note-editor-${T_ITEM.id}`)).getByRole("textbox");
+      fireEvent.change(box, { target: { value: "half typed" } });
+      await fireAsOverIpc();
+      expect(within(screen.getByTestId(`checklist-note-editor-${T_ITEM.id}`)).getByRole("textbox")).toHaveValue("half typed");
+    });
+
+    it("a My item name being typed keeps its text", async () => {
+      await show(ON);
+      fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
+      fireEvent.click(screen.getByTestId(`my-item-rename-${M_ITEM.id}`));
+      fireEvent.change(screen.getByTestId(`my-item-rename-input-${M_ITEM.id}`), { target: { value: "new na" } });
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`my-item-rename-input-${M_ITEM.id}`)).toHaveValue("new na");
+      expect(checklists().renameMyItem).not.toHaveBeenCalled();
+    });
+
+    it("an open row menu stays open (My items and template rows)", async () => {
+      await show(ON);
+      fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
+      expect(screen.getByTestId(`my-item-menu-${M_ITEM.id}`)).toBeInTheDocument();
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`my-item-menu-${M_ITEM.id}`)).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+      expect(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`)).toBeInTheDocument();
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`)).toBeInTheDocument();
+    });
+  });
+
   it("cloud-todos:changed re-reads the checklists and the Keepr Cloud parts", async () => {
     await show(ON);
     const gets = checklists().get.mock.calls.length;
