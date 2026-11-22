@@ -639,6 +639,23 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       e.server.override = null;
     });
 
+    it("after-pull send on a deal locked here: the held op is answered once, one event, then the passes stay silent", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai during review");
+      const base = e.todosChanged.count;
+      const r = await e.service.kick();
+      expect(r!.pull!.held).toBeGreaterThan(0);
+      expect(r!.todosAfterPull).toMatchObject({ confirmed: 1 });
+      expect(e.todosChanged.count).toBe(base + 1);
+      const pushes = calls(e, "cloud_todo_push");
+      await e.service.kick();
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base + 1);
+      expect(outbox(db)).toEqual([]);
+      expect(calls(e, "cloud_todo_push")).toBe(pushes);
+    });
+
     describe("sweep over the pass summary (shapes taken from a real pass, counts set per case)", () => {
       const cases: Array<[string, { pullWrites: number; first?: number; afterPull?: number; outcome?: "done" | "stopped" }, number]> = [
         ["first send only", { pullWrites: 0, first: 1 }, 1],
