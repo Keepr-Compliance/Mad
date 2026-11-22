@@ -193,9 +193,10 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+    // BACKLOG-4263 hand-test fixes 4: two lines per row (line 1 what, with screen-reader "from … to"; line 2 who · when).
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-      "You, on a computer · 5 min ago · Note: from ai → from desk (not kept)",
-      "Claude · removed",
+      "Note from from ai →  to from desk (not kept)You, on a computer · 5 min ago",
+      "RemovedClaude",
     ]);
     cloud.history.mockResolvedValueOnce({ success: false, error: "offline", rows: [] });
     fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
@@ -280,7 +281,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(await screen.findByText("History needs an internet connection.")).toBeInTheDocument();
   });
 
-  it("History has one Dismiss that closes it; the due-date editor still opens and closes", async () => {
+  it("History has one close control, a plain ×, that closes it; the due-date editor still opens and closes", async () => {
     cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "removed", part: null, oldText: null, newText: null, kept: true }] });
     await show(ON);
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
@@ -288,8 +289,8 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await within(list).findByRole("listitem");
     const buttons = within(list).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Dismiss"]);
-    expect(buttons[0].className).toContain("bg-white border border-gray-300");
+    // BACKLOG-4263 hand-test fixes 4: the bottom Dismiss became a × on the heading line (the founder's ask).
+    expect(buttons.map((b) => [b.textContent, b.getAttribute("aria-label")])).toEqual([["×", "Close history"]]);
     fireEvent.click(buttons[0]);
     expect(screen.queryByTestId(`checklist-history-${T_ITEM.id}`)).toBeNull();
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
@@ -328,7 +329,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const li = await screen.findByRole("listitem");
-    expect(li.textContent).toBe(`Claude · Note: ${"y".repeat(200)}… → ${"y".repeat(200)}…`);
+    expect(li.textContent).toBe(`Note from ${"y".repeat(200)}… →  to ${"y".repeat(200)}…Claude`);
   });
 
   it("a History row of a kind this screen does not know shows only who (SR probe)", async () => {

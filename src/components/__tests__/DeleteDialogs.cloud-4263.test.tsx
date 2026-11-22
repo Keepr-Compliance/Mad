@@ -15,14 +15,14 @@ jest.mock("@/services/cloudSyncService", () => ({ __esModule: true, default: { l
 const svc = require("@/services/cloudSyncService").default as { localState: jest.Mock };
 
 const ONE =
-  "It is removed from this computer and from Keepr Cloud. You can restore it, with its people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that it is deleted for good.";
+  "It is removed from this computer and from Keepr Cloud. You can restore it for 30 days from Settings › Keepr Cloud. After that it is deleted for good.";
 const MANY =
-  "They are removed from this computer and from Keepr Cloud. You can restore them, with their people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that they are deleted for good.";
+  "They are removed from this computer and from Keepr Cloud. You can restore them for 30 days from Settings › Keepr Cloud. After that they are deleted for good.";
 
 describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
   it("the texts are the accepted ones, word for word", () => {
     expect(`${CLOUD_DELETE_COPY.oneTitle} ${CLOUD_DELETE_COPY.one}`).toBe(
-      "Delete this deal? It is removed from this computer and from Keepr Cloud. You can restore it, with its people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
+      "Delete this deal? It is removed from this computer and from Keepr Cloud. You can restore it for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
     );
     expect(CLOUD_DELETE_COPY.many).toBe(MANY);
   });
@@ -34,7 +34,7 @@ describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
     svc.localState.mockResolvedValue(state);
     const onDelete = jest.fn();
     render(<DeleteConfirmModal propertyAddress="12 Oak Street" onCancel={jest.fn()} onDelete={onDelete} />);
-    expect(await screen.findByTestId("delete-transaction-cloud-text")).toHaveTextContent(ONE);
+    expect((await screen.findByTestId("delete-transaction-cloud-text")).textContent).toBe(ONE);
     expect(screen.getByText("Delete this deal?")).toBeInTheDocument();
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
     fireEvent.click(screen.getByTestId("delete-transaction-confirm"));
@@ -62,11 +62,13 @@ describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
   it("bulk, Keepr Cloud on: several deals get the plural text, one deal the single text", async () => {
     svc.localState.mockResolvedValue({ on: true, online: false });
     const { rerender } = render(<BulkDeleteConfirmModal selectedCount={3} onConfirm={jest.fn()} onCancel={jest.fn()} />);
-    expect(await screen.findByTestId("bulk-delete-cloud-text")).toHaveTextContent(MANY);
+    expect((await screen.findByTestId("bulk-delete-cloud-text")).textContent).toBe(MANY);
     expect(screen.getByText("Delete 3 deals?")).toBeInTheDocument();
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
+    rerender(<BulkDeleteConfirmModal selectedCount={2} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("bulk-delete-cloud-text").textContent).toBe(MANY);
     rerender(<BulkDeleteConfirmModal selectedCount={1} onConfirm={jest.fn()} onCancel={jest.fn()} />);
-    expect(screen.getByTestId("bulk-delete-cloud-text")).toHaveTextContent(ONE);
+    expect(screen.getByTestId("bulk-delete-cloud-text").textContent).toBe(ONE);
   });
 
   it("bulk: the Delete button waits for main's answer", async () => {

@@ -3,7 +3,7 @@
  * this user (useCloudTodos). Styles are ChecklistItemRow's own: the due chip is its Required pill, the strip,
  * editor and History are its Note block and note editor; action buttons are solid.
  */
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ChecklistItem } from "../../../../../../electron/types/checklist";
 import type { CloudTodoHistoryResult } from "../../../../../../electron/types/ipc/window-api-cloud-todos";
 import cloudTodosService from "../../../../../services/cloudTodosService";
@@ -225,50 +225,104 @@ function DueEditor({ item }: { item: ChecklistItem }): React.ReactElement | null
   );
 }
 
-function historyLine(r: CloudTodoHistoryResult["rows"][number]): string {
-  const when = ago(r.at);
-  const what =
-    r.what === "changed"
-      ? `${T.partName[r.part ?? ""] ?? ""}: ${cut(r.oldText)} → ${cut(r.newText)}`
-      : r.what === "added" || r.what === "removed" || r.what === "restored"
-        ? T[r.what]
-        : "";
-  return [r.who, when, what].filter((x) => x.length > 0).join(" · ") + (r.kept ? "" : ` ${T.notKept}`);
+/** History shows this many rows until "Show more". */
+export const HISTORY_SHOWN = 5;
+
+const capitalised = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+/**
+ * One history row on two lines: what changed (part name, then the old value struck through, →, the new value; or
+ * Added / Removed / Restored), then who · when in small grey text. A screen reader hears "from X to Y".
+ */
+function HistoryRow({ r }: { r: CloudTodoHistoryResult["rows"][number] }): React.ReactElement {
+  const who = [r.who, ago(r.at)].filter((x) => x.length > 0).join(" · ");
+  const word = r.what === "added" || r.what === "removed" || r.what === "restored" ? capitalised(T[r.what]) : "";
+  return (
+    <li className="py-1.5 border-t border-gray-200 first:border-t-0 first:pt-0 break-words" data-testid="checklist-history-row">
+      <div className="text-sm text-gray-900" data-testid="checklist-history-what">
+        {r.what === "changed" ? (
+          <>
+            <span className="font-semibold">{T.partName[r.part ?? ""] ?? ""}</span>{" "}
+            <span className="sr-only">{T.historyFrom} </span>
+            <s className="text-gray-500">{cut(r.oldText)}</s>
+            <span aria-hidden="true"> → </span>
+            <span className="sr-only"> {T.historyTo} </span>
+            {cut(r.newText)}
+          </>
+        ) : (
+          <span className="font-semibold">{word}</span>
+        )}
+        {!r.kept && ` ${T.notKept}`}
+      </div>
+      {who && (
+        <div className="text-xs text-gray-500 mt-0.5" data-testid="checklist-history-who">
+          {who}
+        </div>
+      )}
+    </li>
+  );
 }
 
 function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
   const cloud = useCloudTodos();
   const [res, setRes] = useState<CloudTodoHistoryResult | null>(null);
-  useEffect(() => {
-    let live = true;
-    void cloudTodosService.history(item.id).then((r) => {
-      if (live) setRes(r);
-    });
-    return () => {
-      live = false;
-    };
+  const [all, setAll] = useState(false);
+  // Read again when a pass changed this deal's todos (`cloud-todos:changed`). Only the latest answer lands; rows
+  // already shown stay while it loads, and a failed or offline re-read leaves them in place. "Show more" stays.
+  const seq = useRef(0);
+  const load = useCallback(async () => {
+    const n = ++seq.current;
+    const r = await cloudTodosService.history(item.id);
+    if (n !== seq.current) return;
+    setRes((prev) => (prev?.success && !r.success ? prev : r));
   }, [item.id]);
+  useEffect(() => {
+    void load();
+    const off = cloudTodosService.onChanged(() => void load());
+    return () => {
+      seq.current++;
+      off();
+    };
+  }, [load]);
   return (
     <div className={BLOCK} data-testid={`checklist-history-${item.id}`}>
-      <span className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">{T.historyMenu}</span>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">{T.historyMenu}</span>
+        {/* A plain × (the founder's ask): no border or fill at rest; a focus ring for the keyboard; 24×24 hit area. */}
+        <button
+          type="button"
+          aria-label={T.closeHistory}
+          className="inline-flex h-6 w-6 items-center justify-center rounded text-lg leading-none text-gray-500 hover:text-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          onClick={() => cloud?.setPanel(null)}
+          data-testid={`checklist-history-close-${item.id}`}
+        >
+          ×
+        </button>
+      </div>
       {!res ? null : !res.success ? (
         <p className="text-sm text-gray-700">{res.error === "offline" ? T.historyOffline : T.historyFailed}</p>
       ) : res.rows.length === 0 ? (
         <p className="text-sm text-gray-700">{T.historyEmpty}</p>
       ) : (
-        <ul className="flex flex-col gap-1">
-          {res.rows.map((r, i) => (
-            <li key={i} className="text-sm text-gray-700 break-words">
-              {historyLine(r)}
-            </li>
-          ))}
-        </ul>
+        <>
+          {/* Newest first, as main returns them (cloud_todo_history orders by change_seq DESC; main keeps 20). */}
+          <ul className="flex flex-col">
+            {(all ? res.rows : res.rows.slice(0, HISTORY_SHOWN)).map((r, i) => (
+              <HistoryRow key={i} r={r} />
+            ))}
+          </ul>
+          {!all && res.rows.length > HISTORY_SHOWN && (
+            <button
+              type="button"
+              className="mt-2 text-sm font-medium text-blue-600 hover:text-blue-800"
+              onClick={() => setAll(true)}
+              data-testid={`checklist-history-more-${item.id}`}
+            >
+              {T.showMore}
+            </button>
+          )}
+        </>
       )}
-      <div className="flex items-center justify-end gap-3 mt-2">
-        <button type="button" className={SOLID_SECONDARY} onClick={() => cloud?.setPanel(null)} data-testid={`checklist-history-dismiss-${item.id}`}>
-          {T.dismiss}
-        </button>
-      </div>
     </div>
   );
 }

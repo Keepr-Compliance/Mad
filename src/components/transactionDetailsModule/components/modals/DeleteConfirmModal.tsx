@@ -12,9 +12,9 @@ import { useKeeprCloudOnHere } from "../../../../hooks/useKeeprCloudOnHere";
  */
 export const CLOUD_DELETE_COPY = {
   oneTitle: "Delete this deal?",
-  one: "It is removed from this computer and from Keepr Cloud. You can restore it, with its people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
+  one: "It is removed from this computer and from Keepr Cloud. You can restore it for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
   manyTitle: (n: number) => `Delete ${n} deals?`,
-  many: "They are removed from this computer and from Keepr Cloud. You can restore them, with their people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that they are deleted for good.",
+  many: "They are removed from this computer and from Keepr Cloud. You can restore them for 30 days from Settings › Keepr Cloud. After that they are deleted for good.",
   /** BACKLOG-4263: the confirm buttons say "deal" when the title does. */
   oneButton: "Delete deal",
   manyButton: (n: number) => `Delete ${n} ${n === 1 ? "deal" : "deals"}`,
