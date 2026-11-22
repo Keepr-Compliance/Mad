@@ -36,8 +36,9 @@ export interface VisibleSettingsTabs {
 }
 
 /**
- * @param cloudVisible BACKLOG-4243: main reports the Keepr Cloud section visible
- *   (only the Settings page passes it; the account side panel lists no Cloud row).
+ * @param cloudVisible BACKLOG-4243: main reports the Keepr Cloud section visible.
+ *   The Settings page and the account side panel both pass it (BACKLOG-4263), so the
+ *   panel lists a Keepr Cloud row exactly when the tab strip shows the tab.
  */
 export function useVisibleSettingsTabs(cloudVisible: boolean = false): VisibleSettingsTabs {
   const session = useSessionSettingsReads();
