@@ -70,6 +70,14 @@
  *   reports each view it reads (on open and after every action).
  * - **A failed read keeps the last answer for the same user.** With no earlier
  *   answer it settles as hidden, so the panel is never left without rows.
+ * - **The last answer is remembered per user on this computer**
+ *   (`keepr.keeprCloudVisible.v1:<userId>`, "1"/"0"), so the first open after a
+ *   restart has its rows on the first frame while main is asked again. Not
+ *   cleared on sign-out: the key carries the user id, and only the signed-in
+ *   user's key is read.
+ * - **With nothing remembered, rows wait at most `CLOUD_FIRST_ANSWER_BOUND_MS`.**
+ *   Then they render without Keepr Cloud, and main's answer corrects them when
+ *   it lands.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -88,6 +96,27 @@ export type SessionStrictFeatureKey = typeof SESSION_STRICT_FEATURE_KEY;
 export const STRICT_ANSWER_TTL_MS = 5 * 60 * 1000;
 /** The LicenseContext focus throttle. */
 export const STRICT_FOCUS_THROTTLE_MS = 60 * 1000;
+/** BACKLOG-4263: longest the rows wait for the first Keepr Cloud answer when none is remembered. */
+export const CLOUD_FIRST_ANSWER_BOUND_MS = 1500;
+/** BACKLOG-4263: the remembered Keepr Cloud answer, one key per user id. */
+export const CLOUD_VISIBLE_STORAGE_PREFIX = "keepr.keeprCloudVisible.v1:";
+
+function readRememberedCloud(userId: string): boolean | null {
+  try {
+    const v = window.localStorage.getItem(CLOUD_VISIBLE_STORAGE_PREFIX + userId);
+    return v === "1" ? true : v === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberCloud(userId: string, visible: boolean): void {
+  try {
+    window.localStorage.setItem(CLOUD_VISIBLE_STORAGE_PREFIX + userId, visible ? "1" : "0");
+  } catch {
+    /* storage unavailable: the next start waits for main (bounded) */
+  }
+}
 
 interface StoredAnswer<T> {
   /** The user the question was sent for. */
@@ -276,8 +305,29 @@ export function StrictFeatureProvider({
   // BACKLOG-4263: asked once the local database is open, for the signed-in user.
   const [cloudGate, setCloudGate] = useState(false);
   const cloudSlot = useSessionSlot<boolean>(cloudGate ? userId : null, organizationId, askCloud, false, CLOUD_SLOT);
-  // Before the database is open main answers "hidden" anyway: that is the answer here, and nothing is asked.
-  const cloudValue = cloudGate ? cloudSlot.value : userId ? false : null;
+  // The remembered answer for this user (derived, never seeded through `report`, which would make the real
+  // answer in flight look stale and drop it).
+  const remembered = useMemo(() => (userId ? readRememberedCloud(userId) : null), [userId]);
+  const cloudAnswer = cloudSlot.value;
+  useEffect(() => {
+    // Non-null only for the current, gated user (the slot's read-time key check).
+    if (cloudGate && userId && cloudAnswer !== null) rememberCloud(userId, cloudAnswer);
+  }, [cloudGate, userId, cloudAnswer]);
+  // Nothing remembered: wait at most the bound for main's first answer, then render without the row.
+  const [timedOutFor, setTimedOutFor] = useState<string | null>(null);
+  const waiting = cloudGate && !!userId && cloudAnswer === null && remembered === null;
+  useEffect(() => {
+    if (!waiting || !userId) return;
+    const timer = setTimeout(() => setTimedOutFor(userId), CLOUD_FIRST_ANSWER_BOUND_MS);
+    return () => clearTimeout(timer);
+  }, [waiting, userId]);
+  const timedOut = !!userId && timedOutFor === userId;
+  // Before the database is open main answers "hidden" anyway: nothing is asked.
+  const cloudValue = cloudGate
+    ? (cloudAnswer ?? remembered ?? (timedOut ? false : null))
+    : userId
+      ? (remembered ?? false)
+      : null;
   const cloud = useMemo(() => ({ ...cloudSlot, value: cloudValue }), [cloudSlot, cloudValue]);
   const value = useMemo<StrictFeatureContextValue>(
     () => ({ checklists, learn, plan, cloud, setCloudGate }),

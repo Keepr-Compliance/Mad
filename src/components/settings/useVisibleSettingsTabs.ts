@@ -23,13 +23,17 @@
  *
  * BACKLOG-4263: Keepr Cloud visibility is the third read, held the same way
  * (session slot under a provider, one `getView` per mount outside one). The
- * list stays null until it has settled too, so the Keepr Cloud row is never
- * inserted after the others.
+ * list stays null until it has settled too, or until the remembered answer or
+ * the first-answer bound (`CLOUD_FIRST_ANSWER_BOUND_MS`) stands in for it.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import type { StrictFeatureStateOrPending } from "../../../electron/types/featureGate";
-import { useSessionSettingsReads, type SessionPlanFeatures } from "@/contexts/StrictFeatureContext";
+import {
+  CLOUD_FIRST_ANSWER_BOUND_MS,
+  useSessionSettingsReads,
+  type SessionPlanFeatures,
+} from "@/contexts/StrictFeatureContext";
 import { isFeatureAllowed } from "@/hooks/featureAccess";
 import cloudSyncService, { keeprCloudSectionVisible } from "@/services/cloudSyncService";
 import { visibleSettingsTabs, type SettingsTab } from "./settingsTabs";
@@ -77,7 +81,12 @@ export function useVisibleSettingsTabs(options: { reaskCloud?: boolean } = {}): 
     void cloudSyncService.getView().then((view) => {
       if (!cancelled) setLocalCloud(keeprCloudSectionVisible(view));
     });
+    // Same bound as the session slot: past it the rows render without Keepr Cloud.
+    const bound = setTimeout(() => {
+      if (!cancelled) setLocalCloud((c) => c ?? false);
+    }, CLOUD_FIRST_ANSWER_BOUND_MS);
     return () => {
+      clearTimeout(bound);
       cancelled = true;
     };
   }, [hasProvider]);
