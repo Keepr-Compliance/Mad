@@ -294,6 +294,24 @@ describe("focus (addition B)", () => {
     expect(tMenu(T1.id)).toBeNull();
   });
 
+  it("My items: pressing the disabled Move up on the first row keeps the menu open", async () => {
+    const user = userEvent.setup();
+    await show();
+    await user.click(myToggle(M1.id));
+    const up = screen.getByTestId(`my-item-up-${M1.id}`);
+    expect(up).toBeDisabled();
+    await user.pointer({ keys: "[MouseLeft]", target: up });
+    expect(myMenu(M1.id)).toBeInTheDocument();
+  });
+
+  it("My items: pressing the menu's own padding keeps the menu open", async () => {
+    const user = userEvent.setup();
+    await show();
+    await user.click(myToggle(M1.id));
+    await user.click(myMenu(M1.id)!);
+    expect(myMenu(M1.id)).toBeInTheDocument();
+  });
+
   it("choosing Rename leaves the rename input open and focused, the draft intact, nothing saved", async () => {
     const user = userEvent.setup();
     await show();
