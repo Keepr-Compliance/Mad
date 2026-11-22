@@ -281,7 +281,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(await screen.findByText("History needs an internet connection.")).toBeInTheDocument();
   });
 
-  it("History has one Dismiss that closes it; the due-date editor still opens and closes", async () => {
+  it("History has one close control, a plain ×, that closes it; the due-date editor still opens and closes", async () => {
     cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "removed", part: null, oldText: null, newText: null, kept: true }] });
     await show(ON);
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
@@ -289,8 +289,8 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await within(list).findByRole("listitem");
     const buttons = within(list).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Dismiss"]);
-    expect(buttons[0].className).toContain("bg-white border border-gray-300");
+    // BACKLOG-4263 hand-test fixes 4: the bottom Dismiss became a × on the heading line (the founder's ask).
+    expect(buttons.map((b) => [b.textContent, b.getAttribute("aria-label")])).toEqual([["×", "Close history"]]);
     fireEvent.click(buttons[0]);
     expect(screen.queryByTestId(`checklist-history-${T_ITEM.id}`)).toBeNull();
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));

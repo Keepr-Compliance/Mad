@@ -29,6 +29,7 @@ export const CLOUD_TODO_COPY = {
   restored: "restored",
   notKept: "(not kept)",
   showMore: "Show more",
+  closeHistory: "Close history",
   // Read by a screen reader only: "Note from start to from ai".
   historyFrom: "from",
   historyTo: "to",

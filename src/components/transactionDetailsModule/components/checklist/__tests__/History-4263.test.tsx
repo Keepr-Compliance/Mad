@@ -201,3 +201,49 @@ describe("History: each row on two lines (C3)", () => {
     expect(spoken(line1(rowsIn(panel)[0]))).toBe("Note from from ai to from desk (not kept)");
   });
 });
+
+describe("History: a plain × on the heading line closes it (C2, addition E)", () => {
+  const close = (panel: HTMLElement) => within(panel).getByRole("button", { name: "Close history" });
+
+  it("× is a button named Close history, on the heading's line, before the rows; it closes the panel", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: rowsOf(6) });
+    const x = close(panel);
+    expect(x.tagName).toBe("BUTTON");
+    expect(x).toHaveTextContent(/^×$/);
+    expect(x.parentElement).toHaveTextContent(/^History×$/);
+    // tab order: the × first, then the rows' Show more
+    const tabbable = within(panel).getAllByRole("button");
+    expect(tabbable.map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Close history", "Show more"]);
+    expect(x.compareDocumentPosition(within(panel).getByRole("list")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).queryByText("Dismiss")).toBeNull();
+    fireEvent.click(x);
+    expect(screen.queryByTestId(`checklist-history-${T1.id}`)).toBeNull();
+  });
+
+  it("× has no button shape at rest, a 24×24 hit area and a keyboard focus ring (classes: jsdom does not measure pixels)", async () => {
+    await show();
+    const x = close(await openHistory({ success: true, rows: [ADDED] }));
+    expect(x).toHaveClass("h-6", "w-6", "focus-visible:ring-2");
+    expect(x.className).not.toMatch(/(^|\s)(border|bg-)/);
+  });
+
+  it.each([
+    ["offline", { success: false, error: "offline", rows: [] } as CloudTodoHistoryResult, "History needs an internet connection."],
+    ["failed", { success: false, error: "unavailable", rows: [] } as CloudTodoHistoryResult, "History could not be loaded. Try again later."],
+  ])("%s: the line and the × are both there, and × closes", async (_n, answer, text) => {
+    await show();
+    const panel = await openHistory(answer);
+    expect(panel).toHaveTextContent(text);
+    fireEvent.click(close(panel));
+    expect(screen.queryByTestId(`checklist-history-${T1.id}`)).toBeNull();
+  });
+
+  it("Escape does not close it (unchanged: the panel has no key handler)", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: [ADDED] });
+    close(panel).focus();
+    fireEvent.keyDown(close(panel), { key: "Escape" });
+    expect(screen.getByTestId(`checklist-history-${T1.id}`)).toBeInTheDocument();
+  });
+});

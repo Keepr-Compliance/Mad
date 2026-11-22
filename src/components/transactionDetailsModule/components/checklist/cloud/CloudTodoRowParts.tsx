@@ -278,7 +278,19 @@ function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
   }, [item.id]);
   return (
     <div className={BLOCK} data-testid={`checklist-history-${item.id}`}>
-      <span className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">{T.historyMenu}</span>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">{T.historyMenu}</span>
+        {/* A plain × (the founder's ask): no border or fill at rest; a focus ring for the keyboard; 24×24 hit area. */}
+        <button
+          type="button"
+          aria-label={T.closeHistory}
+          className="inline-flex h-6 w-6 items-center justify-center rounded text-lg leading-none text-gray-500 hover:text-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          onClick={() => cloud?.setPanel(null)}
+          data-testid={`checklist-history-close-${item.id}`}
+        >
+          ×
+        </button>
+      </div>
       {!res ? null : !res.success ? (
         <p className="text-sm text-gray-700">{res.error === "offline" ? T.historyOffline : T.historyFailed}</p>
       ) : res.rows.length === 0 ? (
@@ -303,11 +315,6 @@ function HistoryList({ item }: { item: ChecklistItem }): React.ReactElement {
           )}
         </>
       )}
-      <div className="flex items-center justify-end gap-3 mt-2">
-        <button type="button" className={SOLID_SECONDARY} onClick={() => cloud?.setPanel(null)} data-testid={`checklist-history-dismiss-${item.id}`}>
-          {T.dismiss}
-        </button>
-      </div>
     </div>
   );
 }
