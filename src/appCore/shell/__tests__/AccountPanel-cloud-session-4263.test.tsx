@@ -305,7 +305,8 @@ describe("C4 sign-out and account switch clear the answer", () => {
     expect(frames.every((f) => f.length === 0)).toBe(true);
   });
 
-  it("A visible, switch to B whose read fails: B settles with no Keepr Cloud row", async () => {
+  it("A visible, switch to B whose read fails: nothing from A; B stores nothing and settles at the bound with no Keepr Cloud row", async () => {
+    jest.useFakeTimers();
     getView.mockResolvedValue(ON);
     render(<Root initial="a" />);
     await flush();
@@ -320,7 +321,12 @@ describe("C4 sign-out and account switch clear the answer", () => {
     await flush();
     openPanel();
     await flush();
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS);
+    });
     expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+    expect(stored("b")).toBeNull();
   });
 });
 
@@ -379,6 +385,29 @@ describe("C8 a restart uses the remembered answer on the first frame", () => {
     await act(async () => held.forEach((r) => r(HIDDEN)));
     await flush();
     expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+  });
+});
+
+describe("C8d a failed first read keeps the remembered answer", () => {
+  it.each([
+    ["resolves null", () => Promise.resolve(null)],
+    ["rejects", () => Promise.reject(new Error("unreachable"))],
+  ])("remembered visible, the first read %s: the row stays, the stored value stays 1, no repeated reads", async (_n, failed) => {
+    remember("a", "1");
+    getView.mockImplementation(failed);
+    render(<Root initial="a" />);
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1);
+    expect(stored("a")).toBe("1");
+    openPanel();
+    await flush();
+    await flush();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    expect(stored("a")).toBe("1");
+    const reads = getView.mock.calls.length;
+    await flush();
+    await flush();
+    expect(getView.mock.calls.length).toBe(reads);
   });
 });
 
