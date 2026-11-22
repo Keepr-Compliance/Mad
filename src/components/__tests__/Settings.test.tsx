@@ -1840,6 +1840,33 @@ describe("Settings", () => {
       // BACKLOG-3964: the "Done" footer is gone; Back closes the page and stays enabled offline.
       expect(screen.getByTestId("settings-close")).not.toBeDisabled();
     });
+
+    // BACKLOG-4263: the shell's offline bar is the only one; the Settings page has no notice of its own.
+    it("BACKLOG-4263: offline, the Settings page shows no offline notice of its own", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await waitFor(() => expect(screen.getByRole("button", { name: /check for updates/i })).toBeDisabled());
+      const page = screen.getByTestId("settings-page");
+      expect(within(page).queryAllByText("You're offline")).toHaveLength(0);
+      expect(within(page).queryAllByText(/Some features may be limited/)).toHaveLength(0);
+    });
+
+    it("BACKLOG-4263: online, the Settings page shows no offline or back-online notice", async () => {
+      mockUseNetwork.mockReturnValue({
+        isOnline: true,
+        isChecking: false,
+        lastOnlineAt: new Date(),
+        lastOfflineAt: null,
+        connectionError: null,
+        checkConnection: jest.fn().mockResolvedValue(true),
+        clearError: jest.fn(),
+        setConnectionError: jest.fn(),
+      });
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await waitFor(() => expect(screen.getByRole("button", { name: /check for updates/i })).not.toBeDisabled());
+      const page = screen.getByTestId("settings-page");
+      expect(within(page).queryAllByText("You're offline")).toHaveLength(0);
+      expect(within(page).queryAllByText("You're back online!")).toHaveLength(0);
+    });
   });
 
   /**

@@ -500,9 +500,13 @@ export function BulkDeleteConfirmModal({
                 Deleting...
               </>
             ) : (
+              cloudOn ? (
+                <>{CLOUD_DELETE_COPY.manyButton(selectedCount)}</>
+              ) : (
               <>
                 Delete {selectedCount} Transaction{selectedCount > 1 ? "s" : ""}
               </>
+              )
             )}
           </button>
         </div>
