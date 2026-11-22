@@ -407,6 +407,39 @@ describe("C9 nothing remembered: the rows wait at most the bound", () => {
   });
 });
 
+describe("C9b the bound belongs to the user it ran for", () => {
+  it("A times out; B signs in in the same run with nothing remembered and its read pending: B still waits the bound", async () => {
+    jest.useFakeTimers();
+    getView.mockImplementation(never);
+    render(<Root initial="a" />);
+    await flush();
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS);
+    });
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD); // A timed out
+    closePanel();
+    act(() => setWho(null));
+    await flush();
+    act(() => setWho("b"));
+    await flush();
+    expect(stored("b")).toBeNull();
+    frames = [];
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS - 1);
+    });
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+  });
+});
+
 describe("C10 remembered answers never cross user ids", () => {
   it("visible remembered for A only: B signs in with its read pending and gets no Keepr Cloud row", async () => {
     remember("a", "1");
