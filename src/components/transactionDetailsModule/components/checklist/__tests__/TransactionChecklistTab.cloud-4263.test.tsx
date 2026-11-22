@@ -380,12 +380,19 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
   });
 
   describe("the event while the user is editing (it now follows his own edits about once a minute)", () => {
+    // As over IPC: a new object per answer, and the checklist answer arrives in a later task (held, then released),
+    // so a frame between the event and the answer is rendered.
     const fireAsOverIpc = async () => {
-      checklists().get.mockImplementation(async () => ({ success: true, checklists: fixtureChecklistsWithMyItems() }));
+      let release: () => void = () => undefined;
+      checklists().get.mockImplementation(
+        () => new Promise((r) => (release = () => r({ success: true, checklists: fixtureChecklistsWithMyItems() }))),
+      );
       cloud.getForDeal.mockImplementation(async () => ({ ...ON, notices: [], markers: {} }));
       const gets = checklists().get.mock.calls.length;
       await act(async () => changed!());
-      await waitFor(() => expect(checklists().get.mock.calls.length).toBeGreaterThan(gets));
+      await act(async () => undefined);
+      expect(checklists().get.mock.calls.length).toBe(gets + 1);
+      await act(async () => release());
       await act(async () => undefined);
     };
 
