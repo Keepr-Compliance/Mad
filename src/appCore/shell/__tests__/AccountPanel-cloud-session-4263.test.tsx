@@ -19,7 +19,13 @@ import { AppShell } from "../../AppShell";
 import { useModalFlow } from "../../state/flows/useModalFlow";
 import type { AppStateMachine } from "../../state/types";
 import { visibleSettingsTabs } from "../../../components/settings/settingsTabs";
-import { StrictFeatureProvider } from "../../../contexts/StrictFeatureContext";
+import {
+  CLOUD_FIRST_ANSWER_BOUND_MS,
+  CLOUD_VISIBLE_STORAGE_PREFIX,
+  STRICT_ANSWER_TTL_MS,
+  STRICT_FOCUS_THROTTLE_MS,
+  StrictFeatureProvider,
+} from "../../../contexts/StrictFeatureContext";
 
 jest.mock("../../../utils/platform", () => ({
   ...jest.requireActual("../../../utils/platform"),
@@ -42,7 +48,16 @@ jest.mock("../../hooks/useEmailSettingsCallbacks", () => ({
     handleEmailDisconnectedFromSettings: jest.fn(),
   }),
 }));
-jest.mock("../../../components/Settings", () => ({ __esModule: true, default: () => <div data-testid="settings-page" /> }));
+// Settings reports the view the test sets (BACKLOG-4263 W4), through the real hook.
+let mockReportView: unknown = null;
+jest.mock("../../../components/Settings", () => {
+  const { useReportKeeprCloudView } = jest.requireActual("../../../contexts/StrictFeatureContext");
+  function StubSettings() {
+    useReportKeeprCloudView(mockReportView);
+    return <div data-testid="settings-page" />;
+  }
+  return { __esModule: true, default: StubSettings };
+});
 
 const USERS = {
   // pii-allow-uuid: invented all-zero fixture ids, not from any live row
@@ -141,8 +156,14 @@ function distinct(list: string[][]): string[][] {
 }
 
 const api = window.api as unknown as Record<string, unknown>;
+const remember = (who: keyof typeof USERS, value: string) =>
+  window.localStorage.setItem(CLOUD_VISIBLE_STORAGE_PREFIX + USERS[who].id, value);
+const stored = (who: keyof typeof USERS) => window.localStorage.getItem(CLOUD_VISIBLE_STORAGE_PREFIX + USERS[who].id);
+
 beforeEach(() => {
   frames = [];
+  mockReportView = null;
+  window.localStorage.clear();
   getView.mockReset();
   api.cloudSync = { getView };
   jest.mocked(window.api.featureGate.getAll).mockReset();
@@ -152,6 +173,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   delete api.cloudSync;
+  jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 describe("C1 a reopen has the Keepr Cloud row on its first frame", () => {
@@ -175,8 +198,8 @@ describe("C1 a reopen has the Keepr Cloud row on its first frame", () => {
   });
 });
 
-describe("C2 first open after sign-in: no rows until every read has settled, then all rows in one commit", () => {
-  it("plan and Learn settled, Keepr Cloud held: only [] frames, then the full list", async () => {
+describe("C2 first open after sign-in, nothing remembered, answer inside the bound: no rows until every read has settled, then all rows in one commit", () => {
+  it("plan and Learn settled, Keepr Cloud held (under the bound): only [] frames, then the full list", async () => {
     const held: Array<(v: unknown) => void> = [];
     getView.mockImplementation(() => new Promise((r) => held.push(r)));
     render(<Root initial="a" />);
@@ -316,5 +339,137 @@ describe("C7 the session read waits for the local database", () => {
     getView.mockImplementation(never);
     openPanel();
     expect(rowsInDom()).toEqual(WITH_CLOUD);
+  });
+});
+
+describe("C8 a restart uses the remembered answer on the first frame", () => {
+  it("remembered visible for A, main never answers: the first open has every row, Keepr Cloud included", async () => {
+    remember("a", "1");
+    getView.mockImplementation(never);
+    render(<Root initial="a" />);
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1); // main is still asked
+    openPanel();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    expect(frames[0]).toEqual(WITH_CLOUD);
+  });
+
+  it("remembered visible, main's late answer says hidden: the row leaves and the remembered value follows", async () => {
+    remember("a", "1");
+    const held: Array<(v: unknown) => void> = [];
+    getView.mockImplementation(() => new Promise((r) => held.push(r)));
+    render(<Root initial="a" />);
+    await flush();
+    openPanel();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    await act(async () => held.forEach((r) => r(HIDDEN)));
+    await flush();
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+    expect(stored("a")).toBe("0");
+  });
+});
+
+describe("C9 nothing remembered: the rows wait at most the bound", () => {
+  it("1499 ms: no rows; 1500 ms: rows without Keepr Cloud; main's late answer then adds the row", async () => {
+    jest.useFakeTimers();
+    const held: Array<(v: unknown) => void> = [];
+    getView.mockImplementation(() => new Promise((r) => held.push(r)));
+    render(<Root initial="a" />);
+    await flush();
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS - 1);
+    });
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+    await act(async () => held.forEach((r) => r(ON)));
+    await flush();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    expect(stored("a")).toBe("1");
+  });
+});
+
+describe("C10 remembered answers never cross user ids", () => {
+  it("visible remembered for A only: B signs in with its read pending and gets no Keepr Cloud row", async () => {
+    remember("a", "1");
+    getView.mockImplementation(never);
+    render(<Root initial="b" />);
+    await flush();
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual([]);
+    expect(stored("b")).toBeNull();
+  });
+
+  it("an unknown stored value counts as nothing remembered", async () => {
+    remember("b", "yes");
+    getView.mockImplementation(never);
+    render(<Root initial="b" />);
+    await flush();
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual([]);
+  });
+
+  it("a storage that throws on every call: the panel still renders main's answer", async () => {
+    jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    getView.mockResolvedValue(ON);
+    render(<Root initial="a" />);
+    await flush();
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+  });
+});
+
+describe("W4 an older read never overwrites a newer answer", () => {
+  it("Settings reports hidden while the panel's earlier read is in flight; that read answering visible later is dropped", async () => {
+    getView.mockResolvedValueOnce(ON);
+    render(<Root initial="a" />);
+    await flush();
+    let releaseOld: (v: unknown) => void = () => undefined;
+    getView.mockImplementationOnce(() => new Promise((r) => (releaseOld = r))).mockImplementation(never);
+    openPanel();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    mockReportView = HIDDEN;
+    fireEvent.click(screen.getByTestId("nav-settings")); // closes the panel, opens Settings, which reports hidden
+    await flush();
+    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+    await act(async () => releaseOld(ON));
+    await flush();
+    openPanel();
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+  });
+});
+
+describe("W5 the Keepr Cloud read does not repeat on a timer or on window focus", () => {
+  it("focus past the throttle and time past the answer TTL add no getView call", async () => {
+    jest.useFakeTimers();
+    getView.mockResolvedValue(ON);
+    render(<Root initial="a" />);
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_FOCUS_THROTTLE_MS + 1);
+    });
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
+    });
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1);
   });
 });

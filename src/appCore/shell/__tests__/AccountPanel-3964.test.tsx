@@ -26,6 +26,7 @@ import { Z_CLASS, zValue } from "../../../constants/zLayers";
 import * as Sentry from "@sentry/electron/renderer";
 import logger from "../../../utils/logger";
 import { SUPPORT_DIALOG_SELECTOR } from "../../../components/support/supportDialogSelector";
+import { CLOUD_FIRST_ANSWER_BOUND_MS } from "../../../contexts/StrictFeatureContext";
 
 let mockElectron = true;
 jest.mock("../../../utils/platform", () => ({
@@ -809,7 +810,7 @@ describe("Keepr Cloud row (BACKLOG-4263)", () => {
     expect(cloudRow()).toBeNull();
   });
 
-  it("view still loading: no rows at all; then every row at once, Keepr Cloud included (BACKLOG-4263 fix 6)", async () => {
+  it("view still loading: no rows within the bound; past it the rows without Keepr Cloud; the late view adds it (BACKLOG-4263 fix 6)", async () => {
     let answer: (v: unknown) => void = () => undefined;
     getView.mockReturnValue(new Promise((r) => (answer = r)));
     render(<Harness />);
@@ -818,14 +819,16 @@ describe("Keepr Cloud row (BACKLOG-4263)", () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     const nav = screen.getByRole("navigation", { name: "Settings" });
-    expect(within(nav).queryAllByRole("button")).toHaveLength(0);
+    const labels = () => within(nav).queryAllByRole("button").map((b) => b.textContent);
+    expect(labels()).toHaveLength(0);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, CLOUD_FIRST_ANSWER_BOUND_MS));
+    });
+    expect(labels()).toEqual(visibleSettingsTabs(true, false, false).map((t) => t.label));
     await act(async () => {
       answer(ON);
     });
-    await rowsSettled();
-    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(
-      visibleSettingsTabs(true, false, true).map((t) => t.label),
-    );
+    expect(labels()).toEqual(visibleSettingsTabs(true, false, true).map((t) => t.label));
   });
 
   it("read on each open: hidden on the first open, visible on the next", async () => {
