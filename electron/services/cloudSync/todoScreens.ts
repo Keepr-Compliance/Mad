@@ -78,7 +78,7 @@ function parse(s: string | null): Record<string, unknown> | null {
 export function historyWho(kind: string | null, label: string | null): string {
   if (kind === "ai_app") return label && label.length > 0 && label.length <= 60 ? label : "an AI app";
   if (kind === "desktop") return "You, on a computer";
-  if (kind === "cloud_user") return "Keepr";
+  if (kind === "cloud_user") return "You";
   return "another device";
 }
 
@@ -149,7 +149,7 @@ export class CloudTodoScreens {
     const [kind, ref = ""] = by.split(":", 2);
     if (kind === "ai_app") return names.get(ref) ?? (label && label.length <= 60 ? label : null) ?? "an AI app";
     if (kind === "desktop") return ref === this.deps.installId() ? "this computer" : "another computer";
-    if (kind === "cloud_user") return "Keepr";
+    if (kind === "cloud_user") return "You";
     return "another device";
   }
 

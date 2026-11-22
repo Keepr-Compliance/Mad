@@ -745,3 +745,99 @@ describe("A3 the panel opens over Settings", () => {
     expect(rest.learnOverlay).not.toBeNull();
   });
 });
+
+/**
+ * BACKLOG-4263: the Keepr Cloud row follows main's view, as the Settings tab strip does. Views transcribed from
+ * the real producer, CloudSyncService.getView (electron/services/cloudSync/cloudSyncService.ts:188-200): its
+ * `base` (status "hidden") and the same object with status "on".
+ */
+describe("Keepr Cloud row (BACKLOG-4263)", () => {
+  const HIDDEN = {
+    engineInstalled: true,
+    status: "hidden",
+    pausedReason: null,
+    noticeVersion: null,
+    pendingDeals: 0,
+    notSavedDeals: 0,
+    lastSavedAt: null,
+    onlineNotHereDeals: 0,
+    otherInstalls: null,
+    aiAppsAvailable: true,
+  };
+  const ON = { ...HIDDEN, status: "on" };
+  const getView = jest.fn();
+  const api = window.api as unknown as Record<string, unknown>;
+  const cloudRow = () =>
+    within(screen.getByRole("navigation", { name: "Settings" })).queryByTestId(accountPanelRowTestId("settings-cloud"));
+
+  beforeEach(() => {
+    getView.mockReset();
+    api.cloudSync = { getView };
+  });
+  afterEach(() => {
+    delete api.cloudSync;
+  });
+
+  it("view visible: one Keepr Cloud row, and it opens the Keepr Cloud tab", async () => {
+    getView.mockResolvedValue(ON);
+    render(<Harness />);
+    openFromInitials();
+    await rowsSettled();
+    const row = await waitFor(() => {
+      const r = cloudRow();
+      expect(r).not.toBeNull();
+      return r as HTMLElement;
+    });
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(nav).getAllByRole("button").filter((b) => b.textContent === "Keepr Cloud")).toHaveLength(1);
+    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(
+      visibleSettingsTabs(true, false, true).map((t) => t.label),
+    );
+    fireEvent.click(row);
+    expect(screen.getByTestId("settings-target")).toHaveTextContent("settings-cloud");
+  });
+
+  it("view hidden: no Keepr Cloud row", async () => {
+    getView.mockResolvedValue(HIDDEN);
+    render(<Harness />);
+    openFromInitials();
+    await rowsSettled();
+    await waitFor(() => expect(getView).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(cloudRow()).toBeNull();
+  });
+
+  it("view still loading: the other rows show, no Keepr Cloud row; it appears once the view says visible", async () => {
+    let answer: (v: unknown) => void = () => undefined;
+    getView.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<Harness />);
+    openFromInitials();
+    await rowsSettled();
+    expect(cloudRow()).toBeNull();
+    await act(async () => {
+      answer(ON);
+    });
+    await waitFor(() => expect(cloudRow()).not.toBeNull());
+  });
+
+  it("read on each open: hidden on the first open, visible on the next", async () => {
+    getView.mockResolvedValue(HIDDEN);
+    render(<Harness />);
+    openFromInitials();
+    await rowsSettled();
+    await waitFor(() => expect(getView).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(cloudRow()).toBeNull();
+    fireEvent.click(screen.getByTestId("account-panel-close"));
+    expect(screen.queryByTestId("account-panel")).toBeNull();
+    getView.mockResolvedValue(ON);
+    openFromInitials();
+    await rowsSettled();
+    await waitFor(() => expect(cloudRow()).not.toBeNull());
+    expect(getView).toHaveBeenCalledTimes(2);
+  });
+});

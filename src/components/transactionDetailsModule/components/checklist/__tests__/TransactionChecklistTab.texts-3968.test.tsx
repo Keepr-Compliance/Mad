@@ -77,6 +77,14 @@ it("precondition: the fixture's text group is m-1, on this deal", () => {
   expect(second.checklist.transactionId).toBe("txn-1");
 });
 
+it("BACKLOG-4263: the row's Link button is named exactly Link, with no ellipsis", async () => {
+  render(<Harness />);
+  const link = await screen.findByTestId(`checklist-open-picker-${otherItem.id}`);
+  expect(link).toHaveAccessibleName("Link");
+  expect(screen.getAllByRole("button", { name: "Link" }).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: /^Link…$/ })).not.toBeInTheDocument();
+});
+
 it("Link… on an item opens the picker with a Texts tab, and picking a text writes kind text with its messages.id", async () => {
   render(<Harness />);
   fireEvent.click(await screen.findByTestId(`checklist-open-picker-${otherItem.id}`));

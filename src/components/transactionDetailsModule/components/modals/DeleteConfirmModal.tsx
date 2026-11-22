@@ -15,6 +15,9 @@ export const CLOUD_DELETE_COPY = {
   one: "It is removed from this computer and from Keepr Cloud. You can restore it, with its people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that it is deleted for good.",
   manyTitle: (n: number) => `Delete ${n} deals?`,
   many: "They are removed from this computer and from Keepr Cloud. You can restore them, with their people, todos and linked emails and texts, for 30 days from Settings › Keepr Cloud. After that they are deleted for good.",
+  /** BACKLOG-4263: the confirm buttons say "deal" when the title does. */
+  oneButton: "Delete deal",
+  manyButton: (n: number) => `Delete ${n} ${n === 1 ? "deal" : "deals"}`,
 } as const;
 
 interface DeleteConfirmModalProps {
@@ -87,7 +90,7 @@ export function DeleteConfirmModal({
             data-testid="delete-transaction-confirm"
             className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all disabled:opacity-50"
           >
-            Delete Transaction
+            {cloudOn ? CLOUD_DELETE_COPY.oneButton : "Delete Transaction"}
           </button>
         </div>
     </ResponsiveModal>
