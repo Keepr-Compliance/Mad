@@ -10,6 +10,7 @@ import cloudTodosService from "../../../../../services/cloudTodosService";
 import { useCloudTodos } from "./CloudTodosContext";
 import { ago, CLOUD_TODO_COPY as T, shortDay } from "./cloudTodoCopy";
 import { MenuButton } from "../MenuButton";
+import { RowMenuAnchor } from "../RowMenuAnchor";
 
 const PILL = "inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wide flex-shrink-0";
 const BLOCK = "mt-2.5 bg-gray-50 border border-gray-200 rounded-lg p-3";
@@ -46,7 +47,7 @@ export function CloudMarker({ item }: { item: ChecklistItem }): React.ReactEleme
   );
 }
 
-/** The menu entries Keepr Cloud adds to a row's ⋯ menu (My items) — rendered by the caller's MenuButton. */
+/** The menu entries Keepr Cloud adds to a row's ⋮ menu (My items) — rendered by the caller's MenuButton. */
 export function useCloudMenu(item: ChecklistItem): Array<{ key: "due" | "history"; label: string; onSelect: () => void }> | null {
   const cloud = useCloudTodos();
   if (!cloud) return null;
@@ -57,7 +58,7 @@ export function useCloudMenu(item: ChecklistItem): Array<{ key: "due" | "history
 }
 
 /**
- * A ⋯ menu with only Due date… and History, for a template row (which has no menu of its own). The same toggle
+ * A ⋮ menu with only Due date… and History, for a template row (which has no menu of its own). The same toggle
  * and menu as MyItemsSection's.
  */
 export function CloudTemplateMenu({ item, readOnly }: { item: ChecklistItem; readOnly: boolean }): React.ReactElement | null {
@@ -66,7 +67,7 @@ export function CloudTemplateMenu({ item, readOnly }: { item: ChecklistItem; rea
   if (!entries) return null;
   const shown = readOnly ? entries.filter((e) => e.key === "history") : entries;
   return (
-    <span className="relative">
+    <RowMenuAnchor open={open} onClose={() => setOpen(false)}>
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -76,7 +77,7 @@ export function CloudTemplateMenu({ item, readOnly }: { item: ChecklistItem; rea
         className="px-1 text-sm font-medium text-gray-600 hover:text-primary min-h-[44px] sm:min-h-0"
         data-testid={`cloud-item-menu-toggle-${item.id}`}
       >
-        ⋯
+        ⋮
       </button>
       {open && (
         <span
@@ -103,7 +104,7 @@ export function CloudTemplateMenu({ item, readOnly }: { item: ChecklistItem; rea
           ))}
         </span>
       )}
-    </span>
+    </RowMenuAnchor>
   );
 }
 
