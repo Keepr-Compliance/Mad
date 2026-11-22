@@ -10,10 +10,10 @@
  * | what               | how                                                     |
  * |--------------------|---------------------------------------------------------|
  * | add                | the input + Add (or Enter) → `checklists:add-my-item`   |
- * | rename             | ⋯ → Rename, Enter saves, Escape cancels → `rename-my-item` |
- * | reorder            | drag the handle, or ⋯ → Move up / Move down → `reorder-my-items` |
+ * | rename             | ⋮ → Rename, Enter saves, Escape cancels → `rename-my-item` |
+ * | reorder            | drag the handle, or ⋮ → Move up / Move down → `reorder-my-items` |
  * | tick, note, link   | the template rows' channels (main allows them on every plan) |
- * | delete             | ⋯ → Delete, then a one-line confirm → `remove-my-item`  |
+ * | delete             | ⋮ → Delete, then a one-line confirm → `remove-my-item`  |
  *
  * `detail` is null when main returned no private checklist: the agent has not
  * added an item yet. The section still renders (empty), and the first add
@@ -39,6 +39,7 @@ import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistItemRow } from "./ChecklistItemRow";
 import { useCloudMenu } from "./cloud/CloudTodoRowParts";
 import { MenuButton } from "./MenuButton";
+import { RowMenuAnchor } from "./RowMenuAnchor";
 
 /** `MyItemTitleSchema` (electron/schemas/checklist.ts) refuses longer titles. */
 export const MY_ITEM_TITLE_MAX_LENGTH = 300;
@@ -388,7 +389,10 @@ export function MyItemsSection({
                   ) : undefined
                 }
                 controls={
-                  <span className="relative">
+                  <RowMenuAnchor
+                    open={menuOpen}
+                    onClose={() => setMenuId((cur) => (cur === item.id ? null : cur))}
+                  >
                     <button
                       type="button"
                       onClick={() => setMenuId(menuOpen ? null : item.id)}
@@ -398,7 +402,7 @@ export function MyItemsSection({
                       className="px-1 text-sm font-medium text-gray-600 hover:text-primary min-h-[44px] sm:min-h-0"
                       data-testid={`my-item-menu-toggle-${item.id}`}
                     >
-                      ⋯
+                      ⋮
                     </button>
                     {menuOpen && (
                       <span
@@ -442,7 +446,7 @@ export function MyItemsSection({
                         </MenuButton>
                       </span>
                     )}
-                  </span>
+                  </RowMenuAnchor>
                 }
               />
               {confirmingId === item.id && !readOnly && (
