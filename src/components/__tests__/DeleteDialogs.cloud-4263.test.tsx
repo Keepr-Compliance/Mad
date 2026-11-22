@@ -85,4 +85,53 @@ describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
     expect(screen.getByText("Delete 3 Transactions?")).toBeInTheDocument();
     expect(screen.getByText("This action cannot be undone.")).toBeInTheDocument();
   });
+
+  // BACKLOG-4263: the confirm buttons say "deal" when the title does; Keepr Cloud off keeps today's buttons.
+  it("BACKLOG-4263: one-deal dialog, Keepr Cloud on: the button reads Delete deal", async () => {
+    svc.localState.mockResolvedValue({ on: true, online: true });
+    render(<DeleteConfirmModal propertyAddress="12 Oak Street" onCancel={jest.fn()} onDelete={jest.fn()} />);
+    await screen.findByTestId("delete-transaction-cloud-text");
+    expect(screen.getByTestId("delete-transaction-confirm")).toHaveTextContent(/^Delete deal$/);
+  });
+
+  it("BACKLOG-4263: one-deal dialog, Keepr Cloud off and still loading: the button reads Delete Transaction", async () => {
+    let answer: (v: { on: boolean; online: boolean }) => void = () => undefined;
+    svc.localState.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<DeleteConfirmModal propertyAddress="12 Oak Street" onCancel={jest.fn()} onDelete={jest.fn()} />);
+    expect(screen.getByTestId("delete-transaction-confirm")).toHaveTextContent(/^Delete Transaction$/);
+    answer({ on: false, online: true });
+    await waitFor(() => expect(screen.getByTestId("delete-transaction-confirm")).not.toBeDisabled());
+    expect(screen.getByTestId("delete-transaction-confirm")).toHaveTextContent(/^Delete Transaction$/);
+  });
+
+  it.each([
+    [0, "Delete 0 deals"],
+    [1, "Delete 1 deal"],
+    [2, "Delete 2 deals"],
+    [3, "Delete 3 deals"],
+  ])("BACKLOG-4263: bulk, Keepr Cloud on, %i selected: the button reads %s", async (n, label) => {
+    svc.localState.mockResolvedValue({ on: true, online: true });
+    render(<BulkDeleteConfirmModal selectedCount={n} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("bulk-delete-cloud-text");
+    expect(screen.getByTestId("bulk-delete-confirm").textContent).toBe(label);
+  });
+
+  it.each([
+    [0, "Delete 0 Transaction"],
+    [1, "Delete 1 Transaction"],
+    [2, "Delete 2 Transactions"],
+    [3, "Delete 3 Transactions"],
+  ])("BACKLOG-4263: bulk, Keepr Cloud off, %i selected: the button reads %s, as today", async (n, label) => {
+    svc.localState.mockResolvedValue({ on: false, online: true });
+    render(<BulkDeleteConfirmModal selectedCount={n} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("bulk-delete-confirm")).not.toBeDisabled());
+    expect(screen.getByTestId("bulk-delete-confirm").textContent).toBe(label);
+  });
+
+  it("BACKLOG-4263: bulk, deleting: the button reads Deleting... whether Keepr Cloud is on or off", async () => {
+    svc.localState.mockResolvedValue({ on: true, online: true });
+    render(<BulkDeleteConfirmModal selectedCount={2} isDeleting onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("bulk-delete-cloud-text");
+    expect(screen.getByTestId("bulk-delete-confirm").textContent).toBe("Deleting...");
+  });
 });
