@@ -311,6 +311,16 @@ configuration). **No file is exempt as a whole.**
 
 ---
 
+## Rows, Tabs and Sections Gated by a Flag or Setting
+
+**A menu row, tab or section whose presence depends on a flag or setting reads it from a session-level store loaded before that surface first paints. A per-mount fetch may refresh the store; it never decides the first frame.**
+
+The store is `src/contexts/StrictFeatureContext.tsx` (plan, Learn, checklists, Keepr Cloud). Add a slot there; do not fetch in the component. On the first open of a session, while a read is pending, show no rows at all, then every row in one commit. Never show a subset and insert the rest later.
+
+Required test, under the real provider: seed the session value, make the background refresh **never resolve**, open the surface, and read the rows **synchronously** after the click (no `await`, `findBy` or `waitFor` before the read). Assert every row in final order on the first frame, and the same list on every later commit (record commits with a `Profiler`). Mutation: decide the row from a per-mount fetch → the test goes red. Reference: `src/appCore/shell/__tests__/AccountPanel-cloud-session-4263.test.tsx` C1/C2.
+
+The same row was added late twice: the AI row (BACKLOG-4174) and the Keepr Cloud row (BACKLOG-4263).
+
 ## PR Review Enforcement
 
 When reviewing PRs, check for:
