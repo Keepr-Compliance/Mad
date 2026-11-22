@@ -354,7 +354,21 @@ describe("C8 a restart uses the remembered answer on the first frame", () => {
     expect(frames[0]).toEqual(WITH_CLOUD);
   });
 
-  it("remembered visible, main's late answer says hidden: the row leaves and the remembered value follows", async () => {
+  it("remembered visible, main's start-up answer says hidden: it replaces the remembered value (never dropped as stale)", async () => {
+    remember("a", "1");
+    let releaseStart: (v: unknown) => void = () => undefined;
+    getView.mockImplementationOnce(() => new Promise((r) => (releaseStart = r))).mockImplementation(never);
+    render(<Root initial="a" />);
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1);
+    await act(async () => releaseStart(HIDDEN));
+    await flush();
+    expect(stored("a")).toBe("0");
+    openPanel(); // this open's own read never answers
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+  });
+
+  it("remembered visible, the panel open while main is asked: the late hidden answer removes the row", async () => {
     remember("a", "1");
     const held: Array<(v: unknown) => void> = [];
     getView.mockImplementation(() => new Promise((r) => held.push(r)));
@@ -365,7 +379,6 @@ describe("C8 a restart uses the remembered answer on the first frame", () => {
     await act(async () => held.forEach((r) => r(HIDDEN)));
     await flush();
     expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
-    expect(stored("a")).toBe("0");
   });
 });
 
