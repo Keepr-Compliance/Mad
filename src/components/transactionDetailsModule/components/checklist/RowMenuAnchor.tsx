@@ -7,8 +7,8 @@
  * - focus moves to an element outside the anchor (Tab out of the last entry, for one).
  *
  * Focus moving between the toggle and the entries stays inside the anchor, so the menu stays open. A blur with no
- * next element (the window losing focus, a click on the menu's padding) is left alone; the mouse listener covers
- * clicks. Closing never moves focus: an entry that opens something (Rename's input) keeps the focus it was given.
+ * next element (the window losing focus, a click on the page or on the menu's padding) is left alone; the mouse
+ * listener covers clicks. Closing never moves focus: an entry that opens something (Rename's input) keeps the focus it was given.
  */
 import React, { useCallback, useEffect, useRef } from "react";
 import { useClickOutside } from "@keepr/ui";
@@ -36,7 +36,8 @@ export function RowMenuAnchor({
       onBlur={(e) => {
         if (!open) return;
         const next = e.relatedTarget;
-        if (next instanceof Node && !e.currentTarget.contains(next)) close();
+        // An element only: Chromium gives null when focus falls to the page, jsdom gives the document.
+        if (next instanceof Element && !e.currentTarget.contains(next)) close();
       }}
     >
       {children}
