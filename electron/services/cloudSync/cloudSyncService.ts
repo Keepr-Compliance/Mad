@@ -57,7 +57,10 @@ export interface CloudSyncServiceDeps {
   reportFailure?: (code: string) => void;
   /** BACKLOG-4263 PR-4c: the restore's audit entry (RunnerDeps.auditRestore). */
   auditRestore?: RunnerDeps["auditRestore"];
-  /** BACKLOG-4263 PR-6: a pass's pull changed todos on this computer (main -> renderer `cloud-todos:changed`). */
+  /**
+   * BACKLOG-4263 PR-6: a pass changed todos on this computer, or the server answered this computer's todo changes
+   * (main -> renderer `cloud-todos:changed`).
+   */
   onTodosChanged?: () => void;
   /** BACKLOG-4263 PR-6: how long turn-off waits for its best-effort pull (default 10 s). */
   turnOffPullMs?: number;
@@ -168,7 +171,10 @@ export class CloudSyncService {
       this.failedPasses = summary.failed > 0 ? this.failedPasses + 1 : summary.outcome === "done" ? 0 : this.failedPasses;
     }
     if (summary.outcome === "not_enabled") this.refreshSchedule();
-    if ((summary.pull?.localWrites ?? 0) > 0) {
+    // BACKLOG-4263: also after the server answered this computer's own todo changes (a kept or refused change, a
+    // removal), so an open History and Recently removed read again. Reads only: handling the event queues nothing.
+    const confirmed = (summary.todos?.confirmed ?? 0) + (summary.todosAfterPull?.confirmed ?? 0);
+    if ((summary.pull?.localWrites ?? 0) > 0 || confirmed > 0) {
       try {
         this.deps.onTodosChanged?.();
       } catch {
