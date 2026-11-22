@@ -134,4 +134,14 @@ describe("delete dialogs — Keepr Cloud users (PR-6)", () => {
     await screen.findByTestId("bulk-delete-cloud-text");
     expect(screen.getByTestId("bulk-delete-confirm").textContent).toBe("Deleting...");
   });
+
+  it.each([
+    [1, "Delete 1 Transaction"],
+    [3, "Delete 3 Transactions"],
+  ])("BACKLOG-4263: bulk, Keepr Cloud still loading, %i selected: the button reads %s, as today", (n, label) => {
+    svc.localState.mockReturnValue(new Promise(() => undefined));
+    render(<BulkDeleteConfirmModal selectedCount={n} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("bulk-delete-confirm")).toBeDisabled();
+    expect(screen.getByTestId("bulk-delete-confirm").textContent).toBe(label);
+  });
 });
