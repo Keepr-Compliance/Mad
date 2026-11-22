@@ -157,7 +157,7 @@ export function ChecklistItemRow({
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={LINK_ICON} />
                 </svg>
-                Link&hellip;
+                Link
               </button>
               {!hasNote && !editing && (
                 <button
