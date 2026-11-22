@@ -52,6 +52,24 @@
  * first frame instead of waiting for both IPC round trips. Each slot re-asks
  * only itself: a transaction open asks `transaction_checklists` alone, and a
  * Settings mount asks the plan and `autodetect_eval` alone.
+ *
+ * ## BACKLOG-4263: Keepr Cloud visibility
+ *
+ * A fourth slot holds whether main shows the Keepr Cloud section, so the
+ * account panel and the Settings tab strip list it on the first frame with the
+ * other rows. It differs from the other three:
+ *
+ * - **Asked only once the local database is open** (`useKeeprCloudSessionGate`,
+ *   called by AppShell). Main answers "hidden" while its database is not
+ *   initialized (`CloudSyncService.getView`), and a restored session has a user
+ *   before that, so an earlier answer would be wrong for the whole session.
+ *   Until then the slot reads hidden without asking (what main would say);
+ *   when the gate opens it reads pending until main's answer lands.
+ * - **No TTL and no focus re-ask.** Each ask is a full `getView`, which makes
+ *   server calls. It is re-asked on every account panel open, and Settings
+ *   reports each view it reads (on open and after every action).
+ * - **A failed read keeps the last answer for the same user.** With no earlier
+ *   answer it settles as hidden, so the panel is never left without rows.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -59,6 +77,8 @@ import type {
   StrictFeatureState,
   StrictFeatureStateOrPending,
 } from "../../electron/types/featureGate";
+import type { CloudSyncView } from "../../electron/types/ipc/window-api-cloud-sync";
+import cloudSyncService, { keeprCloudSectionVisible } from "../services/cloudSyncService";
 
 /** The checklist key (BACKLOG-3476); the Settings slots are below. */
 export const SESSION_STRICT_FEATURE_KEY = "transaction_checklists" as const;
@@ -80,6 +100,15 @@ interface Slot<T> {
   value: T | null;
   /** Ask main again in the background; the stored answer keeps showing. */
   reask: () => void;
+  /** Store an answer read elsewhere (BACKLOG-4263); it supersedes any ask in flight. */
+  report: (value: T) => void;
+}
+
+interface SlotOptions {
+  /** Re-ask on window focus and past the TTL (default true). */
+  periodic?: boolean;
+  /** A failed ask keeps the stored answer for the same user (default false). */
+  keepLastOnFailure?: boolean;
 }
 
 /**
@@ -95,8 +124,13 @@ function useSessionSlot<T>(
   organizationId: string | null,
   question: () => Promise<T>,
   onFailure: T,
+  options: SlotOptions = {},
 ): Slot<T> {
+  const periodic = options.periodic !== false;
+  const keepLastOnFailure = options.keepLastOnFailure === true;
   const [answer, setAnswer] = useState<StoredAnswer<T> | null>(null);
+  const answerRef = useRef(answer);
+  answerRef.current = answer;
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
   const questionRef = useRef(question);
@@ -136,9 +170,19 @@ function useSessionSlot<T>(
       try {
         land(await questionRef.current());
       } catch {
+        const last = answerRef.current;
+        if (keepLastOnFailure && last && last.forUserId === forUserId) return;
         land(onFailureRef.current);
       }
     })();
+  }, [keepLastOnFailure]);
+
+  const report = useCallback((value: T) => {
+    const forUserId = userIdRef.current;
+    if (!forUserId) return;
+    const seq = ++sentSeqRef.current;
+    appliedSeqRef.current = seq;
+    setAnswer({ forUserId, value });
   }, []);
 
   // A new user is asked at once; signing out asks nothing.
@@ -158,27 +202,28 @@ function useSessionSlot<T>(
 
   // Window focus, only when nothing was asked in the last minute.
   useEffect(() => {
+    if (!periodic) return;
     const onFocus = () => {
       if (Date.now() - lastAskAtRef.current < STRICT_FOCUS_THROTTLE_MS) return;
       ask();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [ask]);
+  }, [ask, periodic]);
 
   // Past the TTL the answer is asked again in the background. It keeps showing
   // until the new answer lands (which restarts this timer): resetting it to
   // pending here would unmount an open Checklist panel mid-edit.
   useEffect(() => {
-    if (!answer) return;
+    if (!answer || !periodic) return;
     const timer = setTimeout(() => {
       ask();
     }, STRICT_ANSWER_TTL_MS + 1);
     return () => clearTimeout(timer);
-  }, [answer, ask]);
+  }, [answer, ask, periodic]);
 
   const value = answer && userId && answer.forUserId === userId ? answer.value : null;
-  return useMemo(() => ({ value, reask: ask }), [value, ask]);
+  return useMemo(() => ({ value, reask: ask, report }), [value, ask, report]);
 }
 
 /**
@@ -192,6 +237,10 @@ interface StrictFeatureContextValue {
   checklists: Slot<StrictFeatureState>;
   learn: Slot<StrictFeatureState>;
   plan: Slot<SessionPlanFeatures>;
+  /** BACKLOG-4263: main shows the Keepr Cloud section. */
+  cloud: Slot<boolean>;
+  /** BACKLOG-4263: open once the local database can answer (useKeeprCloudSessionGate). */
+  setCloudGate: (open: boolean) => void;
 }
 
 const StrictFeatureContext = createContext<StrictFeatureContextValue | null>(null);
@@ -203,6 +252,13 @@ const askPlan = async (): Promise<SessionPlanFeatures> => {
   // A bridge that answers with no map at all has not answered the question.
   return result && typeof result === "object" ? result : "failed";
 };
+const askCloud = async (): Promise<boolean> => {
+  const view = await cloudSyncService.getView();
+  // Null: main could not be reached. A failure, not an answer.
+  if (!view) throw new Error("Keepr Cloud view unavailable");
+  return keeprCloudSectionVisible(view);
+};
+const CLOUD_SLOT: SlotOptions = { periodic: false, keepLastOnFailure: true };
 
 export function StrictFeatureProvider({
   userId,
@@ -217,32 +273,66 @@ export function StrictFeatureProvider({
   const checklists = useSessionSlot<StrictFeatureState>(userId, organizationId, askChecklists, "unknown");
   const learn = useSessionSlot<StrictFeatureState>(userId, organizationId, askLearn, "unknown");
   const plan = useSessionSlot<SessionPlanFeatures>(userId, organizationId, askPlan, "failed");
+  // BACKLOG-4263: asked once the local database is open, for the signed-in user.
+  const [cloudGate, setCloudGate] = useState(false);
+  const cloudSlot = useSessionSlot<boolean>(cloudGate ? userId : null, organizationId, askCloud, false, CLOUD_SLOT);
+  // Before the database is open main answers "hidden" anyway: that is the answer here, and nothing is asked.
+  const cloudValue = cloudGate ? cloudSlot.value : userId ? false : null;
+  const cloud = useMemo(() => ({ ...cloudSlot, value: cloudValue }), [cloudSlot, cloudValue]);
   const value = useMemo<StrictFeatureContextValue>(
-    () => ({ checklists, learn, plan }),
-    [checklists, learn, plan],
+    () => ({ checklists, learn, plan, cloud, setCloudGate }),
+    [checklists, learn, plan, cloud],
   );
   return <StrictFeatureContext.Provider value={value}>{children}</StrictFeatureContext.Provider>;
 }
 
 /**
- * BACKLOG-4174: the session's two Settings reads (the plan, for the AI tab, and
+ * BACKLOG-4174: the session's Settings reads (the plan, for the AI tab, and
  * `autodetect_eval`, for Learn), with one background re-ask of each per mount.
+ * BACKLOG-4263: plus Keepr Cloud visibility (null while pending), re-asked per
+ * mount unless `reaskCloud` is false (Settings reports its own view instead).
  * Null outside a provider; the caller then reads per mount as before.
  */
-export function useSessionSettingsReads(): {
+export function useSessionSettingsReads(options: { reaskCloud?: boolean } = {}): {
   plan: SessionPlanFeatures | null;
   learn: StrictFeatureStateOrPending;
+  cloud: boolean | null;
 } | null {
   const context = useContext(StrictFeatureContext);
   const learnReask = context?.learn.reask;
   const planReask = context?.plan.reask;
+  const cloudReask = options.reaskCloud === false ? undefined : context?.cloud.reask;
   useEffect(() => {
     learnReask?.();
     planReask?.();
-    // Both are stable for the provider's life: one re-ask of each per mount.
-  }, [learnReask, planReask]);
+    cloudReask?.();
+    // All are stable for the provider's life: one re-ask of each per mount.
+  }, [learnReask, planReask, cloudReask]);
   if (!context) return null;
-  return { plan: context.plan.value, learn: context.learn.value ?? "pending" };
+  return { plan: context.plan.value, learn: context.learn.value ?? "pending", cloud: context.cloud.value };
+}
+
+/**
+ * BACKLOG-4263: opens the Keepr Cloud slot once the local database can answer
+ * (AppShell passes "signed in and database initialized"). No-op outside a provider.
+ */
+export function useKeeprCloudSessionGate(open: boolean): void {
+  const setCloudGate = useContext(StrictFeatureContext)?.setCloudGate;
+  useEffect(() => {
+    setCloudGate?.(open);
+  }, [setCloudGate, open]);
+}
+
+/**
+ * BACKLOG-4263: Settings reads the full Keepr Cloud view for its section; each
+ * view it gets (on open, after every action) updates the session's visibility.
+ * A null view (main unreachable) changes nothing.
+ */
+export function useReportKeeprCloudView(view: CloudSyncView | null): void {
+  const report = useContext(StrictFeatureContext)?.cloud.report;
+  useEffect(() => {
+    if (view && report) report(keeprCloudSectionVisible(view));
+  }, [view, report]);
 }
 
 /**

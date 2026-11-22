@@ -809,17 +809,23 @@ describe("Keepr Cloud row (BACKLOG-4263)", () => {
     expect(cloudRow()).toBeNull();
   });
 
-  it("view still loading: the other rows show, no Keepr Cloud row; it appears once the view says visible", async () => {
+  it("view still loading: no rows at all; then every row at once, Keepr Cloud included (BACKLOG-4263 fix 6)", async () => {
     let answer: (v: unknown) => void = () => undefined;
     getView.mockReturnValue(new Promise((r) => (answer = r)));
     render(<Harness />);
     openFromInitials();
-    await rowsSettled();
-    expect(cloudRow()).toBeNull();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(nav).queryAllByRole("button")).toHaveLength(0);
     await act(async () => {
       answer(ON);
     });
-    await waitFor(() => expect(cloudRow()).not.toBeNull());
+    await rowsSettled();
+    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(
+      visibleSettingsTabs(true, false, true).map((t) => t.label),
+    );
   });
 
   it("read on each open: hidden on the first open, visible on the next", async () => {

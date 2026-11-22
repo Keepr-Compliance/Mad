@@ -20,12 +20,18 @@
  * session (`useSessionSettingsReads`), so a reopen shows its rows on the first
  * frame and corrects them one background IPC later. Outside a provider each
  * mount reads both once, as before.
+ *
+ * BACKLOG-4263: Keepr Cloud visibility is the third read, held the same way
+ * (session slot under a provider, one `getView` per mount outside one). The
+ * list stays null until it has settled too, so the Keepr Cloud row is never
+ * inserted after the others.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import type { StrictFeatureStateOrPending } from "../../../electron/types/featureGate";
 import { useSessionSettingsReads, type SessionPlanFeatures } from "@/contexts/StrictFeatureContext";
 import { isFeatureAllowed } from "@/hooks/featureAccess";
+import cloudSyncService, { keeprCloudSectionVisible } from "@/services/cloudSyncService";
 import { visibleSettingsTabs, type SettingsTab } from "./settingsTabs";
 
 export interface VisibleSettingsTabs {
@@ -36,15 +42,16 @@ export interface VisibleSettingsTabs {
 }
 
 /**
- * @param cloudVisible BACKLOG-4243: main reports the Keepr Cloud section visible.
- *   The Settings page and the account side panel both pass it (BACKLOG-4263), so the
- *   panel lists a Keepr Cloud row exactly when the tab strip shows the tab.
+ * @param options.reaskCloud false for Settings, which reads the full Keepr Cloud
+ *   view itself and reports it (`useReportKeeprCloudView`); the account panel
+ *   re-asks on every open.
  */
-export function useVisibleSettingsTabs(cloudVisible: boolean = false): VisibleSettingsTabs {
-  const session = useSessionSettingsReads();
+export function useVisibleSettingsTabs(options: { reaskCloud?: boolean } = {}): VisibleSettingsTabs {
+  const session = useSessionSettingsReads({ reaskCloud: options.reaskCloud });
   const hasProvider = session !== null;
   const [localPlan, setLocalPlan] = useState<SessionPlanFeatures | null>(null);
   const [localLearn, setLocalLearn] = useState<StrictFeatureStateOrPending>("pending");
+  const [localCloud, setLocalCloud] = useState<boolean | null>(null);
 
   // No provider: one plan read and one strict read per mount.
   useEffect(() => {
@@ -66,6 +73,10 @@ export function useVisibleSettingsTabs(cloudVisible: boolean = false): VisibleSe
         if (!cancelled) setLocalLearn("unknown");
       }
     })();
+    // getView never rejects: null (unreachable) reads hidden.
+    void cloudSyncService.getView().then((view) => {
+      if (!cancelled) setLocalCloud(keeprCloudSectionVisible(view));
+    });
     return () => {
       cancelled = true;
     };
@@ -73,7 +84,9 @@ export function useVisibleSettingsTabs(cloudVisible: boolean = false): VisibleSe
 
   const plan = session ? session.plan : localPlan;
   const learn = session ? session.learn : localLearn;
-  const ready = plan !== null && learn !== "pending";
+  const cloud = session ? session.cloud : localCloud;
+  const ready = plan !== null && learn !== "pending" && cloud !== null;
+  const cloudVisible = cloud === true;
   const hasAIAddon = isFeatureAllowed(plan === null || plan === "failed" ? {} : plan, "ai_detection");
   const learnAvailable = learn === "allowed";
 
