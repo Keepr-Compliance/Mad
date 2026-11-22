@@ -16,6 +16,7 @@ import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
 import { useSessionIdleTimeout } from "../hooks/useIdleSessionExpiry";
+import { useKeeprCloudSessionGate } from "../contexts/StrictFeatureContext";
 import { isElectron, isMacOS } from "../utils/platform";
 // TASK-2282: SupportWidget moved to App.tsx (outside auth routes)
 
@@ -51,6 +52,7 @@ export function AppShell({ app, children }: AppShellProps) {
   });
   // BACKLOG-3833: user input keeps the session alive; main signs out an idle one
   useSessionIdleTimeout({ isAuthenticated, onExpired: handleLogout });
+  useKeeprCloudSessionGate(isAuthenticated && isDatabaseInitialized); // BACKLOG-4263: main answers only once its DB is open
 
   // Electron renders the full title bar; web/mobile renders the mobile header
   const runningInElectron = isElectron();

@@ -13,6 +13,7 @@ import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
 import { rcsImportService } from "../../services/rcsImportService";
+import { StrictFeatureProvider, useKeeprCloudSessionGate } from "../../contexts/StrictFeatureContext";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -2436,5 +2437,133 @@ describe("Settings", () => {
       expect(screen.queryByRole("tab", { name: "Help Keepr learn" })).toBeNull();
       expect(document.getElementById("settings-learn")).toBeNull();
     });
+  });
+});
+
+/**
+ * BACKLOG-4263 fix 6 (C5): under the session provider the tab strip reads Keepr
+ * Cloud visibility from the session store, so the Keepr Cloud tab is on the
+ * strip's first frame; the section's own full view feeds the store.
+ */
+describe("Settings tab strip reads Keepr Cloud visibility from the session store (BACKLOG-4263)", () => {
+  // Transcribed from CloudSyncService.getView's base (status "hidden"); "off" = shown, not turned on.
+  const HIDDEN_VIEW = {
+    engineInstalled: true, status: "hidden", pausedReason: null, noticeVersion: null, pendingDeals: 0,
+    notSavedDeals: 0, lastSavedAt: null, onlineNotHereDeals: 0, otherInstalls: null, aiAppsAvailable: true,
+  };
+  const OFF_VIEW = { ...HIDDEN_VIEW, status: "off", noticeVersion: 1 };
+  const getView = jest.fn();
+  let stripFrames: string[][] = [];
+  const stripInDom = () =>
+    Array.from(document.querySelectorAll('[data-testid="settings-tabs"] [role="tab"]')).map((t) => t.textContent ?? "");
+
+  function OpenGate() {
+    useKeeprCloudSessionGate(true);
+    return null;
+  }
+  function Root({ settings, initialSection }: { settings: boolean; initialSection?: string }) {
+    return (
+      <React.Profiler
+        id="settings"
+        onRender={() => {
+          const tabs = stripInDom();
+          if (tabs.length) stripFrames.push(tabs);
+        }}
+      >
+        <StrictFeatureProvider userId="user-123" organizationId={null}>
+          <OpenGate />
+          <NotificationProvider>
+            <PlatformProvider>
+              {settings && (
+                <Settings account={ACCOUNT} userId="user-123" initialSection={initialSection} onClose={jest.fn()} onStartLearn={jest.fn()} onSeeLearnScore={jest.fn()} />
+              )}
+            </PlatformProvider>
+          </NotificationProvider>
+        </StrictFeatureProvider>
+      </React.Profiler>
+    );
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    stripFrames = [];
+    getView.mockReset();
+    (window.api as unknown as { cloudSync: unknown }).cloudSync = { getView };
+    jest.mocked(window.api.featureGate.getAll).mockResolvedValue({});
+    jest.mocked(window.api.featureGate.strictState).mockResolvedValue("blocked");
+    jest.mocked(window.api.preferences.get).mockResolvedValue({ success: true, preferences: {} });
+  });
+  afterEach(() => {
+    delete (window.api as unknown as { cloudSync?: unknown }).cloudSync;
+  });
+
+  it("C5: session says visible and Settings' own view never answers: Keepr Cloud is in the strip on its first frame and stays", async () => {
+    getView.mockResolvedValueOnce(OFF_VIEW).mockImplementation(() => new Promise(() => undefined));
+    const { rerender } = render(<Root settings={false} />);
+    await act(async () => {});
+    expect(getView).toHaveBeenCalledTimes(1);
+    rerender(<Root settings />);
+    await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+    expect(stripFrames.length).toBeGreaterThan(0);
+    expect(stripFrames[0]).toContain("Keepr Cloud");
+    expect(stripFrames.every((f) => JSON.stringify(f) === JSON.stringify(stripFrames[0]))).toBe(true);
+    // Settings did not re-ask the store; its one read is its own section view.
+    expect(getView).toHaveBeenCalledTimes(2);
+  });
+
+  describe("the Keepr Cloud section while Settings' own view loads", () => {
+    const realScroll = Element.prototype.scrollIntoView;
+    let scrolled: jest.Mock;
+    beforeEach(() => {
+      scrolled = jest.fn();
+      Element.prototype.scrollIntoView = scrolled;
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = realScroll;
+    });
+    const renderAt = (rerender: (ui: React.ReactElement) => void) => rerender(<Root settings initialSection="settings-cloud" />);
+    const held: Array<(v: unknown) => void> = [];
+    const releaseView = (v: unknown) => held.splice(0).forEach((r) => r(v));
+
+    it("deep link with the view held: the section heading and anchor are there and scrolled to; the view then fills it", async () => {
+      getView.mockResolvedValueOnce(OFF_VIEW).mockImplementation(() => new Promise((r) => held.push(r)));
+      const { rerender } = render(<Root settings={false} />);
+      await act(async () => {});
+      renderAt(rerender);
+      expect(getView).toHaveBeenCalledTimes(2); // the session read, then Settings' own (held)
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+      const anchor = document.getElementById("settings-cloud");
+      expect(anchor).not.toBeNull();
+      expect(screen.getByTestId("cloud-loading")).toBeInTheDocument();
+      await waitFor(() => expect(scrolled.mock.contexts.map((el: Element) => el.id)).toContain("settings-cloud"));
+      await act(async () => releaseView(OFF_VIEW));
+      expect(screen.queryByTestId("cloud-loading")).toBeNull();
+      expect(screen.getByRole("switch", { name: "Keepr Cloud" })).toBeInTheDocument();
+    });
+
+    it("the view arrives as hidden: the placeholder and the tab both go", async () => {
+      getView.mockResolvedValueOnce(OFF_VIEW).mockImplementation(() => new Promise((r) => held.push(r)));
+      const { rerender } = render(<Root settings={false} />);
+      await act(async () => {});
+      renderAt(rerender);
+      expect(getView).toHaveBeenCalledTimes(2); // the session read, then Settings' own (held)
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+      expect(screen.getByTestId("cloud-loading")).toBeInTheDocument();
+      expect(stripInDom()).toContain("Keepr Cloud");
+      await act(async () => releaseView(HIDDEN_VIEW));
+      expect(document.getElementById("settings-cloud")).toBeNull();
+      expect(stripInDom()).not.toContain("Keepr Cloud");
+    });
+  });
+
+  it("C5b: Settings' own view says hidden: the store follows it and the tab leaves the strip", async () => {
+    getView.mockResolvedValueOnce(OFF_VIEW).mockResolvedValue(HIDDEN_VIEW);
+    const { rerender } = render(<Root settings={false} />);
+    await act(async () => {});
+    rerender(<Root settings />);
+    await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+    await waitFor(() => expect(stripInDom()).not.toContain("Keepr Cloud"));
+    expect(stripInDom()).toContain("About");
+    expect(getView).toHaveBeenCalledTimes(2);
   });
 });

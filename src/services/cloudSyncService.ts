@@ -16,6 +16,11 @@ import type { CloudSyncRemovedOnlineDeal } from "../../electron/types/ipc/window
 
 export const CLOUD_SYNC_UNREACHABLE = "unreachable";
 
+/** BACKLOG-4243: main shows the Keepr Cloud section (and its tab and panel row). Null (unreachable) reads hidden. */
+export function keeprCloudSectionVisible(view: CloudSyncView | null): boolean {
+  return !!view && view.status !== "hidden";
+}
+
 async function call(fn: () => Promise<CloudSyncResult>): Promise<CloudSyncResult> {
   try {
     return await fn();

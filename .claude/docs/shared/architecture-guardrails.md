@@ -311,6 +311,16 @@ configuration). **No file is exempt as a whole.**
 
 ---
 
+## Rows, Tabs and Sections Gated by a Flag or Setting
+
+**A menu row, tab or section whose presence depends on a flag or setting reads it from a session-level store loaded before that surface first paints. A per-mount fetch may refresh the store; it never decides the first frame.**
+
+The store is `src/contexts/StrictFeatureContext.tsx` (plan, Learn, checklists, Keepr Cloud). Add a slot there; do not fetch in the component. While a read is pending, use the last known answer for this user; with none, show no rows and wait no longer than a stated limit (Keepr Cloud: `CLOUD_FIRST_ANSWER_BOUND_MS`, 1500 ms), then render and let the real answer correct the list. Within the limit, never show a subset and insert the rest later. Never seed the last known answer by writing it into the store as an answer: it must not make the real answer in flight look stale.
+
+Required test, under the real provider: seed the session value, make the background refresh **never resolve**, open the surface, and read the rows **synchronously** after the click (no `await`, `findBy` or `waitFor` before the read). Assert every row in final order on the first frame, and the same list on every later commit (record commits with a `Profiler`). Mutation: decide the row from a per-mount fetch → the test goes red. Also required: a restart with a remembered answer has the row on the first frame (mutation: ignore the remembered answer → red), and with nothing remembered the rows appear at the limit and the late answer still lands (fake timers; mutation: remove the limit → red). Reference: `src/appCore/shell/__tests__/AccountPanel-cloud-session-4263.test.tsx` C1, C2, C8, C9.
+
+The same row was added late twice: the AI row (BACKLOG-4174) and the Keepr Cloud row (BACKLOG-4263).
+
 ## PR Review Enforcement
 
 When reviewing PRs, check for:
