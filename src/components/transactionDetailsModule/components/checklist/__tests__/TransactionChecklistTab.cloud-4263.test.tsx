@@ -356,6 +356,29 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(h.className).toContain("text-lg font-semibold");
   });
 
+  // ---- fix 7: the event now also follows the user's own changes once the server has answered them ----
+  // Recently removed item: the shape main's listRemovedTodos returns (todoScreens.ts, CloudTodoRemovedResult).
+  const REMOVED_ITEM = { entity: "item" as const, cloudId: "c-own", title: "Order the appraisal", removedAt: "2026-11-22T10:00:00Z" };
+
+  it.each([
+    // Over IPC every answer is a new object: both the checklists and the Keepr Cloud parts change identity.
+    ["both change (as over IPC)", true, true],
+    ["only the Keepr Cloud parts change identity", false, true],
+    ["only the checklists change identity", true, false],
+  ])("own removal: the event after the server's answer shows it in Recently removed without reopening (%s)", async (_n, freshChecklists, freshCloud) => {
+    const same = { success: true, checklists: data };
+    checklists().get.mockImplementation(async () => (freshChecklists ? { success: true, checklists: fixtureChecklistsWithMyItems() } : same));
+    cloud.getForDeal.mockImplementation(async () => (freshCloud ? { ...ON, notices: [], markers: {} } : ON));
+    render(<Harness />);
+    await screen.findByTestId(`checklist-item-${T_ITEM.id}`);
+    await waitFor(() => expect(cloud.listRemoved).toHaveBeenCalled());
+    await act(async () => undefined);
+    expect(screen.queryByTestId("checklist-removed-c-own")).toBeNull();
+    cloud.listRemoved.mockResolvedValue({ success: true, items: [REMOVED_ITEM] });
+    await act(async () => changed!());
+    expect(await screen.findByTestId("checklist-removed-c-own")).toHaveTextContent("Order the appraisal");
+  });
+
   it("cloud-todos:changed re-reads the checklists and the Keepr Cloud parts", async () => {
     await show(ON);
     const gets = checklists().get.mock.calls.length;
