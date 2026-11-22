@@ -25,7 +25,7 @@ import { dealId, freshDb, insertDeal, PROJECT, USER_A } from "./helpers/fixtures
 import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
 import { FakeServer, type FakeTodo } from "./helpers/fakeServer";
 import { enableForUser } from "../../db/cloudSyncDbService";
-import { CloudTodoScreens } from "../todoScreens";
+import { CloudTodoScreens, historyWho } from "../todoScreens";
 import { MY_ITEMS_TEMPLATE_ID } from "../../db/checklistPrivacy";
 import {
   SET_CHECKLIST_ITEM_CHECKED_SQL,
@@ -166,6 +166,34 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect((await s.forDeal(deal)).notices).toEqual([expect.objectContaining({ itemId: I1, kind: "conflict" })]);
     });
 
+    /**
+     * BACKLOG-4263: every actor kind the notice's `who` maps (todoScreens.ts `who()`), on the real conflict notice
+     * from withConflict() with only its `by` / `other_by` / `actor_label` rewritten. No producer at this head puts
+     * `cloud_user` on a conflict (the server writes conflict rows on `set` ops only, and `cloud_user` sends only
+     * `restore`); the row is here so the mapping is swept, not because it occurs.
+     */
+    it("BACKLOG-4263: a conflict notice names every actor kind: cloud_user reads You, the others as before", async () => {
+      const { db, deal, e, s } = await withConflict();
+      const mine = `desktop:${e.service.installIdForScreens() ?? ""}`;
+      const set = db.prepare(
+        "UPDATE cloud_sync_todo_notices SET other_json = json_set(other_json, '$.by', ?, '$.other_by', ?), actor_label = ? WHERE kind = 'conflict'",
+      );
+      const whoFor = async (by: string | null, otherBy: string | null, label: string | null) => {
+        set.run(by, otherBy, label);
+        const notices = (await s.forDeal(deal)).notices;
+        expect(notices).toHaveLength(1);
+        return notices[0].who;
+      };
+      expect(await whoFor(`cloud_user:${USER_A}`, null, "Keepr")).toBe("You");
+      expect(await whoFor(mine, mine, "Keepr desktop")).toBe("this computer");
+      expect(await whoFor(`desktop:${fid(98, 1)}`, null, "Keepr desktop")).toBe("another computer");
+      expect(await whoFor("ai_app:conn-1", null, "ignored")).toBe("Claude");
+      expect(await whoFor(`ai_app:${fid(97, 1)}`, null, "Some app")).toBe("Some app");
+      expect(await whoFor(`ai_app:${fid(97, 1)}`, null, null)).toBe("an AI app");
+      expect(await whoFor("other_kind:x", null, null)).toBe("another device");
+      expect(await whoFor(null, null, null)).toBe("another device");
+    });
+
     it("a dismissed notice, another user's notice and another deal's notice are not shown", async () => {
       const { db, deal, s } = await withConflict();
       db.prepare("UPDATE cloud_sync_todo_notices SET owner_user_id = 'someone-else'").run();
@@ -301,7 +329,20 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
     it("a removal and a restore read as removed and restored, by who did them", async () => {
       const { db, e, s } = await synced();
       e.server.history.set(cloudIdOf(db, I2), I3_ROWS);
-      expect((await s.history(I2)).rows.map((r) => [r.what, r.who])).toEqual([["restored", "Keepr"], ["removed", "Claude"]]);
+      expect((await s.history(I2)).rows.map((r) => [r.what, r.who])).toEqual([["restored", "You"], ["removed", "Claude"]]);
+    });
+
+    it("BACKLOG-4263: history names every actor kind: cloud_user reads You, the others as before", async () => {
+      // historyWho over every value cloud_todo_history.actor_kind can hold (CHECK desktop | cloud_user | ai_app,
+      // migration 20261118110000 :174), plus null and an unknown kind.
+      expect(historyWho("cloud_user", "Keepr")).toBe("You");
+      expect(historyWho("desktop", "Keepr desktop")).toBe("You, on a computer");
+      expect(historyWho("ai_app", "Claude")).toBe("Claude");
+      expect(historyWho("ai_app", "")).toBe("an AI app");
+      expect(historyWho("ai_app", null)).toBe("an AI app");
+      expect(historyWho("ai_app", "x".repeat(61))).toBe("an AI app");
+      expect(historyWho("other_kind", "x")).toBe("another device");
+      expect(historyWho(null, null)).toBe("another device");
     });
 
     it("an unknowable clock falls back to the time the server received it; ticks read as ticked; unchanged and order rows are not listed", async () => {
