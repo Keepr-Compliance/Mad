@@ -15,7 +15,8 @@ rolls back, so nothing changes (inferred, not run). Then run `../backlog-4263-pr
 
 | Script | What it does | Commits? |
 |---|---|---|
-| `harness.py check` | offline: every mutant fragment matches its function exactly once, and `apply-20261123110000.sql` matches E1 | no database call |
+| `harness.py check` | offline: every mutant fragment matches its function exactly once; `apply-20261123110000.sql` matches E1; structure of helpers, probes, the composed call and every literal text (closed strings and dollar quotes, balanced parentheses, pg_temp argument counts, no constant in GROUP/ORDER BY) | no database call |
+| `harness.py selftest` | offline: the report path on canned outputs in kt-sql's shape (CRASH, PRECONDITION, NOT APPLIED IN DB, a missed mutant and a FAIL each exit 1; no result line exits 2; zero tests exits 3) | no database call |
 | `harness.py write` | offline: writes `apply-20261123110000.sql` from E1 (checked also by `broker-portal/__tests__/migrations/apply-wrappers-4263.test.ts`) | no database call |
 | `harness.py run --controls` | one call: E3 and E1 rollback files, E1 from the working tree, helpers, 17 controls each in a subtransaction undone at its end, then RAISE | no: the call ends in RAISE |
 | `harness.py run --mutants` | the same setup, then 26 mutants (exact-string replace on one E1 function, checked by `md5(prosrc)` in the database before its probe) | no |
@@ -60,10 +61,19 @@ must see the same rows). Each session itself ends in RAISE except `attach`'s ses
 | `p_note` | R1: the scrub counts reach the run row after finish; only new keys; ok moves to partial, failed stays | `Note_overwrites_counts`, `Note_sets_any_outcome` |
 | `p_scrub_off` | switch off, no active computer, unknown owner | `C6f_switch_ignored`, `C6f_null_active_scrubs` |
 | `p_owners` | D3 oldest move first | `Owners_newest_first` |
-| `p_c6g_seq` | C-6g (i), single-session sequence only (the two-session form is `concurrency/run.sh c6g_wait`) | — |
+| `p_c6g_seq` | batch limit and the re-check under the settings lock, single session (two-session form: `concurrency/run.sh c6g_wait`): a limit-1 batch scrubs exactly one row, the lower id (E1 orders by id), answers more = true and leaves the active computer's row; after the move back, nothing of the now-active computer is scrubbed and the now-inactive one is. It names which case it saw: no row scrubbed (an E1 fault), two rows, or the higher id. | — (no mutant; primary for none) |
 | `p_dry_run` | the schedule is first applied in dry_run: a dry claim and scrub change nothing but add one run row | `Dry_claim_does_live_work`, `Dry_scrub_does_live_work` |
 | `p_e3` | E3 refuses without the URL secret; schedules minute 23 calling invoke | — |
 | `p_rollback` | both rollback files remove every object | — |
+
+## Expected results (the controls must all PASS before the mutants are run)
+
+- `harness.py run --controls`: **17 PASS**, problems=0.
+- `harness.py run --mutants`: **26 mutants: 25 CAUGHT, 1 EQUIV** (`C6f_install_filter_select_only`: the UPDATE re-check
+  stops the wrong scrub, so the fixture cannot show it; equivalent for safety only), problems=0.
+- Preconditions on the shared database: fewer than 900 unreferenced blobs (`p_c6c` returns PRECONDITION otherwise);
+  fewer than 1000 fenced blobs and fewer than 1000 rowless objects older than 3 days (`p_c6a` and `p_c6e` would
+  otherwise FAIL with "not listed", because their fixture rows sort after real ones; not checked inside the probes).
 
 Counting: a mutant is caught only when its probe returns `FAIL`. `CRASH` (the mutated function or the probe raised),
 `PRECONDITION` and `NOT APPLIED IN DB` are printed as such and make the run not-ok.

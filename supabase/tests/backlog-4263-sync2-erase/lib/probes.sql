@@ -304,7 +304,7 @@ BEGIN
   PERFORM pg_temp.switch(true);
   r := pg_temp.scrub(run, v, false, 1000);
   IF r ->> 'state' <> 'not_applicable' THEN bad := bad || 'no active computer: ' || r::text || '; '; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.cloud_deal_messages WHERE id IN (m, m2) AND removed_at IS NULL GROUP BY true HAVING count(*) = 2) THEN
+  IF (SELECT count(*) FROM public.cloud_deal_messages WHERE id IN (m, m2) AND removed_at IS NULL) <> 2 THEN
     bad := bad || 'rows scrubbed; ';
   END IF;
   r := pg_temp.scrub(run, pg_temp.fx(1999), false, 1000);
@@ -336,16 +336,26 @@ END $p$;
 -- the next batch scrubs none of that computer's rows (re-sent or not yet scrubbed), and scrubs the other computer's.
 CREATE FUNCTION pg_temp.p_c6g_seq() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(24); i1 uuid := pg_temp.fx(2401); i2 uuid := pg_temp.fx(2402); d1 uuid; d2 uuid;
-        m2a uuid; m2b uuid; m1 uuid; run uuid; r jsonb; bad text := '';
+        m2a uuid; m2b uuid; m1 uuid; x1 uuid; x2 uuid; run uuid; r jsonb; n int; bad text := '';
 BEGIN
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(u, i1, now());
   d1 := pg_temp.mk_deal(u, i1, 'g1'); d2 := pg_temp.mk_deal(u, i2, 'g2');
   m1 := pg_temp.mk_msg(u, d1, 'g1', NULL);
-  m2a := pg_temp.mk_msg(u, d2, 'g2a', NULL); m2b := pg_temp.mk_msg(u, d2, 'g2b', NULL);
+  x1 := pg_temp.mk_msg(u, d2, 'g2x', NULL); x2 := pg_temp.mk_msg(u, d2, 'g2y', NULL);
+  -- message ids are random (DEFAULT gen_random_uuid()); E1's batch takes the old computer's rows ORDER BY id, so a
+  -- limit-1 batch must scrub the lower id. m2a = the lower id, m2b = the higher id, decided here, not by insert order.
+  m2a := least(x1, x2); m2b := greatest(x1, x2);
   run := (pg_temp.claim(false) ->> 'run_id')::uuid;
-  r := pg_temp.scrub(run, u, false, 1);                                                    -- scrubs m2a only
-  IF NOT EXISTS (SELECT 1 FROM public.cloud_deal_messages WHERE id = m2a AND removed_at IS NOT NULL) THEN RETURN 'FAIL setup: m2a not scrubbed'; END IF;
+  r := pg_temp.scrub(run, u, false, 1);
+  SELECT count(*) INTO n FROM public.cloud_deal_messages WHERE id IN (m2a, m2b) AND removed_at IS NOT NULL;
+  IF n = 0 THEN RETURN 'FAIL E1: a limit-1 batch scrubbed no message of the inactive computer: ' || r::text; END IF;
+  IF n > 1 THEN RETURN 'FAIL limit 1 scrubbed ' || n || ' messages: ' || r::text; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.cloud_deal_messages WHERE id = m2a AND removed_at IS NOT NULL) THEN
+    RETURN 'FAIL the batch scrubbed the higher id, not the lower one (ORDER BY id): ' || r::text;
+  END IF;
+  IF (r ->> 'scrubbed')::int IS DISTINCT FROM 1 OR (r ->> 'more')::boolean IS NOT TRUE THEN RETURN 'FAIL limit-1 answer: ' || r::text; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.cloud_deal_messages WHERE id = m1 AND removed_at IS NULL) THEN RETURN 'FAIL active computer row scrubbed by batch 1'; END IF;
   -- the move back (what cloud_claim_install(p_replace = true) writes) and the re-send of m2a (the upsert clears removed_at)
   UPDATE public.cloud_autosave_settings SET active_install_id = i2, active_since = now() WHERE user_id = u;
   UPDATE public.cloud_deal_messages SET removed_at = NULL, subject = 'resent', body_text = 'resent', version = version + 1 WHERE id = m2a;
