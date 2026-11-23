@@ -51,6 +51,17 @@ run.sh R<n> <run-id> [--mutant]   # <run-id> = 16 hex characters, chosen before 
 run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and any *_m4263 function
 ```
 
+- **One run at a time.** A second run started alongside would have its mutant dropped by the first run's trap. Covered:
+  every run refuses to start while any `public.*_m4263` function exists (mutant runs), and `setup.sql` refuses while
+  any `p4263s1cc-*@example.test` fixture user exists (pristine and mutant runs; also catches leftovers — run `cleanup`).
+  Two starts within the same second can both pass these checks; do not start two.
+- **Verdict** (`concurrency/verdict.py`; offline self-test against canned outputs in kt-sql's real shape:
+  `python3 -I concurrency/selftest.py`). It starts as `ERROR`. A pristine run prints `PASS` only on the case's passing
+  shape; a `--mutant` run prints `RED` only on the case's own red shape (R2: confirm `object_missing`, claim ok, no wait;
+  R3: both claims ok; R4: claim ok, turn-off success, 0 deals; R6: the write `applied`, 1 r6 deal). Anything else —
+  a gate timeout, a missing function, a deadlock, a state call with no row — prints `ERROR`. Exit 0 only for PASS / RED.
+  A mutant run also prints `MUTATION APPLIED <name> md5 <x>` right after the create (no body → ERROR, stop) and checks
+  the mutant still exists after the sessions.
 - At start it prints the run id and the fixture pattern `p4263s1cc-<run-id>@example.test`, and refuses to start while
   any `public.*_m4263` function exists. Every file it sends begins with `guard.sql` (refuses any database that is not
   the test database).
