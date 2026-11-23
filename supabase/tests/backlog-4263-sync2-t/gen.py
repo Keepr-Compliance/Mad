@@ -13,6 +13,8 @@
 `python3 gen.py check`    fails when a written file differs from what the migration gives now, or a mutant fragment
                           does not match exactly once (MUTATION NOT APPLIED); prints MUTATION APPLIED for each mutant
 `python3 gen.py report <kt-sql output>`  reads the harness result and prints PASS / FAIL per control and mutant
+`python3 gen.py selftest`  report() on canned outputs in both transport shapes and on a real captured kt-sql output;
+                          `selftest --control-green-ok` is its control (must fail)
 """
 import hashlib
 import json
@@ -477,34 +479,48 @@ OUTS = {os.path.join(HERE, f'apply-{T_VERSION}.sql'): APPLY,
         os.path.join(HERE, 'harness-t.sql'): HARNESS}
 
 
-def report(path):
-    txt = open(path, encoding='utf-8').read()
-    try:  # kt-sql prints the error as JSON; the RAISE text is its 'message'
-        txt = json.loads(txt.strip().split('\n')[0]).get('message', txt)
-    except Exception:
-        pass
-    m = re.search(r'T4263_RESULT (\{.*\})', txt, re.S)
-    if not m:
-        print('NO RESULT')
-        return 2
-    s = m.group(1)
-    res, end = json.JSONDecoder().raw_decode(s)
-    bad = 0
-    ctl = res.get('controls', {})
+def unwrap(raw):
+    """The harness's RAISE text from kt-sql's output: drop its 'kt-sql: ...' status lines; when what is left is the
+    Management API's JSON body {"message": "..."}, take the message; otherwise (plain psql-style text) keep it."""
+    text = '\n'.join(l for l in raw.replace('\r\n', '\n').split('\n') if not l.startswith('kt-sql: ')).strip()
+    try:
+        body = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(body, dict) and isinstance(body.get('message'), str):
+        return body['message']
+    return text
+
+
+def report(raw):
+    """(printed lines, ok). ok only when every control is PASS; in a full run every mutant is applied and caught (FAIL:
+    from a primary control, none ERROR) or, if want=green, passes; the rollback step is ok. Unreadable output is not ok."""
+    msg = unwrap(raw)
+    i = msg.find('T4263_RESULT ')
+    if i < 0:
+        return ['NOT OK: no T4263_RESULT in the output: ' + msg[:300].replace('\n', ' ')], False
+    try:
+        res, _ = json.JSONDecoder().raw_decode(msg[i + len('T4263_RESULT '):])
+    except ValueError as e:
+        return [f'NOT OK: T4263_RESULT is not complete JSON ({e})'], False
+    if not isinstance(res, dict) or not isinstance(res.get('controls'), dict):
+        return ['NOT OK: T4263_RESULT has no controls object'], False
+    out, bad = [], 0
+    ctl = res['controls']
     for c in CONTROLS:
         v = ctl.get(c, 'MISSING')
         ok = v == 'PASS'
         bad += 0 if ok else 1
-        print(f"{'PASS' if ok else 'FAIL'} {c} {'' if ok else str(v)[:900]}")
-    n_mut = 0
+        out.append(f"{'PASS' if ok else 'FAIL'} {c} {'' if ok else str(v)[:900]}")
     only_controls = not any(k.startswith('mutant:') for k in res)
     if only_controls:
-        print('controls-only run (harness-t-controls.sql): no mutants expected')
+        out.append('controls-only run (harness-t-controls.sql): no mutants expected')
+    n_mut = 0
     for mid, *_ in ([] if only_controls else MUTS):
         o = res.get('mutant:' + mid)
         n_mut += 1
-        if o is None:
-            print(f'MISSING mutant {mid}')
+        if not isinstance(o, dict):
+            out.append(f'MISSING mutant {mid}')
             bad += 1
             continue
         vals = [str(o.get(c, 'MISSING')) for c in PRIMARY[mid]]
@@ -519,21 +535,66 @@ def report(path):
         else:
             tag = 'MISSED'
         bad += 0 if tag in ('CAUGHT', 'EQUIV') else 1
-        print(f'{tag:12} {mid} want={WANT[mid]} -> {json.dumps(o)[:300]}')
-    print(f"rollback: {res.get('rollback')}")
+        out.append(f'{tag:14} {mid} want={WANT[mid]} -> {json.dumps(o)[:300]}')
+    out.append(f"rollback: {res.get('rollback')}")
     if res.get('rollback') != 'ok':
         bad += 1
-    print(f'controls={len(CONTROLS)} mutants={n_mut} problems={bad}')
+    out.append(f'controls={len(CONTROLS)} mutants={n_mut} problems={bad}')
     if not ctl or (n_mut == 0 and not only_controls):
-        print('FAIL: zero tests ran')
-        return 3
+        out.append('NOT OK: zero tests ran')
+        return out, False
+    return out, bad == 0
+
+
+def selftest(green_ok=False):
+    """report() on canned outputs in both transport shapes. With green_ok (the selftest's own control) a missed mutant
+    is asserted to be ok, which must fail."""
+    def full(mutant_override=None, control_override=None, rollback='ok'):
+        res = {'controls': {c: 'PASS' for c in CONTROLS}, 'rollback': rollback}
+        if control_override:
+            res['controls'].update(control_override)
+        for mid, *_ in MUTS:
+            o = {c: ('PASS' if WANT[mid] == 'green' else 'FAIL: x') for c in PRIMARY[mid]}
+            o.update({'applied': True, 'want': WANT[mid]})
+            res['mutant:' + mid] = o
+        if mutant_override:
+            res['mutant:' + mutant_override[0]] = mutant_override[1]
+        return 'T4263_RESULT ' + json.dumps(res)
+    wrap = lambda t: 'kt-sql: running\n' + json.dumps({'message': 'Failed to run sql query: ERROR:  P0001: ' + t + '\nCONTEXT:  PL/pgSQL function inline_code_block'})
+    plain = lambda t: 'ERROR:  ' + t + '\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE'
+    red = [m[0] for m in MUTS if WANT[m[0]] == 'red'][0]
+    missed = (red, {**{c: 'PASS' for c in PRIMARY[red]}, 'applied': True, 'want': 'red'})
+    crash = (red, {**{c: 'ERROR XX000 boom' for c in PRIMARY[red]}, 'applied': True, 'want': 'red'})
+    controls_only = 'T4263_RESULT ' + json.dumps({'controls': {c: 'PASS' for c in CONTROLS}, 'rollback': 'ok'})
+    cases = [('full, wrapped', wrap(full()), True), ('full, plain', plain(full()), True),
+             ('controls only, wrapped', wrap(controls_only), True),
+             ('missed mutant', wrap(full(missed)), green_ok), ('crash is not caught', wrap(full(crash)), False),
+             ('failed control', wrap(full(control_override={CONTROLS[0]: 'FAIL: x'})), False),
+             ('failed rollback', wrap(full(rollback='ERROR x')), False),
+             ('truncated', wrap(full())[:400], False), ('no result', wrap('something else'), False)]
+    sample = '/Users/daniel/Developer/Mad/scratchpad/4263/sync2/window1/s1-run2-out.txt'
+    bad = 0
+    for name, raw, want in cases:
+        got = report(raw)[1]
+        print(f"{'ok ' if got == want else 'BAD'} {name}: report ok={got}, expected {want}")
+        bad += got != want
+    if os.path.exists(sample):  # a real captured transport output (another harness): unwrap must find its RAISE text
+        u = unwrap(open(sample, encoding='utf-8').read())
+        found = 'S1_RESULT {' in u
+        print(f"{'ok ' if found else 'BAD'} real kt-sql sample unwrapped ({len(u)} characters)")
+        bad += not found
+    print(f'selftest: {len(cases)} cases, {bad} wrong')
     return 1 if bad else 0
 
 
 if __name__ == '__main__':
     a = sys.argv[1:]
     if a and a[0] == 'report':
-        sys.exit(report(a[1]))
+        lines, ok = report(open(a[1], encoding='utf-8').read())
+        print('\n'.join(lines))
+        sys.exit(0 if ok else 1)
+    if a and a[0] == 'selftest':
+        sys.exit(selftest(green_ok=len(a) > 1 and a[1] == '--control-green-ok'))
     if a and a[0] == 'check':
         mutants(show=True)
         bad = arity_problems(HARNESS)
