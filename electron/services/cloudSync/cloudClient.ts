@@ -46,6 +46,9 @@ export const KNOWN_ENVELOPE_ERRORS = [
   // /*CLAIM:refuse*/ :851 and the turn-off's /*SET:active:other*/ :726; the turn-off's /*SET:active:required*/ :722.
   "computer_not_active",
   "install_required",
+  // BACKLOG-4263 P5 (migration 20261123130000): the content paths while cloud_release_switches.messages_upload is
+  // false, /*GATE:upload:messages*/ :78-80.
+  "feature_off",
 ] as const;
 
 export type CallResult =
@@ -182,6 +185,16 @@ export class CloudClient {
   upsertChildren(kind: "party", expectedUserId: string, installId: string, cloudDealId: string, rows: JsonValue[]): Promise<CallResult> {
     void kind;
     return this.call("cloud_upsert_parties", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_cloud_deal_id: cloudDealId,
+      p_rows: rows,
+    });
+  }
+
+  /** BACKLOG-4263 P5: cloud_upsert_messages (migration 20261123130000 :60-153). */
+  upsertMessages(expectedUserId: string, installId: string, cloudDealId: string, rows: JsonValue[]): Promise<CallResult> {
+    return this.call("cloud_upsert_messages", {
       p_expected_user_id: expectedUserId,
       p_source_install_id: installId,
       p_cloud_deal_id: cloudDealId,

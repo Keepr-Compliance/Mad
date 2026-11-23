@@ -521,7 +521,8 @@ export function recordDealSynced(
 
 // ================================================================ children (PR-3)
 
-export type ChildEntity = "party" | "checklist" | "checklist_item";
+/** BACKLOG-4263 P5: "message" records are keyed `<transaction_id>|<channel_kind>|<wire id>` (cloudSyncMessagesDb). */
+export type ChildEntity = "party" | "checklist" | "checklist_item" | "message";
 
 export interface ChildStateRow {
   entity: ChildEntity;

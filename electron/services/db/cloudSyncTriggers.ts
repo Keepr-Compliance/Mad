@@ -28,6 +28,7 @@ import {
 import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
 import { clearApplyGuard, resetTodosAfterRestore, scanTodosAllEnabled } from "./cloudSyncTodoDbService";
 import { deleteDealArchiveForExistingDeals, purgeExpiredDealArchive } from "./cloudSyncDealArchive";
+import { DELETE_ALL_RECONCILE_MARKERS_SQL } from "./cloudSyncMessagesDb";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -249,6 +250,8 @@ export function resetSyncStateAfterRestore(db: SqlDb, now: Date = new Date()): b
   if (tableColumns(db, "cloud_sync_state").size === 0 || tableColumns(db, "cloud_sync_dirty").size === 0) return false;
   db.transaction(() => {
     db.prepare(RESET_STATE_AFTER_RESTORE_SQL).run();
+    // BACKLOG-4263 P5: an older file lacks records of emails and texts saved later: their reconcile is due now.
+    db.prepare(DELETE_ALL_RECONCILE_MARKERS_SQL).run();
     db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
     // BACKLOG-4263 plan §3.4 / E4: the cloud's todos win; waiting ops of online todos go, a full pull is owed.
     resetTodosAfterRestore(db, now);

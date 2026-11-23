@@ -35,7 +35,7 @@ import type { RpcTransport } from "../cloudClient";
 
 function states(db: TestDb, entity?: string) {
   return (
-    db.prepare("SELECT entity, local_id, transaction_id, cloud_id, content_hash, removed, last_status FROM cloud_sync_state ORDER BY entity, local_id").all() as Array<{
+    db.prepare("SELECT entity, local_id, transaction_id, cloud_id, content_hash, removed, last_status FROM cloud_sync_state WHERE entity <> 'switch' ORDER BY entity, local_id").all() as Array<{
       entity: string;
       local_id: string;
       transaction_id: string;
@@ -391,7 +391,7 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       await pass(e);
       const reads = e.server.calls.filter((c) => c.fn.startsWith("cloud_list"));
       expect([...new Set(reads.map((c) => c.fn))]).toEqual(["cloud_list_install_rows"]);
-      expect(reads.map((c) => c.args.p_kind)).toEqual(["deal", "party"]);
+      expect(reads.map((c) => c.args.p_kind).filter((k) => k !== "message")).toEqual(["deal", "party"]);
       expect(e.server.deals).toHaveLength(1);
       expect(e.server.children).toHaveLength(2);
       expect(states(db, "deal")[0].last_status).toBe("synced");
@@ -559,7 +559,7 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       for (let i = 0; i < 50 && !held; i++) await new Promise((r) => setImmediate(r));
       const del = e.service.deleteOnlineNotHere();
       await new Promise((r) => setImmediate(r));
-      expect(e.server.calls.filter((c) => c.fn === "cloud_list_install_rows")).toHaveLength(0);
+      expect(e.server.calls.filter((c) => c.fn === "cloud_list_install_rows" && c.args.p_kind !== "message")).toHaveLength(0);
       release();
       await del;
       const order = e.server.calls.map((c) => c.fn);

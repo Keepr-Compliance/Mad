@@ -277,6 +277,55 @@ export interface FakeDeal {
 }
 
 export type FakeKind = "party" | "checklist" | "checklist_item";
+
+/**
+ * BACKLOG-4263 P5: one cloud_deal_messages row (migration 20261112190000 :211-247). Message rows are NOT removed when
+ * their deal is soft-removed (`_cloud_todo_soft_remove_deal` touches only cloud_deals, 20261118110000 :471-481); they
+ * read as removed through the deal (S2 :392) and come back live with it.
+ */
+export interface FakeMessage {
+  id: string;
+  owner: string;
+  dealId: string;
+  channelKind: "email" | "text";
+  localId: string;
+  hash: string;
+  version: number;
+  removed: boolean;
+  bodyTruncated: boolean;
+  linkState: string;
+  row: Record<string, JsonValue>;
+}
+
+/** Postgres jsonb cannot hold NUL or an unpaired surrogate: the whole call fails before the function runs. */
+function bv_of(r: Record<string, JsonValue>): unknown {
+  return r.base_version;
+}
+
+export function jsonbUnstorable(value: unknown): boolean {
+  const walk = (v: unknown): boolean => {
+    if (typeof v === "string") {
+      for (let i = 0; i < v.length; i++) {
+        const c = v.charCodeAt(i);
+        if (c === 0) return true;
+        if (c >= 0xd800 && c <= 0xdbff) {
+          const n = v.charCodeAt(i + 1);
+          if (!(n >= 0xdc00 && n <= 0xdfff)) return true;
+          i++;
+        } else if (c >= 0xdc00 && c <= 0xdfff) return true;
+      }
+      return false;
+    }
+    if (Array.isArray(v)) return v.some(walk);
+    if (v && typeof v === "object") return Object.entries(v).some(([k, x]) => walk(k) || walk(x));
+    return false;
+  };
+  return walk(value);
+}
+
+const codePoints = (s: string) => Array.from(s).length;
+/** pg_input_is_valid(x, 'timestamptz') for the ISO shapes the desktop sends; extended years are refused here (NOT ESTABLISHED on Postgres). */
+const validTimestamptz = (v: string) => /^\d{4}-\d{2}-\d{2}/.test(v) && Number.isFinite(Date.parse(v));
 export interface FakeChild {
   id: string;
   owner: string;
@@ -338,6 +387,8 @@ export class FakeServer {
   /** cloud_release_switches.one_computer / messages_upload. */
   oneComputer = false;
   messagesUpload = false;
+  /** BACKLOG-4263 P5: cloud_deal_messages rows. */
+  messages: FakeMessage[] = [];
   /** cloud_autosave_settings.active_install_id / active_since (ISO). */
   activeInstall: string | null = null;
   activeSince: string | null = null;
@@ -386,6 +437,9 @@ export class FakeServer {
     if (!this.s1 && (fn === "cloud_claim_install" || (fn === "set_my_cloud_autosave" && "p_source_install_id" in args))) {
       return { data: null, error: { code: "PGRST202", status: 404 }, status: 404 };
     }
+    // BACKLOG-4263 P5: PostgREST hands the arguments to Postgres as jsonb; NUL or a lone surrogate fails the call
+    // (SQLSTATE 22P05, untranslatable_character; UNOBSERVED on the test database).
+    if (fn === "cloud_upsert_messages" && jsonbUnstorable(args.p_rows)) return { data: null, error: { code: "22P05", status: 400 }, status: 400 };
     return { data: this.handle(fn, args), error: null, status: 200 };
   };
 
@@ -450,6 +504,7 @@ export class FakeServer {
         const n = this.deals.filter((d) => d.owner === uid).length;
         this.deals = this.deals.filter((d) => d.owner !== uid);
         this.children = this.children.filter((c) => c.owner !== uid);
+        this.messages = this.messages.filter((m) => m.owner !== uid);
         return { success: true, enabled: false, deleted: { deals: n }, blobs_fenced: 0, ai_apps_disconnected: null };
       }
       case "cloud_claim_install": {
@@ -502,7 +557,8 @@ export class FakeServer {
           d.hash = p.content_hash as string;
           d.version += 1;
         }
-        return { ok: true, results: [{ local_id: d.localId, cloud_id: d.id, version: d.version, content_hash: d.hash, status }] };
+        // S1 (20261123100000 :254-257, :282-283): restored is true when this call un-removed the deal.
+        return { ok: true, results: [{ local_id: d.localId, cloud_id: d.id, version: d.version, content_hash: d.hash, status, restored: !!soft }] };
       }
       case "cloud_delete_deal": {
         const i = this.deals.findIndex((d) => d.id === a.p_cloud_deal_id && d.owner === uid);
@@ -580,6 +636,7 @@ export class FakeServer {
         return { ok: true, results: out };
       }
       case "cloud_tombstone": {
+        if (a.p_kind === "message") return this.tombstoneMessages(uid, a);
         if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" };
         const out: JsonValue[] = [];
         for (const id of a.p_cloud_ids as string[]) {
@@ -605,8 +662,11 @@ export class FakeServer {
         }
         return { ok: true, results: out };
       }
+      case "cloud_upsert_messages":
+        return this.upsertMessages(uid, a);
       case "cloud_list_install_rows": {
         const kind = a.p_kind as string;
+        if (kind === "message") return this.listMessageRows(uid, a);
         if (!["deal", "party", "checklist", "checklist_item"].includes(kind)) return { ok: false, error: "invalid_input" };
         const limit = Math.min(Math.max(Number(a.p_limit) || 0, 1), 1000);
         const all =
@@ -1040,6 +1100,7 @@ export class FakeServer {
    * deleted and forgotten_at takes a new number (observed Q2h, Q2k).
    */
   purgeDealOnline(d: FakeDeal): void {
+    this.messages = this.messages.filter((m) => m.dealId !== d.id);
     const seqs = [d.changeSeq ?? 0, ...this.todos.filter((t) => t.dealId === d.id).map((t) => t.changeSeq ?? 0), ...this.events.filter((e) => e.dealId === d.id).map((e) => e.seq)];
     this.softRemovedDeals = this.softRemovedDeals.filter((x) => x !== d);
     this.todos = this.todos.filter((t) => t.dealId !== d.id);
@@ -1058,6 +1119,132 @@ export class FakeServer {
     d.removedKind = null;
     d.changeSeq = this.nextSeq(d.owner);
     for (const t of this.todos) if (t.dealId === d.id && !t.removed && !t.purged) t.changeSeq = this.nextSeq(d.owner);
+  }
+
+  // ---------------------------------------------------------------- BACKLOG-4263 P5, transcribed from S2
+  // supabase/migrations/20261123130000_backlog_4263_messages_up_server.sql
+
+  /** cloud_upsert_messages :60-151, checks in the function's order; whole-call vs per-row as there. */
+  upsertMessages(uid: string, a: Record<string, JsonValue>): unknown {
+    if (!this.entitled()) return { ok: false, error: "not_entitled" }; // :69-71
+    if (this.removedInstalls.has(`${uid}|${a.p_source_install_id}`)) return { ok: false, error: "install_removed" }; // :72-74
+    if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" }; // :75-77
+    if (!this.messagesUpload) return { ok: false, error: "feature_off" }; // :78-80
+    const deal = this.deals.find((d) => d.id === a.p_cloud_deal_id && d.owner === uid && d.install === a.p_source_install_id);
+    if (!deal) return { ok: false, error: "not_found" }; // :81-86 (owner, install, live)
+    const rows = a.p_rows as Array<Record<string, JsonValue>>;
+    if (!Array.isArray(rows)) return { ok: false, error: "invalid_input" }; // :87
+    if (rows.length > 500) return { ok: false, error: "batch_too_large" }; // :88
+    if (Buffer.byteLength(JSON.stringify(rows), "utf8") > 16_777_216) return { ok: false, error: "batch_too_large" }; // :89
+    for (const [i, r] of rows.entries()) {
+      // :90-101, whole call
+      const bv = r && typeof r === "object" ? r.base_version : undefined;
+      if (
+        !r || typeof r !== "object" || Array.isArray(r) ||
+        typeof r.local_id !== "string" || codePoints(r.local_id) < 1 || codePoints(r.local_id) > 200 ||
+        typeof r.content_hash !== "string" || !/^[0-9a-f]{64}$/.test(r.content_hash) ||
+        (r.channel_kind !== "email" && r.channel_kind !== "text") ||
+        typeof r.hidden_from_export !== "boolean" ||
+        (bv !== undefined && bv !== null && !(typeof bv === "number" && Number.isInteger(bv)))
+      ) {
+        return { ok: false, error: "invalid_input", detail: { index: i } };
+      }
+    }
+    const out: JsonValue[] = [];
+    for (const r of rows) {
+      const localId = r.local_id as string;
+      // :104-111 per row
+      let bad: string | null = null;
+      for (const f of ["linked_at", "received_at", "sent_at", "source_updated_at"]) {
+        const v = r[f];
+        if (bad === null && v !== undefined && v !== null && (typeof v !== "string" || !validTimestamptz(v))) bad = f;
+      }
+      const lc = r.link_confidence;
+      if (lc !== undefined && lc !== null && typeof lc !== "number") bad = "link_confidence";
+      if (bad === null && r.channel !== undefined && r.channel !== null && !["email", "sms", "imessage"].includes(r.channel as string)) bad = "channel";
+      const origin = (r.link_origin as string | null | undefined) ?? "link";
+      if (bad === null && !["link", "review_queue"].includes(origin)) bad = "link_origin";
+      if (bad !== null) {
+        out.push({ local_id: localId, status: "rejected", reason: "invalid_value", field: bad });
+        continue;
+      }
+      if (origin === "review_queue") {
+        out.push({ local_id: localId, status: "rejected", reason: "review_queue_not_accepted" }); // :112-115
+        continue;
+      }
+      if (r.channel_kind === "text" && (r.thread_key === undefined || r.thread_key === null)) {
+        out.push({ local_id: localId, status: "rejected", reason: "thread_key_required" }); // :116-119
+        continue;
+      }
+      let body = typeof r.body_text === "string" ? r.body_text : null;
+      let trunc = false;
+      if (body !== null && codePoints(body) > 1_000_000) {
+        body = Array.from(body).slice(0, 1_000_000).join(""); // :120-121
+        trunc = true;
+      }
+      const linkState = r.match_reason === "address_missing" ? "needs_review" : "linked"; // :122-124
+      let m = this.messages.find((x) => x.dealId === deal.id && x.channelKind === r.channel_kind && x.localId === localId);
+      if (!m) {
+        m = { id: cloudId(), owner: uid, dealId: deal.id, channelKind: r.channel_kind as "email" | "text", localId, hash: r.content_hash as string, version: 0, removed: false, bodyTruncated: false, linkState, row: {} };
+        this.messages.push(m);
+      }
+      // _cloud_row_status (M1 :390-398)
+      let status = "applied";
+      if (m.version > 0 && !m.removed && m.hash === r.content_hash) status = "unchanged";
+      else if (m.version > 0 && !m.removed && typeof bv_of(r) === "number" && bv_of(r) !== m.version) status = "conflict";
+      if (status === "applied") {
+        m.hash = r.content_hash as string;
+        m.version += 1;
+        m.removed = false;
+        m.bodyTruncated = trunc;
+        m.linkState = linkState;
+        m.row = { ...r, body_text: body };
+      }
+      out.push({ local_id: localId, cloud_id: m.id, version: m.version, content_hash: m.hash, status, body_truncated: m.bodyTruncated }); // :146-147
+    }
+    deal.lastSyncedAt = new Date(this.serverNow()).toISOString(); // :149
+    return { ok: true, results: out };
+  }
+
+  /** cloud_tombstone('message') :297-374: per id; scrubs content; not gated by messages_upload. */
+  tombstoneMessages(uid: string, a: Record<string, JsonValue>): unknown {
+    const ids = a.p_cloud_ids as string[];
+    if (!a.p_source_install_id || !Array.isArray(ids) || ids.length > 1000) return { ok: false, error: "invalid_input" }; // :309-311
+    if (this.removedInstalls.has(`${uid}|${a.p_source_install_id}`)) return { ok: false, error: "install_removed" }; // :313-315
+    if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" }; // :316-318
+    const out: JsonValue[] = [];
+    for (const id of ids) {
+      const m = this.messages.find((x) => x.id === id && x.owner === uid);
+      const deal = m && [...this.deals, ...this.softRemovedDeals].find((d) => d.id === m.dealId && d.install === a.p_source_install_id);
+      if (!m || !deal) {
+        out.push({ cloud_id: id, status: "not_found" }); // :335-338
+        continue;
+      }
+      if (m.removed) {
+        out.push({ cloud_id: id, status: "unchanged", version: m.version }); // :339-342
+        continue;
+      }
+      m.removed = true; // :348-350 scrub
+      m.version += 1;
+      m.row = { ...m.row, subject: null, body_text: null, participants: null };
+      m.bodyTruncated = false;
+      out.push({ cloud_id: id, status: "removed", version: m.version });
+    }
+    return { ok: true, results: out };
+  }
+
+  /** cloud_list_install_rows('message') :377-418: removed = row or deal removed; channel_kind added. */
+  listMessageRows(uid: string, a: Record<string, JsonValue>): unknown {
+    const limit = Math.min(Math.max(Number(a.p_limit) || 1000, 1), 1000);
+    const live = new Set(this.deals.filter((d) => d.owner === uid && d.install === a.p_source_install_id).map((d) => d.id));
+    const soft = new Set(this.softRemovedDeals.filter((d) => d.owner === uid && d.install === a.p_source_install_id).map((d) => d.id));
+    const all = this.messages
+      .filter((m) => m.owner === uid && (live.has(m.dealId) || soft.has(m.dealId)))
+      .map((m) => ({ cloud_id: m.id, cloud_deal_id: m.dealId, local_id: m.localId, content_hash: m.hash, removed: m.removed || soft.has(m.dealId), channel_kind: m.channelKind }))
+      .sort((x, y) => (x.cloud_id < y.cloud_id ? -1 : 1));
+    const after = typeof a.p_after === "string" ? a.p_after : null;
+    const page = all.filter((x) => after === null || x.cloud_id > after).slice(0, limit);
+    return { ok: true, rows: page, next_after: page.length === limit ? page[page.length - 1].cloud_id : null };
   }
 
   /** The daily purge of one removed todo (observed O8): no content, a new number, the forgotten markers move. */
