@@ -666,37 +666,61 @@ def report_split(raw_controls, raw_mutants):
                                                                      f'mutants {"ok" if okm else "NOT OK"})']), okc and okm
 
 
+PROBE_KEYS = ('fixture_ms', 'strip_big1_ms', 'getm_big1_ms', 'big1_parts', 'big1_frame_bytes')
+PARTS_RANGE = (55, 70)   # m_big1's part count as derived offline (about 60); outside it the size assumption is wrong
+
+
+def fixtures_decision(t):
+    """(decision, estimates, why) from the fixtures call's timings. decision: FULL, SPLIT or STOP.
+    STOP when the probe failed, a value is missing or not a number, or the part count is outside PARTS_RANGE. Otherwise
+    FULL if the full call's estimate is at most 45 s; else SPLIT if the controls and the mutants estimates are both at
+    most 200 s; else STOP. Estimates (rule of thumb, not measured): the fixtures once, every get_message call on m_big1
+    (all parts and the one after the last in c_c9b_parts_big, its first call, about 8 fast-failing mutant calls), plus a
+    fixed allowance for every other call and the 100,001-row loops."""
+    if not isinstance(t, dict) or t.get('getm_big1_ok') is not True:
+        return 'STOP', None, 'probe: get_message of m_big1 part 1 did not answer ok'
+    bad = [k for k in PROBE_KEYS if isinstance(t.get(k), bool) or not isinstance(t.get(k), (int, float))]
+    if bad:
+        return 'STOP', None, 'probe: missing or not a number: ' + ', '.join(bad)
+    parts = t['big1_parts']
+    if parts != int(parts) or not PARTS_RANGE[0] <= parts <= PARTS_RANGE[1]:
+        return 'STOP', None, f'probe: big1_parts {parts} is outside {PARTS_RANGE[0]}..{PARTS_RANGE[1]}'
+    fx, gm, parts = float(t['fixture_ms']), float(t['getm_big1_ms']), int(parts)
+    est = {'full': (fx + gm * (parts + 10) + 15000) / 1000, 'controls': (fx + gm * (parts + 2) + 8000) / 1000,
+           'mutants': (fx + gm * 8 + 9000) / 1000}
+    if est['full'] <= 45:
+        return 'FULL', est, 'full call estimate at most 45 s'
+    if est['controls'] <= 200 and est['mutants'] <= 200:
+        return 'SPLIT', est, 'full call estimate over 45 s; both split calls at most 200 s'
+    return 'STOP', est, 'a split call estimate is over 200 s'
+
+
 def report_fixtures(raw):
-    """(line, ok) for harness-t-fixtures.sql's output: ok only when T4263_FIXTURES_OK carries every expected count."""
+    """(text, ok) for harness-t-fixtures.sql's output. ok only when T4263_FIXTURES_OK carries every expected count, the
+    timing probe answered ok with numbers, and the decision is FULL or SPLIT; NOT OK or STOP otherwise (exit 1)."""
     msg = unwrap(raw)
     i = msg.find('T4263_FIXTURES_OK ')
     if i < 0:
-        return 'NOT OK: the fixtures did not run to the end: ' + msg[:400].replace('\n', ' '), False
+        return 'NOT OK: the fixtures did not run to the end: ' + msg[:400].replace('\n', ' ') + '\ndecision: STOP (the fixtures call did not succeed)', False
     try:
         got, _ = json.JSONDecoder().raw_decode(msg[i + len('T4263_FIXTURES_OK '):])
     except ValueError as e:
-        return f'NOT OK: T4263_FIXTURES_OK is not complete JSON ({e})', False
+        return f'NOT OK: T4263_FIXTURES_OK is not complete JSON ({e})' + '\ndecision: STOP (the fixtures call did not succeed)', False
     if not isinstance(got, dict):
-        return 'NOT OK: T4263_FIXTURES_OK is not an object', False
-    diff = {k: (got.get(k), v) for k, v in FIXTURE_EXPECT.items() if got.get(k) != v}
+        return 'NOT OK: T4263_FIXTURES_OK is not an object' + '\ndecision: STOP (the fixtures call did not succeed)', False
     t = got.get('timings') if isinstance(got.get('timings'), dict) else {}
     tline = 'timings: ' + json.dumps(t, sort_keys=True)
-    try:
-        # Estimate (rule of thumb, not measured): the fixtures once, plus every get_message call on m_big1 (all parts and
-        # the part after the last in c_c9b_parts_big, its first call, and about 8 fast-failing mutant calls), plus 15 s
-        # for every other call and the two 100,001-row loops.
-        fx, gm, parts = float(t['fixture_ms']), float(t['getm_big1_ms']), int(t['big1_parts'])
-        full_s = (fx + gm * (parts + 10) + 15000) / 1000
-        ctl_s = (fx + gm * (parts + 2) + 8000) / 1000
-        mut_s = (fx + gm * 8 + 9000) / 1000
-        tline += (f'\nestimate: full call {full_s:.0f} s; controls call {ctl_s:.0f} s; mutants call {mut_s:.0f} s. Rule: '
-                  f'full call when the estimate is at most 45 s, else the two split calls'
-                  f'{" (SPLIT)" if full_s > 45 else " (FULL)"}; any single call over 200 s: do not run it, report')
-    except (KeyError, TypeError, ValueError):
-        tline += '\nestimate: not computable (a timing is missing)'
+    diff = {k: (got.get(k), v) for k, v in FIXTURE_EXPECT.items() if got.get(k) != v}
     if diff:
-        return 'NOT OK: counts differ (got, expected): ' + json.dumps(diff) + '\n' + tline, False
-    return 'OK: fixtures ran to the end; counts as expected\n' + tline, True
+        return 'NOT OK: counts differ (got, expected): ' + json.dumps(diff) + '\n' + tline + '\ndecision: STOP (counts)', False
+    decision, est, why = fixtures_decision(t)
+    if est is None:
+        return 'NOT OK: ' + why + '\n' + tline + '\ndecision: STOP (no estimate from a failed probe)', False
+    eline = (f"decision: {decision} ({why}); estimates: full {est['full']:.1f} s, controls {est['controls']:.1f} s, "
+             f"mutants {est['mutants']:.1f} s")
+    if decision == 'STOP':
+        return 'NOT OK: fixtures ran, but no call fits the rule\n' + tline + '\n' + eline, False
+    return 'OK: fixtures ran to the end; counts as expected\n' + tline + '\n' + eline, True
 
 
 def selftest(green_ok=False):
@@ -757,19 +781,39 @@ def selftest(green_ok=False):
         bad += got != want
     cases += [(n_, None, w) for n_, _, _, w in split_cases]
     fwrap = lambda t: json.dumps({'message': 'Failed to run sql query: ERROR:  P0001: ' + t + '\nCONTEXT:  PL/pgSQL function inline_code_block'})
-    timed = {**FIXTURE_EXPECT, 'timings': {'fixture_ms': 4000, 'getm_big1_ms': 400, 'big1_parts': 70, 'strip_big1_ms': 200,
-                                            'getm_big1_ok': True, 'big1_frame_bytes': 56000}}
-    fcases = [('fixtures ok', fwrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT)), True),
-              ('fixtures ok with timings', fwrap('T4263_FIXTURES_OK ' + json.dumps(timed)), True),
-              ('fixtures ok, timings say the probe call failed (judged on counts only)',
-               fwrap('T4263_FIXTURES_OK ' + json.dumps({**timed, 'timings': {**timed['timings'], 'getm_big1_ok': False}})), True),
+    def T(fx_ms, gm_ms, parts, ok=True, drop=None):
+        tm = {'fixture_ms': fx_ms, 'getm_big1_ms': gm_ms, 'big1_parts': parts, 'strip_big1_ms': 200, 'strip_big1_chars': 833334,
+              'getm_big1_ok': ok, 'big1_frame_bytes': 56000, 'big1_part1_bytes': 86000}
+        if drop:
+            tm.pop(drop)
+        return fwrap('T4263_FIXTURES_OK ' + json.dumps({**FIXTURE_EXPECT, 'timings': tm}))
+    # full = (fx + gm*(parts+10) + 15000)/1000; controls = (fx + gm*(parts+2) + 8000)/1000; mutants = (fx + 8*gm + 9000)/1000
+    fcases = [('fixtures: no timings at all', fwrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT)), False),
               ('fixtures crashed', fwrap('FIXTURE tombstone message failed: {}'), False),
               ('fixtures count differs', fwrap('T4263_FIXTURES_OK ' + json.dumps({**FIXTURE_EXPECT, 'A_files': 1004})), False),
-              ('fixtures truncated', fwrap('T4263_FIXTURES_OK {"A_deals": 6'), False)]
+              ('fixtures truncated', fwrap('T4263_FIXTURES_OK {"A_deals": 6'), False),
+              ('probe failed: getm not ok, parts null', T(3000, 15, None, ok=False), False),
+              ('probe failed: getm not ok, parts present', T(3000, 15, 60, ok=False), False),
+              ('probe: a timing missing', T(3000, 400, 60, drop='strip_big1_ms'), False),
+              ('probe: a timing not a number', fwrap('T4263_FIXTURES_OK ' + json.dumps({**FIXTURE_EXPECT, 'timings': {'fixture_ms': '3000', 'getm_big1_ms': 400, 'big1_parts': 60, 'strip_big1_ms': 1, 'big1_frame_bytes': 1, 'getm_big1_ok': True}})), False),
+              ('FULL: full estimate exactly 45 s', T(23000, 100, 60), True),
+              ('SPLIT: full estimate just over 45 s', T(23001, 100, 60), True),
+              ('SPLIT: controls estimate exactly 200 s', T(130000, 1000, 60), True),
+              ('STOP: controls estimate just over 200 s', T(130001, 1000, 60), False),
+              ('SPLIT: mutants estimate exactly 200 s', T(190920, 10, 55), True),
+              ('STOP: mutants estimate just over 200 s', T(190921, 10, 55), False),
+              ('STOP: parts 54', T(10000, 100, 54), False),
+              ('FULL: parts 55', T(10000, 100, 55), True),
+              ('FULL: parts 70', T(10000, 100, 70), True),
+              ('STOP: parts 71', T(10000, 100, 71), False)]
     for name, raw, want in fcases:
-        got = report_fixtures(raw)[1]
-        print(f"{'ok ' if got == want else 'BAD'} {name}: report-fixtures ok={got}, expected {want}")
-        bad += got != want
+        text, got = report_fixtures(raw)
+        dec = re.search(r'^decision: (FULL|SPLIT|STOP)\b', text, re.M)
+        dec = dec.group(1) if dec else None
+        want_dec = name.split(':')[0] if name.split(':')[0] in ('FULL', 'SPLIT', 'STOP') else ('STOP' if not want else None)
+        right = got == want and (want_dec is None or dec == want_dec)
+        print(f"{'ok ' if right else 'BAD'} {name}: report-fixtures ok={got} decision={dec}, expected {want} {want_dec or ''}")
+        bad += not right
     cases += fcases
     print(f'selftest: {len(cases)} cases, {bad} wrong')
     return 1 if bad else 0
