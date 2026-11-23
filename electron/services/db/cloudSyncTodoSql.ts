@@ -440,6 +440,13 @@ export const CLOUD_SYNC_TODO_TRIGGERS: readonly TodoTriggerSpec[] = [
 ];
 
 /**
+ * BACKLOG-4263 P0 (the todo outbox watcher): the outbox's newest edit time and edit sequence for one project.
+ * One read on the primary key's first column (project_ref): it visits only the unsent changes of this Keepr
+ * Cloud project on this computer. No index on edited_at; the table holds only what is waiting to be sent.
+ */
+export const OUTBOX_TOP_SQL = "SELECT max(edited_at) AS at, max(edit_seq) AS seq FROM cloud_sync_todo_outbox WHERE project_ref = ?";
+
+/**
  * Turn-on (R3): this computer's counter row, created when it is absent, from
  * the install row. One bound parameter: the project ref.
  */

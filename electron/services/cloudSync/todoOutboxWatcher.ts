@@ -20,6 +20,7 @@
  */
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
+import { OUTBOX_TOP_SQL } from "../db/cloudSyncTodoSql";
 import type { PassOutcome, PassSummary } from "./runner";
 
 /** How often the watcher looks at the outbox. */
@@ -29,12 +30,6 @@ export const MIN_KICK_GAP_MS = 10_000;
 /** After 1, 2, 3 failed passes in a row; after more, the watcher waits for the 60 s timer. */
 export const FAILED_PASS_GAPS_MS = [10_000, 20_000, 40_000] as const;
 
-/**
- * One read on the primary key's first column (project_ref): it visits only the unsent changes of this Keepr
- * Cloud project on this computer. There is no index on edited_at; none is needed for a table that holds only
- * what is waiting to be sent (a sent change is deleted when the server answers it).
- */
-export const OUTBOX_TOP_SQL = "SELECT max(edited_at) AS at, max(edit_seq) AS seq FROM cloud_sync_todo_outbox WHERE project_ref = ?";
 
 interface OutboxTop {
   at: string | null;
