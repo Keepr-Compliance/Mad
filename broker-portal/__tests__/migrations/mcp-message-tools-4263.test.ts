@@ -261,10 +261,12 @@ describe('BACKLOG-4263 P9 migration file', () => {
     expect(SQL).not.toMatch(/GRANT EXECUTE ON FUNCTION public\._mcp_prune_message_reads/);
   });
 
-  it('the tool CHECK swap is the last statement, after a 3 s lock timeout, and keeps every earlier tool', () => {
-    const swap = SQL.indexOf("SET LOCAL lock_timeout = '3s';");
-    expect(swap).toBeGreaterThan(SQL.lastIndexOf('$fn$;'));
-    expect(swap).toBeGreaterThan(SQL.indexOf('$cron4263t$;'));
+  it('the tool CHECK swap is the last statement and keeps every earlier tool; lock_timeout is set once, right after the pre-check', () => {
+    const lt = SQL.indexOf("SET LOCAL lock_timeout = '3s';");
+    expect(SQL.split("SET LOCAL lock_timeout = '3s';")).toHaveLength(2);
+    expect(lt).toBe(SQL.indexOf('$pre4263t$;') + '$pre4263t$; '.length);
+    expect(SQL.indexOf('DO $chk4263t$')).toBeGreaterThan(SQL.lastIndexOf('$fn$;'));
+    expect(SQL.indexOf('DO $chk4263t$')).toBeGreaterThan(SQL.indexOf('$cron4263t$;'));
     expect(SQL.trim().endsWith(
       "CHECK (tool IS NULL OR tool IN ('get_status', 'list_deals', 'get_deal', 'get_deal_checklists', 'list_all_deals', 'update_todo', 'add_todo', 'remove_todo', 'restore_todo', 'find_people', 'list_todos', 'list_deal_messages', 'get_message'));"
     )).toBe(true);
