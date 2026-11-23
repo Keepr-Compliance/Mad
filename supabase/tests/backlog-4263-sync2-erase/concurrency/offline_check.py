@@ -241,6 +241,11 @@ for case, mut in CASES:
     check(f'switch {label}: {len(sw)} DO block(s) write the switch; each has no EXCEPTION clause, no RETURN, ends in RAISE; none outside a DO',
           not top and all(raising_do_ok(blk) for blk in sw) and (len(sw) == 1) == (case != 'attach'))
     check(f'absent {label}: first call is the probe', bool(texts) and '/*t:precheck*/' in texts[0])
+    st = [x for x in texts if '/*t:setup*/' in x]
+    outside = [re.sub(r'\bDO\s+\$(\w*)\$.*?\$\1\$', '', x, flags=re.S) for x in st]
+    check(f'setup {label}: the replica setting and the auth.users insert sit in one DO, never at top level',
+          len(st) == 1 and not re.search(r'session_replication_role', re.sub(r'--[^\n]*', '', outside[0]))
+          and any('session_replication_role = replica' in blk and 'INSERT INTO auth.users' in blk for blk in do_blocks(st[0])))
     au = [s for t in texts if 'CREATE FUNCTION' not in t for s in re.findall(r'DELETE\s+FROM\s+auth\.users\b[^;]*;', t)]
     check(f'bykey {label}: every auth.users DELETE names the user id (and this run\'s exact email)',
           len(au) == 1 and all(re.search(r"\bWHERE\s+id\s*=\s*'" + USER + r"'(::uuid)?(\s+AND\b|\s*;)", s) for s in au)
