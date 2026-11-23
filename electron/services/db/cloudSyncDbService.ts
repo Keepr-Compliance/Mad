@@ -38,6 +38,7 @@ import {
   UPDATE_DIRTY_FAILURE_SQL,
   UPSERT_DEAL_STATE_SQL,
   DELETE_STATE_AFTER_MOVE_SQL,
+  RECORD_ACCEPTED_AT_SQL,
   DELETE_SWITCH_MARKER_SQL,
   MOVE_PENDING_ID,
   SELECT_SWITCH_MARKER_SQL,
@@ -718,6 +719,11 @@ export function setOrphanCount(
 }
 
 // ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
+
+/** SR MF-2: records a notice acceptance made on this computer while it was refused (RECORD_ACCEPTED_AT_SQL). */
+export function recordAcceptedAt(db: SqlDb, projectRef: string, userId: string, acceptedAt: string | null): void {
+  db.prepare(RECORD_ACCEPTED_AT_SQL).run(acceptedAt, projectRef, userId);
+}
 
 /**
  * Plan §13.1 step 1: written before cloud_claim_install(p_replace = true) is called. `reclaim`: this computer's online

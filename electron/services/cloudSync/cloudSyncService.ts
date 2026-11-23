@@ -444,7 +444,13 @@ export class CloudSyncService {
     const installId = this.ensureInstallId();
     // BACKLOG-4263 P2 (plan §2.5, P2 acceptance condition 2): claim this computer before enabling anything here.
     const claimed = await this.claimBeforeEnable(userId, installId, read.state);
-    if (claimed) return claimed;
+    if (claimed) {
+      // SR MF-2: the notice was accepted here; a computer that stays on here records it (see RECORD_ACCEPTED_AT_SQL).
+      if (claimed.error === "computer_not_active" && acceptedAt !== null) {
+        store.recordAcceptedAt(this.deps.db(), this.deps.projectRef as string, userId, acceptedAt);
+      }
+      return claimed;
+    }
     store.enableForUser(this.deps.db(), this.deps.projectRef as string, userId, { noticeVersion, acceptedAt }, this.now());
     this.runner?.turnOffDropped.delete(userId);
     this.refreshSchedule();

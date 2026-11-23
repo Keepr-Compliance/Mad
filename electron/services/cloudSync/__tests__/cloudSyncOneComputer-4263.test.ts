@@ -641,4 +641,95 @@ describe(`Keepr Cloud one computer per account [${DRIVER}]`, () => {
       expect((await a.e.service.getView()).status).toBe("other_computer");
     });
   });
+
+  // ------------------------------------------------------------ SR review fixes (PR #3638)
+  describe("SR review: no licence, and a notice re-accepted while refused", () => {
+    async function refusedB(opts: { todo?: boolean } = {}) {
+      const { server, clock } = account({ oneComputer: true });
+      const b = computer(server, { on: true, todo: opts.todo });
+      await startAndPass(b.e);
+      await pass(b.e);
+      const a = computer(server);
+      await moveTo(a, clock);
+      expect((await pass(b.e)).outcome).toBe("other_computer");
+      return { server, clock, a, b };
+    }
+    const outboxParts = (db: TestDb) => {
+      const o = readTodoOutbox(db, PROJECT, USER_A);
+      return [...o.ready.map((x) => x.part), ...(o.waiting ? [`waiting:${o.waiting}`] : [])].sort();
+    };
+    const offCalls = (server: FakeServer) => server.callsTo("set_my_cloud_autosave").filter((c) => c.args.p_enabled === false).length;
+
+    it("MF-1 no licence, not the active computer, online: the turn-off goes through and the online copy is deleted (plan §12.3)", async () => {
+      const { server, b } = await refusedB();
+      server.licensed = false;
+      expect((await b.e.service.getView()).status).toBe("not_active");
+      const r = await b.e.service.turnOff();
+      expect(r).toEqual({ success: true });
+      expect(offCalls(server)).toBe(1);
+      expect(server.callsTo("set_my_cloud_autosave").at(-1)!.args).toMatchObject({ p_source_install_id: installOf(b.db) });
+      expect(server.deals).toHaveLength(0);
+      expect(server.enabled).toBe(false);
+      expect(settings(b.db)).toMatchObject({ enabled: 0, turn_off_owed_at: null });
+    });
+
+    it("MF-1 no licence, not the active computer, offline: the owed turn-off is kept and applied at the next pass", async () => {
+      const { server, b } = await refusedB();
+      server.licensed = false;
+      goOffline(b);
+      expect(await b.e.service.turnOff()).toMatchObject({ success: true, pendingOnline: true });
+      goOnline(b);
+      const s = await pass(b.e);
+      expect(s.outcome).toBe("not_enabled");
+      expect(offCalls(server)).toBe(1);
+      expect(server.enabled).toBe(false);
+      expect(server.deals).toHaveLength(0);
+      expect(settings(b.db)?.turn_off_owed_at).toBeNull();
+    });
+
+    it("MF-1 licensed, not the active computer: still refused online and dropped offline, nothing online deleted", async () => {
+      const { server, b } = await refusedB();
+      expect(await b.e.service.turnOff()).toEqual({ success: false, error: "computer_not_active" });
+      expect(offCalls(server)).toBe(0);
+      expect(server.enabled).toBe(true);
+      expect(server.deals.length).toBeGreaterThan(0);
+    });
+
+    it("M18 a refused computer's pass changes nothing here, even when the account's acceptance time changed elsewhere", async () => {
+      const { server, b } = await refusedB({ todo: true });
+      b.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("queued while refused", b.item);
+      server.acceptedAt = "2026-11-14T12:30:00.000Z";
+      const rows = stateRows(b.db);
+      const outbox = outboxParts(b.db);
+      expect((await pass(b.e)).outcome).toBe("other_computer");
+      expect(stateRows(b.db)).toEqual(rows);
+      expect(outboxParts(b.db)).toEqual(outbox);
+    });
+
+    it("MF-2 notice re-accepted on the refused computer, then the move: the first pass keeps the deal records and the queued deletion reaches the server", async () => {
+      const { server, clock, b } = await refusedB({ todo: true });
+      b.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("queued while refused", b.item);
+      b.db.prepare("DELETE FROM transaction_checklist_items WHERE id = ?").run(b.item);
+      // The account's notice changes (the accepted version is now older than the current one).
+      server.noticeVersion = 0;
+      expect(await b.e.service.getView()).toMatchObject({ status: "off", otherComputerActive: true });
+      expect(await b.e.service.turnOn(1)).toEqual({ success: false, error: "computer_not_active" });
+      const local = (b.db.prepare("SELECT accepted_at FROM cloud_sync_settings WHERE user_id = ?").get(USER_A) as { accepted_at: string }).accepted_at;
+      expect(local).toBe(server.acceptedAt);
+      // Still refused: a pass changes nothing here.
+      const rows = stateRows(b.db);
+      expect((await pass(b.e)).outcome).toBe("other_computer");
+      expect(stateRows(b.db)).toEqual(rows);
+      clock.t += 61_000;
+      expect(await b.e.service.useThisComputer()).toEqual({ success: true });
+      await b.e.service.runner!.whenIdle();
+      const dealRows = stateRows(b.db).filter((r) => r.startsWith("deal:"));
+      expect(dealRows).toHaveLength(1);
+      for (let i = 0; i < 3; i++) await pass(b.e);
+      expect(stateRows(b.db).filter((r) => r.startsWith("deal:"))).toEqual(dealRows);
+      const online = server.todos.find((t) => t.entity === "item" && t.localId === b.item);
+      expect(online?.parts.removed?.value ?? null).not.toBeNull();
+      expect(b.db.prepare("SELECT id FROM transaction_checklist_items WHERE id = ?").get(b.item)).toBeUndefined();
+    });
+  });
 });

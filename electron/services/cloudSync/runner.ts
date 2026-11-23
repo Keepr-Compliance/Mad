@@ -522,7 +522,10 @@ export class CloudSyncRunner {
 
     // BACKLOG-4263 P2 (plan §2.5): another computer is active. Checked BEFORE the owed turn-off, which would
     // otherwise delete the active computer's online copy, and before any write or local preparation.
-    const otherActive = otherComputerActive(state, installId);
+    // Only while licensed, mirroring the server's turn-off check (migration 20261123100000 marker SET:active:licence):
+    // without a licence every writer refuses not_entitled anyway, and the turn-off must go through from any computer
+    // (plan §12.3) — the pass falls to the licence branch (paused, no write) or settles the owed turn-off.
+    const otherActive = otherComputerActive(state, installId) && state.licensed;
 
     // A turn-off made offline is still owed (plan §8.8).
     if (fresh.turn_off_owed_at) {

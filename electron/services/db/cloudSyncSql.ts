@@ -425,6 +425,15 @@ export const DELETE_SWITCH_MARKER_SQL = `DELETE FROM cloud_sync_state
  WHERE project_ref = ? AND owner_user_id = ? AND entity = '${SWITCH_ENTITY}' AND local_id = ?`;
 
 /**
+ * BACKLOG-4263 P2 (SR MF-2): the notice was re-accepted on this computer while another computer was active (the
+ * claim refused, so nothing was enabled). The acceptance was made here, so this computer records it; otherwise the
+ * first pass after a later move reads the new server value as "turned off and on elsewhere" and resets everything.
+ * Only for a computer that is on here.
+ */
+export const RECORD_ACCEPTED_AT_SQL = `UPDATE cloud_sync_settings SET accepted_at = ?
+ WHERE project_ref = ? AND user_id = ? AND enabled = 1`;
+
+/**
  * Plan §14 D1: after a move, only the records of what was saved online that the erase job may have scrubbed (emails,
  * texts and files) go, plus the move marker. Deal and party records and the messages_upload sentinel are kept, so
  * todo changes keep their deal's online id and the History and Removed screens keep working.
