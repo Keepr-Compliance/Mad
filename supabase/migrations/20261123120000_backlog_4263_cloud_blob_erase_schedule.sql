@@ -7,8 +7,10 @@
 -- invoke function, or without the URL secret (checked by name only). Re-running replaces the job (cron.schedule
 -- upserts by name).
 -- Stop: SELECT cron.unschedule('cloud-blob-erase');
+-- lock_timeout 3s is set before the first statement: if a lock is not obtained in 3 seconds nothing is applied.
 -- ============================================================================
 
+SET LOCAL lock_timeout = '3s';
 DO $cron4263e3$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'pg_cron') THEN

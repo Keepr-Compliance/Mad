@@ -51,7 +51,7 @@
     },
     "20261123120000": {
       "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",
-      "file_md5": "5cd6dfc36798f747a7ed620eab3417d2"
+      "file_md5": "5afd98e7148dda9ccba6951ad97cf53a"
     },
     "20261123130000": {
       "file": "supabase/migrations/20261123130000_backlog_4263_messages_up_server.sql",
@@ -59,7 +59,7 @@
     },
     "20261123140000": {
       "file": "supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql",
-      "file_md5": "80b4ec3bbbe472b1f3db5ab34057d049"
+      "file_md5": "0ca12e1e52d34001fe6ef644f17828d0"
     }
   },
   "labels": {
