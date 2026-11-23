@@ -2,7 +2,7 @@
 # statements on objects another role owns, with the role in force (roles.py); files: every .sql under
 # supabase/tests/<folder> for the folders in roles.FOLDERS and the erase harness as composed; owners from the
 # migrations up to 20261123140000
-files 172
+files 191
 statements 236
 wrong_role 0
 migration_wrong_role 0
@@ -343,6 +343,25 @@ input 41027fd9a45b3f9ad25a18e18a5a85eb supabase/tests/backlog-4263-pr8/lib/contr
 input c61fef6381ed72384eccb8c847e57d30 supabase/tests/backlog-4263-pr8/lib/fixtures.sql
 input 1a2b27bd8fe473bae30a8e58235269b9 supabase/tests/backlog-4263-pr8/lib/observe.sql
 input fcb50444ae6aaf67eaaf8c2e3040692b supabase/tests/backlog-4263-pr8/rollback-20261118150000.sql
+input 8d4132c88c129a024718e699d29d3c9b supabase/tests/backlog-4263-prod-verify/verify-controls.sql
+input b89c01fc9cf1d11edc5586bd4e79e874 supabase/tests/backlog-4263-prod-verify/verify-run.sql
+input 4e9a26fbd6b9cf5ae2ea24ebd53fa288 supabase/tests/backlog-4263-prod/postcheck-20261118100000.sql
+input 964a5a37ac2368780bba8e4b97cd1779 supabase/tests/backlog-4263-prod/postcheck-20261118110000.sql
+input 4980dc3a78a2308c27fcdbf677ebc962 supabase/tests/backlog-4263-prod/postcheck-20261118120000.sql
+input fa0977ac664de19f5b2d936aae5d7da6 supabase/tests/backlog-4263-prod/postcheck-20261118130000.sql
+input 6ffa4620802039948eece5bb92302cd6 supabase/tests/backlog-4263-prod/postcheck-20261118140000.sql
+input e9ac0d56b18b963abe4aa1e3d10c4f4d supabase/tests/backlog-4263-prod/postcheck-20261118150000.sql
+input 2c090cb7d3adf07135562d16c26c341e supabase/tests/backlog-4263-prod/postcheck-20261118160000.sql
+input a270e0131e0c2452ee922a4a6af23328 supabase/tests/backlog-4263-prod/postcheck-20261118170000.sql
+input 9c5b9a7db032ba6524d8da7454b02e5e supabase/tests/backlog-4263-prod/postcheck-20261118180000.sql
+input a26d8e05285d7a0bf6d4c87efa4c5cf0 supabase/tests/backlog-4263-prod/postcheck-20261118190000.sql
+input ce343889a5e6d248e9dab68d44081d41 supabase/tests/backlog-4263-prod/postcheck-20261123100000.sql
+input 41ef8b9eac67d1d71ab9b526d6afff96 supabase/tests/backlog-4263-prod/postcheck-20261123110000.sql
+input 14e89d51a652c293d20aae3a4c254761 supabase/tests/backlog-4263-prod/postcheck-20261123120000.sql
+input 9f046384ec119204c090bb5731d8f257 supabase/tests/backlog-4263-prod/postcheck-20261123130000.sql
+input 898a6ead2b21e85c5ef9f7084fda119d supabase/tests/backlog-4263-prod/postcheck-20261123140000.sql
+input 75333ee8c2ef31cdfa1e38e8592d26f0 supabase/tests/backlog-4263-prod/postcheck-final-249.sql
+input 0018705570b43fbb83bd4f3006379436 supabase/tests/backlog-4263-prod/postcheck-final.sql
 input 05bca701afd40dc0f937661aeec0f417 supabase/tests/backlog-4263-sync2-erase/apply-20261123110000.sql
 input c53d43fcedb0739c2234764a0f33f134 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-a.sql
 input 34a679c7c3ffa61ca38e1c20c140d9a7 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-b.sql
@@ -407,7 +426,7 @@ input 435e12004020a6773ea035f866a76bec supabase/tests/backlog-4263-sync2-t/harne
 input 93a1293af5a8e4d77620eba01c1891ea supabase/tests/backlog-4263-sync2-t/lib/controls.sql
 input aa730c67c67fe7a2209af7b5286838c9 supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql
 input 9861028daa22a8ba73b0899516f41ded supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
-input 34691ac2df7f113ca847df47e10d74df supabase/tests/backlog-4263-sync2-t/roles.py
+input a6f886e08cb5af8d4c49ee3839ba052d supabase/tests/backlog-4263-sync2-t/roles.py
 input d6f228d5e7e68a4ac055fbab36fd26c6 supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql
 input 169933a6d7885f8b9795b2be5ebd7242 supabase/tests/backlog-4263/apply-20261118100000.sql
 input 7d25c61b5664d7529444b8f1e2b855ce supabase/tests/backlog-4263/catalog-check.sql
