@@ -775,14 +775,29 @@ $guard4263s1cc$;
 """
 DEAL_GATE = gate_lines('cloud_upsert_deal', 'deal')
 DEAL_LOCK = "  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;\n"
+
+
+def off_check():
+    b = create(S1, 'set_my_cloud_autosave')[0]
+    m = re.search(r'^  IF coalesce\(\(SELECT w\.one_computer .*?/\*SET:active:switch\*/\n(?:.*\n)*?  END IF;\n', b, re.M)
+    assert m and 'computer_not_active' in m.group(0) and m.group(0).count('  END IF;\n') == 3, 'off check block'
+    return m.group(0)
+
+
+OFF_CHECK = off_check()
+OFF_ANCHOR = "  IF p_enabled IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;\n"
 CC_MUTANTS = {  # file -> (function, its signature, mutated statement)
     'mutant-claim-nolock.sql': ('cloud_claim_install', 'uuid, uuid, boolean', mutant(
         'cloud_claim_install', '    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR UPDATE;                  /*CLAIM:lock*/',
         '    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid;                  /*CLAIM:lock*/')),
     'mutant-confirm-nolock.sql': ('cloud_confirm_blob', 'uuid, uuid, uuid', mutant(
         'cloud_confirm_blob', '  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;                  /*LOCK:confirm*/\n', '')),
-    'mutant-off-no-active-check.sql': ('set_my_cloud_autosave', 'uuid, boolean, integer, uuid', mutant(
-        'set_my_cloud_autosave', "      RETURN jsonb_build_object('success', false, 'error', 'computer_not_active');\n", '      NULL;\n')),
+    # the turn-off's active check made BEFORE its settings lock (the read moved above the INSERT and the FOR UPDATE).
+    # Serially it still refuses a computer that is not active; only a check that reads the old state while a take-over
+    # holds the row lets the turn-off through, so R4's red shape needs the race (it replaces the earlier mutant that
+    # removed the refusal outright and was red serially too).
+    'mutant-off-check-before-lock.sql': ('set_my_cloud_autosave', 'uuid, boolean, integer, uuid', sub1(mutant(
+        'set_my_cloud_autosave', OFF_CHECK, ''), OFF_ANCHOR, OFF_ANCHOR + '  IF NOT p_enabled THEN\n' + OFF_CHECK + '  END IF;\n')),
     # the writer's active gate checked before its settings lock (the race plan section 2.9 C-1 names)
     'mutant-deal-gate-before-lock.sql': ('cloud_upsert_deal', 'uuid, jsonb', sub1(mutant(
         'cloud_upsert_deal', DEAL_GATE, ''), DEAL_LOCK,

@@ -77,44 +77,73 @@ checked only by the controls themselves.
 ## Two-session controls: `concurrency/run.sh`
 
 ```
-run.sh R<n> <run-id> [--mutant]   # <run-id> = 16 hex characters, chosen before the run so the before-note names it
-run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and any *_m4263 function
+run.sh R<n> <run-id> <fixture-user-id> [--mutant]   # both chosen before the run so the before-note names them
+run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftovers (only if its email is that run's)
 ```
 
-- **One run at a time.** A second run started alongside would have its mutant dropped by the first run's trap. Covered:
-  every run refuses to start while any `public.*_m4263` function exists (mutant runs), and `setup.sql` refuses while
-  any `p4263s1cc-*@example.test` fixture user exists (pristine and mutant runs; also catches leftovers — run `cleanup`).
-  Two starts within the same second can both pass these checks; do not start two.
+- **Order:** argument checks; one read-only precheck; nothing is created unless it is clean; then the mutant
+  (`--mutant`), setup, the two sessions, the state call, the verdict, the trap.
+- **Precheck** (`precheck.sql`) refuses when an auth user has the fixture id, any `p4263s1cc-*@example.test` user
+  exists, any `public.*_m4263` function exists, or (R3–R6) `one_computer` is not already true. R3–R6 therefore refuse
+  before any fixture is committed while the switch is off. The switch is never flipped here (shared row; the
+  coordinator flips it). R1, R2 and R2 `--mutant` run with the switch either way.
+- **One run at a time.** A second run started alongside would have its mutant dropped by the first run's trap; the
+  precheck and `setup.sql` refuse while any fixture user or `_m4263` function exists. Two starts within the same
+  second can both pass these checks; do not start two.
+- **Gate marker:** the first line of session 1's call is `/*p_hold:<run-id>*/` (`hold-marker.sql`), before
+  `guard.sql`. `pg_stat_activity.query` keeps only the first `track_activity_query_size` bytes of a call (1 kB on the
+  test project, `../backlog-4236/concurrency/c3-marker.sql`); before this change the marker ended at bytes 1455–1640
+  and every case would have ended in `P_GATE_TIMEOUT`. It now ends at byte 27; `concurrency/offline_check.py` fails
+  when it ends past byte 900.
+- **Overlap and timing:** session 1 records `t_start`, `t_hold` (after its call) and `t_end` (after its 4 s hold, before
+  its locks are released); session 2 records `t_start` (after the gate) and `t_end`, all from the database clock.
+  Launch offset 1 s, hold 4 s: session 2 starts about 3 s before session 1's hold ends; the verdict needs at least
+  1.5 s (the expected 3 s is twice that) and session 2's start after session 1's call. Without that the run is
+  `INCONCLUSIVE`. "Waited" = session 2 ended after session 1's `t_end`. Every pristine case needs waited; R2's mutant
+  needs not waited.
 - **Verdict** (`concurrency/verdict.py`; offline self-test against canned outputs in kt-sql's real shape:
   `python3 -I concurrency/selftest.py`). It starts as `ERROR`. A pristine run prints `PASS` only on the case's passing
-  shape; a `--mutant` run prints `RED` only on the case's own red shape (R2: confirm `object_missing`, claim ok, no wait;
-  R3: both claims ok; R4: claim ok, turn-off success, 0 deals; R6: the write `applied`, 1 r6 deal). Anything else —
-  a gate timeout, a missing function, a deadlock, a state call with no row — prints `ERROR`. Exit 0 only for PASS / RED.
+  shape with measured overlap; a `--mutant` run prints `RED` only on the case's own red shape with measured overlap
+  (R2: confirm `object_missing`, claim ok, no wait; R3: both claims ok; R4: claim ok, turn-off success, 0 deals; R6:
+  the write `applied`, 1 r6 deal). A session error, gate timeout, missing function, deadlock or state call with no
+  row prints `ERROR`; no measured overlap or an unreadable time prints `INCONCLUSIVE`. Exit 0 only for PASS / RED.
   A mutant run also prints `MUTATION APPLIED <name> md5 <x>` right after the create (no body → ERROR, stop) and checks
   the mutant still exists after the sessions.
-- At start it prints the run id and the fixture pattern `p4263s1cc-<run-id>@example.test`, and refuses to start while
-  any `public.*_m4263` function exists. Every file it sends begins with `guard.sql` (refuses any database that is not
-  the test database).
-- **Rows a case commits, and removes in its teardown** (EXIT/INT trap, then `verify.sql` must answer `clean`):
-  1 `auth.users`, 1 `public.users`, 1 `organizations` (slug `p4263s1cc-<run-id>`), 1 `organization_members`,
-  1 `organization_plans`, 1 `member_addons`, 1 `cloud_autosave_settings`, 2 `cloud_deals` (3 after R1), 1 `cloud_blobs`
-  (no storage object), 1 `cloud_todo_feed_head`; with the switch on, a take-over adds 1 `cloud_computer_moves` and
-  1 `cloud_computer_move_notices` row (they go with the auth user).
-- **`--mutant`** (R2, R3, R4, R6) additionally creates exactly one function and removes it in the trap, then checks no
-  `public.*_m4263` function is left:
+- **Which cases are evidence of the race.** R3–R6 pristine give the same outcome serially; the overlap measurement
+  plus the waited requirement are what make them evidence of the race. R4's mutant is now
+  `mutant-off-check-before-lock.sql`: the turn-off's active check is read before the settings lock. Serially it
+  still refuses a computer that is not active; it lets IA's turn-off through only when the check reads the old state
+  while IB's take-over holds the row, so its red shape needs the race. (The earlier mutant removed the refusal and
+  was red serially too.)
+- **Rows a case commits, and removes in its teardown:** 1 `auth.users`, 1 `public.users`, 1 `organizations` (slug
+  `p4263s1cc-<run-id>`), 1 `organization_members`, 1 `organization_plans`, 1 `member_addons`, 1
+  `cloud_autosave_settings`, 2 `cloud_deals` (3 after R1), 1 `cloud_blobs` (no storage object), 1
+  `cloud_todo_feed_head`; with the switch on, a take-over adds 1 `cloud_computer_moves` and 1
+  `cloud_computer_move_notices` row (they go with the auth user).
+- **Trap:** drops the mutant first and checks that no `public.*_m4263` function is left; prints the fixture user's row
+  count in every table that references `auth.users` (`fk-counts.sql`: catalogue query at run time, counts only; rows
+  reached only through a second table are not counted there); runs `teardown.sql`, keyed on the fixture user id (it
+  does nothing unless an auth user with that id AND this run's email exists); then `verify.sql`, the counts again
+  (must total 0) and the `auth.users` total (must equal the precheck's). Any failure prints `TEARDOWN NOT CLEAN`
+  with the user id, the run id and the counts left, and deletes nothing further (a mutant that was not dropped
+  leaves the fixture rows in place too). Last call: `pg_stat_statements_reset()`.
+- **lock_timeout 3 s** on every call that writes (mutant create, mutant drop, setup, teardown); no table-level lock.
+- **`--mutant`** (R2, R3, R4, R6) creates exactly one function:
 
   | Case | File | Function created (granted to authenticated only) |
   |---|---|---|
   | R2 | `mutant-confirm-nolock.sql` | `public.cloud_confirm_blob_m4263(uuid, uuid, uuid)` |
   | R3 | `mutant-claim-nolock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
-  | R4 | `mutant-off-no-active-check.sql` | `public.set_my_cloud_autosave_m4263(uuid, boolean, integer, uuid)` |
+  | R4 | `mutant-off-check-before-lock.sql` | `public.set_my_cloud_autosave_m4263(uuid, boolean, integer, uuid)` |
   | R6 | `mutant-deal-gate-before-lock.sql` | `public.cloud_upsert_deal_m4263(uuid, jsonb)` |
 
   The live functions are never replaced; only the session files of that case call the `_m4263` name. R1 has no
   claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE);
   R3 carries `mutant-claim-nolock.sql`. R5 has no mutant.
-- **`cleanup`** deletes, for every auth user whose email matches the pattern, the rows listed above, then drops the four
-  `_m4263` functions, and checks that no matching user, organization or `_m4263` function is left.
+- **`cleanup`** removes one fixture user's leftovers: it refuses unless the user with that id has that run's fixture
+  email, drops any `_m4263` function, then runs the same teardown and checks. There is no pattern-keyed sweep.
+- **Offline check:** `python3 -I concurrency/offline_check.py` drives `run.sh` against a local stub that records every
+  text it would send (no database call) and checks the points above.
 
 ## Notes for later pieces
 
@@ -136,6 +165,7 @@ run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and a
 | `rollback-20261123100000.sql` | Undoes 20261123100000 (pre-check, bodies back, objects dropped, ledger row removed, post-check) |
 | `harness-s1.sql` | Single-session controls and their mutants; ends in a rollback |
 | `concurrency/run.sh` | Two-session controls R1–R6, `--mutant`, `cleanup` |
+| `concurrency/offline_check.py`, `concurrency/selftest.py`, `concurrency/verdict.py` | Offline check of `run.sh` against a stub; verdict self-test; the verdict, precheck and per-table count readers |
 | `concurrency/guard.sql`, `drop-mutants.sql`, `mutant-*.sql` | Generated: the guard every sent file starts with; the mutant drop and check; the four own-name mutants |
-| `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `sweep.sql`, `gate.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql` | Hand-written fixtures, teardown, checks and session statements |
+| `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `precheck.sql`, `fk-counts.sql`, `auth-count.sql`, `gate.sql`, `hold-marker.sql`, `lock-timeout.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql`, `end.sql`, `end-hold.sql` | Hand-written fixtures, teardown, checks and session statements |
 | `concurrency/verdict.py`, `selftest.py` | Hand-written verdict of a case, and its offline self-test (26 canned outputs) |
