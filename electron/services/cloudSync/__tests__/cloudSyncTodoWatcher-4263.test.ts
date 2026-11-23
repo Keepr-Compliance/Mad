@@ -8,7 +8,7 @@ import { DRIVER, type TestDb } from "./helpers/sqlite";
 import { dealId, freshDb, insertDeal, PROJECT, USER_A } from "./helpers/fixtures";
 import { makeEngine, startAndPass, pass, type Engine } from "./helpers/engine";
 import { FakeServer } from "./helpers/fakeServer";
-import { MIN_KICK_GAP_MS, OUTBOX_TOP_SQL, TodoOutboxWatcher, WATCH_INTERVAL_MS } from "../todoOutboxWatcher";
+import { OUTBOX_TOP_SQL, TodoOutboxWatcher } from "../todoOutboxWatcher";
 import type { PassOutcome } from "../runner";
 import type { JsonValue } from "../jcs";
 import { enableForUser } from "../../db/cloudSyncDbService";
@@ -58,6 +58,10 @@ function queuedBy(db: TestDb, write: () => void): Row[] {
   write();
   return outbox(db);
 }
+
+/** The design's numbers, written out (not imported) so a changed constant cannot move the expectations with it. */
+const LOOK_MS = 5_000;
+const GAP_MS = 10_000;
 
 const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -159,8 +163,8 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
         const editAt = h.clock.t;
         h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(`edit ${d}`, I1);
         await h.advanceTo(h.t0 + 60_000 - 1);
-        const due = Math.max(editAt, h.t0 + MIN_KICK_GAP_MS);
-        const expected = h.t0 + Math.ceil((due - h.t0) / WATCH_INTERVAL_MS) * WATCH_INTERVAL_MS;
+        const due = Math.max(editAt, h.t0 + GAP_MS);
+        const expected = h.t0 + Math.ceil((due - h.t0) / LOOK_MS) * LOOK_MS;
         expect({ d, kicks: h.watchKicks() }).toEqual({ d, kicks: [expected] });
         expect(h.watchKicks()[0] - editAt).toBeLessThanOrEqual(15_000);
         expect(onlineNote(h.e, I1)).toBe(`edit ${d}`);
@@ -195,7 +199,7 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
         await h.advanceTo(h.t0 + 80_000);
         const k = h.watchKicks();
         expect({ phase, n: k.length <= 2 && k.length >= 1 }).toEqual({ phase, n: true });
-        for (let i = 1; i < k.length; i++) expect(k[i] - k[i - 1]).toBeGreaterThanOrEqual(MIN_KICK_GAP_MS);
+        for (let i = 1; i < k.length; i++) expect(k[i] - k[i - 1]).toBeGreaterThanOrEqual(GAP_MS);
         expect(onlineNote(h.e, I1)).toBe(`p${phase}-9`);
       }
     });
@@ -337,7 +341,7 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
         u.w.passStarting();
         u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(`after ${outcome}`, I1);
         u.w.passEnded(outcome === "threw" ? null : { outcome, done: 0, failed: 0 });
-        u.clock.t += MIN_KICK_GAP_MS;
+        u.clock.t += GAP_MS;
         u.w.tick();
         got[outcome] = u.kicks.n;
       }
@@ -473,7 +477,7 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       const u = unit({ record: true });
       u.w.passStarting();
       u.w.passEnded({ outcome: "done", done: 0, failed: 0 });
-      u.clock.t += MIN_KICK_GAP_MS;
+      u.clock.t += GAP_MS;
       u.w.tick();
       u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
       u.w.tick();
@@ -487,7 +491,7 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       u.w.passStarting();
       u.w.passEnded({ outcome: "done", done: 0, failed: 0 });
       u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
-      u.clock.t += MIN_KICK_GAP_MS;
+      u.clock.t += GAP_MS;
       u.ready.v = false;
       const n = u.prepared.length;
       u.w.tick();
@@ -578,7 +582,8 @@ async function setup(server?: FakeServer) {
   await flush();
   expect(e.service.runner!.lastSummary!.outcome).toBe("done");
   expect(outbox(db)).toEqual([]);
-  let nextLook = t0 + WATCH_INTERVAL_MS;
+  expect(e.watchTimers.map((w) => w.ms)).toEqual([LOOK_MS]);
+  let nextLook = t0 + LOOK_MS;
   const settle = async () => {
     for (let i = 0; i < 3; i++) {
       await e.service.runner!.whenIdle();
@@ -604,7 +609,7 @@ async function setup(server?: FakeServer) {
     advanceTo: async (end: number, opts: { idle?: boolean } = {}) => {
       while (nextLook <= end) {
         clock.t = nextLook;
-        nextLook += WATCH_INTERVAL_MS;
+        nextLook += LOOK_MS;
         source = "watch";
         for (const w of e.watchTimers) if (!w.cleared) w.fn();
         source = "other";
