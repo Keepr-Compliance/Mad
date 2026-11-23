@@ -372,6 +372,11 @@ deno_version = 2
 [functions.submission-sweep]
 verify_jwt = false
 
+# BACKLOG-4263: called by the cloud-blob-erase cron job through pg_net, which
+# sends no JWT. The function checks its own x-webhook-secret header instead.
+[functions.cloud-blob-erase]
+verify_jwt = false
+
 # BACKLOG-3711: called by the support_tickets trigger, which sends no JWT.
 # The function checks its own x-webhook-secret header instead.
 [functions.send-ticket-confirmation]

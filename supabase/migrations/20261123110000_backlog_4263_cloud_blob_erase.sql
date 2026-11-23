@@ -1,0 +1,453 @@
+-- ============================================================================
+-- Migration: Keepr Cloud file-byte erase job, functions (BACKLOG-4263, sync plan P3, E1)
+--
+-- Erases stored file bytes (bucket cloud-deal-files) that no cloud row needs any more, removes message and file rows
+-- removed more than 24 hours ago, and scrubs the message and file rows of an account's computers that are not its
+-- active computer. Called by the Edge Function cloud-blob-erase, which runs as the service role. The hourly schedule is
+-- a separate migration (20261123120000), applied after the Edge Function is deployed in dry_run mode.
+--
+-- 1. Vault secret cloud_blob_erase_secret, generated in the database (never regenerated, never displayed). The URL
+--    the job posts to (vault secret cloud_blob_erase_url) is NOT created here. It is set per environment as its own
+--    step; cloud_blob_erase_invoke() refuses to run while it is absent.
+-- 2. cloud_blob_erase_secret()   the secret, for the Edge Function's caller check. service_role only.
+-- 3. cloud_blob_erase_runs       one counts-only row per run, kept 30 days. RLS on, no policy, no API role privilege.
+--    cloud_blob_erase_leases     blob ids handed to a run for 5 minutes. RLS on, no policy, no API role privilege.
+-- 4. cloud_blob_erase_claim()    service_role only. In live mode:
+--      a. hard-deletes message rows removed more than 24 h ago. A live file row of such a message is first removed as
+--         cloud_tombstone('file') removes it, and its blob fenced. Then hard-deletes file rows removed more than 24 h
+--         ago (fencing any blob such a row still held, after the delete);
+--      b. fences blobs older than 24 h that no file row references, through _cloud_fence_unreferenced (locks the
+--         blobs first, then checks references in a later statement);
+--      c. leases up to p_limit fenced blobs that no file row references and returns their storage paths;
+--      d. returns objects in cloud-deal-files older than 24 h that have no cloud_blobs row;
+--      e. returns the owners whose computers other than the active one still have live message or file rows, oldest
+--         move (active_since) first.
+--    In dry_run mode (the default) it writes only its own run row, and returns counts and the owner list.
+-- 5. cloud_blob_erase_finish()   service_role only. Deletes a cloud_blobs row only while it is fenced, no file row
+--    references it and its object is gone from storage.objects, and only for a live run. Records counts and outcome.
+-- 6. cloud_blob_erase_scrub()    service_role only. One batch for one owner: at most p_limit (1..1000) live file and
+--    message rows of deals whose source_install_id is not the owner's active_install_id, while
+--    cloud_release_switches.one_computer is on, are removed and scrubbed as cloud_tombstone does, and their blobs
+--    fenced through _cloud_fence_unreferenced. Lock order: the owner's settings row FOR SHARE SKIP LOCKED (a claim or
+--    turn-off holding it skips this owner), then file rows, then message rows (FOR UPDATE, id order), then blobs.
+--    The active computer and the switch are read under that lock and re-checked in each UPDATE.
+-- 7. cloud_blob_erase_invoke()   pg_net POST to the Edge Function, called by the cron job. No API role.
+--
+-- Requires 20261123100000 (cloud_autosave_settings.active_install_id and active_since,
+-- cloud_release_switches.one_computer). Re-runnable: IF NOT EXISTS / CREATE OR REPLACE.
+-- ============================================================================
+
+DO $pre4263e1$
+BEGIN
+  IF to_regclass('public.cloud_release_switches') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                     WHERE a.attrelid = to_regclass('public.cloud_release_switches') AND a.attname = 'one_computer'
+                       AND NOT a.attisdropped)
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                     WHERE a.attrelid = to_regclass('public.cloud_autosave_settings') AND a.attname = 'active_install_id'
+                       AND NOT a.attisdropped)
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                     WHERE a.attrelid = to_regclass('public.cloud_autosave_settings') AND a.attname = 'active_since'
+                       AND NOT a.attisdropped) THEN
+    RAISE EXCEPTION 'BACKLOG-4263 E1: apply 20261123100000 first';
+  END IF;
+END
+$pre4263e1$;
+
+-- ============================================================================ 1. secret (existing value never replaced)
+DO $secret4263e1$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'cloud_blob_erase_secret') THEN
+    PERFORM vault.create_secret(
+      encode(extensions.gen_random_bytes(32), 'hex'),
+      'cloud_blob_erase_secret',
+      'BACKLOG-4263: x-webhook-secret for the cloud-blob-erase Edge Function'
+    );
+  END IF;
+END
+$secret4263e1$;
+
+-- ============================================================================ 3. tables
+CREATE TABLE IF NOT EXISTS public.cloud_blob_erase_runs (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at   timestamptz NULL,
+  mode       text NOT NULL,
+  outcome    text NOT NULL DEFAULT 'running',
+  counts     jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS cloud_blob_erase_runs_started_idx ON public.cloud_blob_erase_runs (started_at);
+ALTER TABLE public.cloud_blob_erase_runs ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.cloud_blob_erase_runs FROM PUBLIC, anon, authenticated, service_role;
+REVOKE TRUNCATE ON TABLE public.cloud_blob_erase_runs FROM anon, authenticated;
+COMMENT ON TABLE public.cloud_blob_erase_runs IS
+  'BACKLOG-4263: one row per cloud-blob-erase run, counts only. Written by the cloud_blob_erase_* functions; kept 30 days.';
+
+CREATE TABLE IF NOT EXISTS public.cloud_blob_erase_leases (
+  blob_id      uuid PRIMARY KEY,
+  run_id       uuid NOT NULL,
+  leased_until timestamptz NOT NULL
+);
+ALTER TABLE public.cloud_blob_erase_leases ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.cloud_blob_erase_leases FROM PUBLIC, anon, authenticated, service_role;
+REVOKE TRUNCATE ON TABLE public.cloud_blob_erase_leases FROM anon, authenticated;
+COMMENT ON TABLE public.cloud_blob_erase_leases IS
+  'BACKLOG-4263: fenced blobs handed to a cloud-blob-erase run, for 5 minutes. Written by cloud_blob_erase_claim/finish.';
+
+-- ============================================================================ 2. secret accessor
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_secret() RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $f$
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501';
+  END IF;
+  RETURN (SELECT s.decrypted_secret FROM vault.decrypted_secrets s WHERE s.name = 'cloud_blob_erase_secret' LIMIT 1);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_secret() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_secret() TO service_role;
+
+-- ============================================================================ 4. claim
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_claim(p_dry_run boolean DEFAULT true, p_limit integer DEFAULT 500,
+  p_row_limit integer DEFAULT 5000) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE
+  v_run uuid;
+  v_cut timestamptz := now() - interval '24 hours';                                          /*AGE:cut*/
+  v_msg uuid[] := '{}';
+  r record;
+  v_k integer;
+  v_n_msg integer := 0;
+  v_n_file integer := 0;
+  v_n_dep integer := 0;
+  v_n_fence integer := 0;
+  v_n_orphan integer := 0;
+  v_n_blobs integer := 0;
+  v_n_rowless integer := 0;
+  v_blobs jsonb := '[]'::jsonb;
+  v_rowless jsonb := '[]'::jsonb;
+  v_owners jsonb := '[]'::jsonb;
+  v_counts jsonb;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501';
+  END IF;
+  IF p_dry_run IS NULL OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000
+     OR p_row_limit IS NULL OR p_row_limit NOT BETWEEN 1 AND 20000 THEN
+    RAISE EXCEPTION 'erase parameter outside its allowed range' USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO public.cloud_blob_erase_runs (mode)
+    VALUES (CASE WHEN p_dry_run THEN 'dry_run' ELSE 'live' END)
+    RETURNING id INTO v_run;
+
+  IF p_dry_run THEN                                                                          /*MODE:claim*/
+    SELECT count(*) INTO v_n_msg FROM (
+      SELECT 1 FROM public.cloud_deal_messages m WHERE m.removed_at < v_cut LIMIT p_row_limit) x;
+    SELECT count(*) INTO v_n_dep FROM public.cloud_deal_files f
+     WHERE f.removed_at IS NULL
+       AND f.cloud_message_id IN (SELECT m.id FROM public.cloud_deal_messages m WHERE m.removed_at < v_cut LIMIT p_row_limit);
+    SELECT count(*) INTO v_n_file FROM (
+      SELECT 1 FROM public.cloud_deal_files f WHERE f.removed_at < v_cut LIMIT p_row_limit) x;
+    SELECT count(*) INTO v_n_orphan FROM (
+      SELECT 1 FROM public.cloud_blobs b
+       WHERE b.purge_requested_at IS NULL
+         AND greatest(b.created_at, coalesce(b.uploaded_at, b.created_at)) < v_cut
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)
+       LIMIT p_limit) x;
+    SELECT count(*) INTO v_n_blobs FROM (
+      SELECT 1 FROM public.cloud_blobs b
+       WHERE b.purge_requested_at IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)
+       LIMIT p_limit) x;
+    SELECT count(*) INTO v_n_rowless FROM (
+      SELECT 1 FROM storage.objects o
+       WHERE o.bucket_id = 'cloud-deal-files' AND o.created_at < v_cut
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_blobs b WHERE b.storage_path = o.name)
+       LIMIT p_limit) x;
+  ELSE
+    DELETE FROM public.cloud_blob_erase_runs WHERE started_at < now() - interval '30 days';
+    DELETE FROM public.cloud_blob_erase_leases WHERE leased_until < now();
+
+    -- a. message rows removed more than 24 h ago
+    SELECT coalesce(array_agg(x.id ORDER BY x.id), '{}') INTO v_msg FROM (
+      SELECT m.id FROM public.cloud_deal_messages m
+       WHERE m.removed_at < v_cut                                                            /*HARD:messages_age*/
+       ORDER BY m.id LIMIT p_row_limit FOR UPDATE SKIP LOCKED) x;
+    -- their live file rows are removed first (cloud_deal_files_message_fk is ON DELETE SET NULL)
+    FOR r IN SELECT f.owner_user_id AS owner, array_agg(f.id ORDER BY f.id) AS ids,
+                    coalesce(array_agg(f.blob_id) FILTER (WHERE f.blob_id IS NOT NULL), '{}') AS blobs
+               FROM (SELECT x.id, x.owner_user_id, x.blob_id FROM public.cloud_deal_files x
+                      WHERE x.cloud_message_id = ANY (v_msg) AND x.removed_at IS NULL
+                      ORDER BY x.id FOR UPDATE) f
+              GROUP BY f.owner_user_id ORDER BY f.owner_user_id LOOP
+      UPDATE public.cloud_deal_files f SET removed_at = now(), version = f.version + 1, updated_at = now(),
+             filename = NULL, blob_id = NULL                                                 /*HARD:message_files*/
+       WHERE f.id = ANY (r.ids) AND f.removed_at IS NULL;
+      GET DIAGNOSTICS v_k = ROW_COUNT;
+      v_n_dep := v_n_dep + v_k;
+      v_n_fence := v_n_fence + public._cloud_fence_unreferenced(r.owner, r.blobs);
+    END LOOP;
+    DELETE FROM public.cloud_deal_messages m WHERE m.id = ANY (v_msg) AND m.removed_at < v_cut;
+    GET DIAGNOSTICS v_n_msg = ROW_COUNT;
+
+    -- file rows removed more than 24 h ago; a blob such a row still holds is fenced after the row is gone
+    FOR r IN SELECT f.owner_user_id AS owner, array_agg(f.id ORDER BY f.id) AS ids,
+                    coalesce(array_agg(f.blob_id) FILTER (WHERE f.blob_id IS NOT NULL), '{}') AS blobs
+               FROM (SELECT x.id, x.owner_user_id, x.blob_id FROM public.cloud_deal_files x
+                      WHERE x.removed_at < v_cut                                             /*HARD:files_age*/
+                      ORDER BY x.id LIMIT p_row_limit FOR UPDATE SKIP LOCKED) f
+              GROUP BY f.owner_user_id ORDER BY f.owner_user_id LOOP
+      DELETE FROM public.cloud_deal_files f WHERE f.id = ANY (r.ids) AND f.removed_at < v_cut;
+      GET DIAGNOSTICS v_k = ROW_COUNT;
+      v_n_file := v_n_file + v_k;
+      v_n_fence := v_n_fence + public._cloud_fence_unreferenced(r.owner, r.blobs);
+    END LOOP;
+
+    -- b. blobs older than 24 h that no file row references: lock, then check references (in the helper)
+    FOR r IN SELECT b.owner_user_id AS owner, array_agg(b.id ORDER BY b.id) AS ids
+               FROM (SELECT x.id, x.owner_user_id FROM public.cloud_blobs x
+                      WHERE x.purge_requested_at IS NULL
+                        AND greatest(x.created_at, coalesce(x.uploaded_at, x.created_at)) < v_cut   /*ORPHAN:age*/
+                        AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = x.id)
+                      ORDER BY x.created_at, x.id LIMIT p_limit) b
+              GROUP BY b.owner_user_id ORDER BY b.owner_user_id LOOP
+      v_n_orphan := v_n_orphan + public._cloud_fence_unreferenced(r.owner, r.ids);          /*ORPHAN:fence*/
+    END LOOP;
+
+    -- c. fenced blobs that no file row references and no other run holds
+    WITH c AS (
+      SELECT b.id, b.storage_path FROM public.cloud_blobs b
+       WHERE b.purge_requested_at IS NOT NULL                                                /*ERASE:fenced*/
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)     /*ERASE:unreferenced*/
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_blob_erase_leases l
+                          WHERE l.blob_id = b.id AND l.leased_until >= now())                /*ERASE:lease*/
+       ORDER BY b.purge_requested_at, b.id LIMIT p_limit
+       FOR UPDATE OF b SKIP LOCKED
+    ), l AS (
+      INSERT INTO public.cloud_blob_erase_leases (blob_id, run_id, leased_until)
+      SELECT c.id, v_run, now() + interval '5 minutes' FROM c
+      ON CONFLICT (blob_id) DO UPDATE SET run_id = EXCLUDED.run_id, leased_until = EXCLUDED.leased_until
+      RETURNING blob_id
+    )
+    SELECT coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'path', c.storage_path) ORDER BY c.id), '[]'::jsonb),
+           count(*)::integer
+      INTO v_blobs, v_n_blobs FROM c;
+
+    -- d. objects with no cloud_blobs row (left when a user's rows cascaded away)
+    SELECT coalesce(jsonb_agg(z.name ORDER BY z.name), '[]'::jsonb), count(*)::integer INTO v_rowless, v_n_rowless FROM (
+      SELECT o.name FROM storage.objects o
+       WHERE o.bucket_id = 'cloud-deal-files' AND o.created_at < v_cut                       /*ROWLESS:age*/
+         AND NOT EXISTS (SELECT 1 FROM public.cloud_blobs b WHERE b.storage_path = o.name)
+       ORDER BY o.created_at, o.name LIMIT p_limit) z;
+  END IF;
+
+  -- e. owners whose non-active computers still have live message or file rows, oldest move first
+  SELECT coalesce(jsonb_agg(o.user_id ORDER BY o.since NULLS FIRST, o.user_id), '[]'::jsonb) INTO v_owners FROM (
+    SELECT s.user_id, s.active_since AS since FROM public.cloud_autosave_settings s
+     WHERE coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false)   /*OWNERS:switch*/
+       AND s.active_install_id IS NOT NULL
+       AND (EXISTS (SELECT 1 FROM public.cloud_deal_files f JOIN public.cloud_deals d ON d.id = f.cloud_deal_id
+                     WHERE f.owner_user_id = s.user_id AND f.removed_at IS NULL
+                       AND d.source_install_id IS DISTINCT FROM s.active_install_id)
+         OR EXISTS (SELECT 1 FROM public.cloud_deal_messages m JOIN public.cloud_deals d ON d.id = m.cloud_deal_id
+                     WHERE m.owner_user_id = s.user_id AND m.removed_at IS NULL
+                       AND d.source_install_id IS DISTINCT FROM s.active_install_id))
+     ORDER BY s.active_since NULLS FIRST, s.user_id
+     LIMIT 200) o;
+
+  v_counts := jsonb_build_object(
+    'messages_hard_deleted', v_n_msg, 'files_hard_deleted', v_n_file, 'files_removed_with_message', v_n_dep,
+    'blobs_fenced_by_delete', v_n_fence, 'orphans_fenced', v_n_orphan, 'blobs_listed', v_n_blobs,
+    'rowless_listed', v_n_rowless, 'scrub_owners', jsonb_array_length(v_owners));
+  UPDATE public.cloud_blob_erase_runs SET counts = v_counts WHERE id = v_run;
+
+  RETURN jsonb_build_object('run_id', v_run, 'dry_run', p_dry_run, 'counts', v_counts,
+                            'blobs', v_blobs, 'rowless', v_rowless, 'scrub_owners', v_owners);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_claim(boolean, integer, integer) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_claim(boolean, integer, integer) TO service_role;
+
+-- ============================================================================ 5. finish
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_finish(p_run_id uuid, p_blob_ids uuid[], p_counts jsonb, p_outcome text)
+RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE
+  v_ids uuid[] := coalesce(p_blob_ids, '{}');
+  v_deleted integer := 0;
+  v_counts jsonb;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501';
+  END IF;
+  IF p_outcome IS NULL OR p_outcome NOT IN ('ok', 'partial', 'failed') OR cardinality(v_ids) > 1000 THEN
+    RAISE EXCEPTION 'bad finish argument' USING ERRCODE = '22023';
+  END IF;
+  IF (SELECT r.mode FROM public.cloud_blob_erase_runs r WHERE r.id = p_run_id) IS DISTINCT FROM 'live' THEN
+    v_ids := '{}';                                                                           /*FINISH:live_only*/
+  END IF;
+
+  DELETE FROM public.cloud_blobs b
+   WHERE b.id = ANY (v_ids)
+     AND b.purge_requested_at IS NOT NULL                                                    /*FINISH:fenced*/
+     AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)         /*FINISH:unreferenced*/
+     AND NOT EXISTS (SELECT 1 FROM storage.objects o
+                      WHERE o.bucket_id = 'cloud-deal-files' AND o.name = b.storage_path);   /*FINISH:object_gone*/
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  DELETE FROM public.cloud_blob_erase_leases l WHERE l.blob_id = ANY (v_ids);
+
+  -- counts only: snake_case keys with numeric values
+  SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb) INTO v_counts
+    FROM jsonb_each(coalesce(p_counts, '{}'::jsonb)) AS e(k, v)
+   WHERE k ~ '^[a-z][a-z0-9_]{0,63}$' AND jsonb_typeof(v) = 'number';
+
+  UPDATE public.cloud_blob_erase_runs r
+     SET ended_at = now(),
+         outcome = p_outcome,
+         counts = v_counts || r.counts || jsonb_build_object(
+                    'blob_rows_deleted', v_deleted,
+                    'blob_rows_kept', cardinality(v_ids) - v_deleted)
+   WHERE r.id = p_run_id;
+
+  RETURN jsonb_build_object('blob_rows_deleted', v_deleted, 'blob_rows_kept', cardinality(v_ids) - v_deleted);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_finish(uuid, uuid[], jsonb, text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_finish(uuid, uuid[], jsonb, text) TO service_role;
+
+-- ============================================================================ 6. scrub, one batch for one owner
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_scrub(p_run_id uuid, p_owner uuid, p_dry_run boolean DEFAULT true,
+  p_limit integer DEFAULT 1000) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE
+  v_found boolean;
+  v_active uuid;
+  v_on boolean;
+  v_files uuid[] := '{}';
+  v_msgs uuid[] := '{}';
+  v_blobs uuid[] := '{}';
+  v_nf integer := 0;
+  v_nm integer := 0;
+  v_fenced integer := 0;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501';
+  END IF;
+  IF p_owner IS NULL OR p_dry_run IS NULL OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'scrub parameter outside its allowed range' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_dry_run THEN                                                                          /*MODE:scrub*/
+    SELECT true, s.active_install_id INTO v_found, v_active
+      FROM public.cloud_autosave_settings s WHERE s.user_id = p_owner;
+  ELSE
+    SELECT true, s.active_install_id INTO v_found, v_active
+      FROM public.cloud_autosave_settings s WHERE s.user_id = p_owner
+       FOR SHARE SKIP LOCKED;                                                                /*SCRUB:settings_lock*/
+  END IF;
+  IF v_found IS NOT TRUE THEN
+    IF EXISTS (SELECT 1 FROM public.cloud_autosave_settings s WHERE s.user_id = p_owner) THEN
+      UPDATE public.cloud_blob_erase_runs r
+         SET counts = r.counts || jsonb_build_object('scrub_skipped', coalesce((r.counts ->> 'scrub_skipped')::bigint, 0) + 1)
+       WHERE r.id = p_run_id;
+      RETURN jsonb_build_object('state', 'skipped', 'scrubbed', 0, 'more', false);
+    END IF;
+    RETURN jsonb_build_object('state', 'none', 'scrubbed', 0, 'more', false);
+  END IF;
+  v_on := coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false);   /*SCRUB:switch*/
+  IF NOT v_on OR v_active IS NULL THEN                                                       /*SCRUB:applies*/
+    RETURN jsonb_build_object('state', 'not_applicable', 'scrubbed', 0, 'more', false);
+  END IF;
+
+  IF p_dry_run THEN
+    SELECT count(*) INTO v_nf FROM (
+      SELECT 1 FROM public.cloud_deal_files f
+       WHERE f.owner_user_id = p_owner AND f.removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = f.cloud_deal_id AND d.owner_user_id = p_owner
+                      AND d.source_install_id IS DISTINCT FROM v_active)
+       LIMIT p_limit) x;
+    SELECT count(*) INTO v_nm FROM (
+      SELECT 1 FROM public.cloud_deal_messages m
+       WHERE m.owner_user_id = p_owner AND m.removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = m.cloud_deal_id AND d.owner_user_id = p_owner
+                      AND d.source_install_id IS DISTINCT FROM v_active)
+       LIMIT p_limit - v_nf) x;
+    UPDATE public.cloud_blob_erase_runs r
+       SET counts = r.counts || jsonb_build_object('rows_would_scrub',
+                      coalesce((r.counts ->> 'rows_would_scrub')::bigint, 0) + v_nf + v_nm)
+     WHERE r.id = p_run_id;
+    RETURN jsonb_build_object('state', 'dry_run', 'scrubbed', 0, 'would_scrub', v_nf + v_nm, 'more', false);
+  END IF;
+
+  -- file rows first (they hold the blobs), id order
+  SELECT coalesce(array_agg(x.id ORDER BY x.id), '{}'),
+         coalesce(array_agg(x.blob_id) FILTER (WHERE x.blob_id IS NOT NULL), '{}')
+    INTO v_files, v_blobs FROM (
+    SELECT f.id, f.blob_id FROM public.cloud_deal_files f
+     WHERE f.owner_user_id = p_owner AND f.removed_at IS NULL
+       AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = f.cloud_deal_id AND d.owner_user_id = p_owner
+                    AND d.source_install_id IS DISTINCT FROM v_active)                       /*SCRUB:inactive_files*/
+     ORDER BY f.id LIMIT p_limit
+     FOR UPDATE OF f) x;
+  UPDATE public.cloud_deal_files f SET removed_at = now(), version = f.version + 1, updated_at = now(),
+         filename = NULL, blob_id = NULL                                                     /*SCRUB:files*/
+   WHERE f.id = ANY (v_files) AND f.removed_at IS NULL
+     AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = f.cloud_deal_id
+                  AND d.source_install_id IS DISTINCT FROM v_active);                        /*SCRUB:recheck_files*/
+  GET DIAGNOSTICS v_nf = ROW_COUNT;
+
+  IF v_nf < p_limit THEN
+    SELECT coalesce(array_agg(x.id ORDER BY x.id), '{}') INTO v_msgs FROM (
+      SELECT m.id FROM public.cloud_deal_messages m
+       WHERE m.owner_user_id = p_owner AND m.removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = m.cloud_deal_id AND d.owner_user_id = p_owner
+                      AND d.source_install_id IS DISTINCT FROM v_active)                     /*SCRUB:inactive_messages*/
+       ORDER BY m.id LIMIT p_limit - v_nf
+       FOR UPDATE OF m) x;
+    UPDATE public.cloud_deal_messages m SET removed_at = now(), version = m.version + 1, updated_at = now(),
+           subject = NULL, body_text = NULL, body_truncated = false, participants = NULL      /*SCRUB:messages*/
+     WHERE m.id = ANY (v_msgs) AND m.removed_at IS NULL
+       AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = m.cloud_deal_id
+                    AND d.source_install_id IS DISTINCT FROM v_active);                      /*SCRUB:recheck_messages*/
+    GET DIAGNOSTICS v_nm = ROW_COUNT;
+  END IF;
+
+  v_fenced := public._cloud_fence_unreferenced(p_owner, v_blobs);                            /*SCRUB:fence*/
+
+  UPDATE public.cloud_blob_erase_runs r
+     SET counts = r.counts || jsonb_build_object(
+           'rows_scrubbed', coalesce((r.counts ->> 'rows_scrubbed')::bigint, 0) + v_nf + v_nm,
+           'scrub_batches', coalesce((r.counts ->> 'scrub_batches')::bigint, 0) + 1,
+           'blobs_fenced_by_scrub', coalesce((r.counts ->> 'blobs_fenced_by_scrub')::bigint, 0) + v_fenced)
+   WHERE r.id = p_run_id;
+
+  RETURN jsonb_build_object('state', 'scrubbed', 'scrubbed', v_nf + v_nm, 'files', v_nf, 'messages', v_nm,
+                            'fenced', v_fenced, 'more', (v_nf + v_nm) >= p_limit);
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_scrub(uuid, uuid, boolean, integer) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_scrub(uuid, uuid, boolean, integer) TO service_role;
+
+-- ============================================================================ 7. invoker for the cron job
+-- Runs as the cron job owner. pg_net is asynchronous; the timeout matches the Edge Function's wall-clock budget.
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_invoke() RETURNS bigint
+LANGUAGE plpgsql VOLATILE SET search_path = '' AS $f$
+DECLARE
+  v_url text;
+  v_secret text;
+BEGIN
+  SELECT s.decrypted_secret INTO v_url FROM vault.decrypted_secrets s WHERE s.name = 'cloud_blob_erase_url' LIMIT 1;
+  IF v_url IS NULL OR btrim(v_url) = '' THEN                                                 /*INVOKE:url_required*/
+    RAISE EXCEPTION 'cloud blob erase is not configured: vault secret cloud_blob_erase_url is not set' USING ERRCODE = '55000';
+  END IF;
+  SELECT s.decrypted_secret INTO v_secret FROM vault.decrypted_secrets s WHERE s.name = 'cloud_blob_erase_secret' LIMIT 1;
+  IF v_secret IS NULL THEN
+    RAISE EXCEPTION 'cloud blob erase is not configured: vault secret cloud_blob_erase_secret is not set' USING ERRCODE = '55000';
+  END IF;
+  RETURN net.http_post(
+    url := v_url,
+    body := '{}'::jsonb,
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', v_secret),
+    timeout_milliseconds := 150000
+  );
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_invoke() FROM PUBLIC, anon, authenticated, service_role;
+COMMENT ON FUNCTION public.cloud_blob_erase_invoke() IS
+  'BACKLOG-4263: posts to the cloud-blob-erase Edge Function with x-webhook-secret. Called by the cron job (20261123120000).';

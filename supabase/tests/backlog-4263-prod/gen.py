@@ -35,7 +35,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 MIGDIR = os.path.join(REPO, 'supabase', 'migrations')
 REL = 'supabase/tests/backlog-4263-prod'
-FIRST, LAST = '20261118100000', '20261118190000'
+FIRST, LAST = '20261118100000', '20261123120000'
+# postcheck-final.sql stays frozen at the ten hosted-MCP migrations (production runs it before the 2.49 migrations).
+FINAL_AT = '20261118190000'
 md5 = lambda s: hashlib.md5(s.encode('utf-8')).hexdigest()
 rd = lambda p: open(os.path.join(REPO, p), encoding='utf-8').read()
 lit = lambda s: "'" + s.replace("'", "''") + "'"
@@ -43,7 +45,8 @@ C = lambda xs: sorted(xs, key=lambda x: x.encode('utf-8'))  # COLLATE "C" order
 
 MIGS = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and FIRST <= f[:14] <= LAST)
 VERSIONS = [f[:14] for f in MIGS]
-assert len(MIGS) == 10, MIGS
+FINAL_VERSIONS = [v for v in VERSIONS if v <= FINAL_AT]
+assert len(FINAL_VERSIONS) == 10, MIGS
 PRE_LANE = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and f[:14] < FIRST)
 
 
@@ -592,10 +595,10 @@ def keys_of(v):
             'cons': p['cons'], 'idx': p['idx'], 'cron': p['cron'], 'ledger': [v], 'pretables': p['pretables']}
 
 
-FINAL = per[LAST]['state']
+FINAL = per[FINAL_AT]['state']
 PRE_GRANTS = {t: pre_lane_table_grants(t) for v in VERSIONS for t in per[v]['pretables']}
 FINAL_KEYS = {k: [] for k in ('fn', 'dropped', 'tables', 'cols', 'cons', 'idx', 'cron', 'ledger', 'pretables')}
-for v in VERSIONS:
+for v in FINAL_VERSIONS:
     for k, xs in keys_of(v).items():
         for x in xs:
             if k == 'fn' and x not in FINAL['fn']:
@@ -650,10 +653,10 @@ PRED = {k: {j: predicted_diffs(k, j) for j in VERSIONS if j > k} for k in VERSIO
 # what report_only returns on keepr-test where nothing else differs: the service_role grants on pre-lane tables
 # plus, for a file run after later migrations, the report-only pins those migrations changed (the tool CHECK text)
 TEST_REPORT = {k: sorted({i for i, (kind, _) in WANT[k].items() if kind == SERVICE_ROLE_EXCEPTION}
-                         | set(predicted_diffs(k, 'final', must_only=False) if k != 'final' else [])) for k in ['final'] + VERSIONS}
+                         | set(predicted_diffs(k, 'final', must_only=False) if k != 'final' else [])) for k in ['final'] + FINAL_VERSIONS}
 
 SUPERSEDED = {}
-for k in VERSIONS:
+for k in FINAL_VERSIONS:
     for i in predicted_diffs(k, 'final'):
         if i.endswith(' md5'):
             sig = i[len('function '):-len(' md5')]
@@ -890,8 +893,8 @@ FINAL_SELECT = """SELECT CASE WHEN f.must IS NULL THEN 'ok'
                  WHERE c.got IS DISTINCT FROM c.want) d) f;
 """
 
-RUN_ORDER = ['final'] + VERSIONS
-FILES = {k: render(k) for k in RUN_ORDER}
+RUN_ORDER = ['final'] + FINAL_VERSIONS  # what the test-project verify files run
+FILES = {k: render(k) for k in ['final'] + VERSIONS}
 
 
 # ------------------------------------------------------------------------------------------------ test-project verification files
@@ -1107,7 +1110,7 @@ expected = {
     'postchecks': {k: {'file': f'postcheck-{k}.sql', 'counts': counts(k),
                        'pins': {i: {'label': label(kind), 'kind': kind, 'want': w} for i, (kind, w) in WANT[k].items()}} for k in RUN_ORDER},
     'fails_after': {k: {j: PRED[k][j] for j in PRED[k] if PRED[k][j]} for k in VERSIONS},
-    'expected_at_final_state': {k: ('ok' if not predicted_diffs(k, 'final') else predicted_diffs(k, 'final')) for k in VERSIONS},
+    'expected_at_final_state': {k: ('ok' if not predicted_diffs(k, 'final') else predicted_diffs(k, 'final')) for k in FINAL_VERSIONS},
     'report_only_expected_on_keepr_test': TEST_REPORT,
     'controls': {c[0]: {'postcheck': c[1], 'expect': c[4], 'text': c[5]} for c in CONTROLS},
     'superseded_bodies_required_by_later_pre_checks': SUPERSEDED,
@@ -1248,7 +1251,7 @@ Every `.sql` file in this folder is read-only. The test-database harness (`verif
 in `../backlog-4263-prod-verify/` and is never run on production.
 """
 
-OUTS = {f'postcheck-{k}.sql': FILES[k] for k in RUN_ORDER}
+OUTS = {f'postcheck-{k}.sql': FILES[k] for k in FILES}
 OUTS['expected.json'] = json.dumps(expected, indent=2, ensure_ascii=False) + '\n'
 OUTS['README.md'] = readme
 VERIFY_README = f"""# Test-database harness for the BACKLOG-4263 production post-checks

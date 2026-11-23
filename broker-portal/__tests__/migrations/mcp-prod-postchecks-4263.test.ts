@@ -23,6 +23,8 @@ const DIR = join(REPO, 'supabase/tests/backlog-4263-prod');
 const VERIFY_DIR = join(REPO, 'supabase/tests/backlog-4263-prod-verify');
 const FIRST = '20261118100000';
 const LAST = '20261118190000';
+/** postcheck-final.sql stays frozen at the ten hosted-MCP migrations; later versions have only their own post-check. */
+const FINAL_AT = '20261118190000';
 const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
 const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex');
 
@@ -197,7 +199,9 @@ describe('BACKLOG-4263 production post-checks', () => {
     const pc = read(FILE(v));
     const defined = bodies(MIG.get(v)!);
     const pins = pinned(pc);
-    expect(defined.size).toBeGreaterThan(0);
+    // a schedule-only migration defines no function; its post-check pins the cron job instead
+    if (defined.size === 0) expect(cte(pc, 'job(name, want)').length).toBeGreaterThan(0);
+    else expect(defined.size).toBeGreaterThan(0);
     expect([...pins.keys()].sort()).toEqual([...defined.keys()].sort());
     for (const [name, body] of defined) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
     expect(absent(pc).sort()).toEqual(dropped(MIG.get(v)!).filter((n) => !defined.has(n)).sort());
@@ -206,7 +210,9 @@ describe('BACKLOG-4263 production post-checks', () => {
 
   it('postcheck-final pins every function of the lane at its latest body, and the dropped ones as absent', () => {
     const latest = new Map<string, string>();
-    for (const v of VERSIONS) {
+    const FINAL_VERSIONS = VERSIONS.filter((v) => v <= FINAL_AT);
+    expect(FINAL_VERSIONS.length).toBe(10);
+    for (const v of FINAL_VERSIONS) {
       for (const n of dropped(MIG.get(v)!)) latest.delete(n);
       for (const [n, b] of bodies(MIG.get(v)!)) latest.set(n, b);
     }
@@ -214,9 +220,10 @@ describe('BACKLOG-4263 production post-checks', () => {
     const pins = pinned(pc);
     expect([...pins.keys()].sort()).toEqual([...latest.keys()].sort());
     for (const [name, body] of latest) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
-    const everDropped = VERSIONS.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
+    const everDropped = FINAL_VERSIONS.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
     expect(absent(pc).sort()).toEqual([...new Set(everDropped)].sort());
-    for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
+    for (const v of FINAL_VERSIONS) expect(pc).toContain(`('${v}')`);
+    for (const v of VERSIONS.filter((x) => x > FINAL_AT)) expect(pc).not.toContain(`('${v}')`);
   });
 
   it('the production folder holds only read-only files: no verify-* file, and no write statement in any .sql file', () => {
@@ -307,7 +314,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     const isReport = (kind: string): boolean => report.includes(kind);
     const fx = cte(pc, 'fx(sig, role, want, kind)');
     const rx = cte(pc, 'rx(name, src, role, want, kind)');
-    expect(fx.length + rx.length).toBeGreaterThan(0);
+    expect(fx.length + rx.length + cte(pc, 'job(name, want)').length).toBeGreaterThan(0);
     for (const [sig, role, , kind] of fx) {
       if (API.includes(role)) expect(`${sig} ${role} ${isReport(kind)}`).toBe(`${sig} ${role} false`);
     }

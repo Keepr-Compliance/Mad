@@ -40,6 +40,14 @@
     "20261118190000": {
       "file": "supabase/migrations/20261118190000_backlog_4263_mcp_register_refresh_bounds.sql",
       "file_md5": "4272574f570870edb010560a35e24c12"
+    },
+    "20261123110000": {
+      "file": "supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql",
+      "file_md5": "ebc9f204a55695c8bc72a575b7772e6c"
+    },
+    "20261123120000": {
+      "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",
+      "file_md5": "5cd6dfc36798f747a7ed620eab3417d2"
     }
   },
   "labels": {
@@ -271,6 +279,44 @@
       "mcp_restore_todo(text,bytea,text,text,text)",
       "mcp_update_todo(text,bytea,text,text,jsonb,text)",
       "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123110000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123120000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
     ]
   },
   "authenticated_callable_mcp_by_stage": {
@@ -355,6 +401,22 @@
       "mcp_list_my_connections()"
     ],
     "20261118190000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()"
+    ],
+    "20261123110000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()"
+    ],
+    "20261123120000": [
       "mcp_authorize_approve(text,bytea,text,bytea)",
       "mcp_authorize_deny(text,bytea,text)",
       "mcp_authorize_view(text,bytea)",
@@ -15150,6 +15212,16 @@
         "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118110000": {
@@ -15218,6 +15290,24 @@
         "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
         "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118120000": {
@@ -15240,6 +15330,12 @@
         "anon-callable mcp_ functions"
       ],
       "20261118190000": [
+        "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
         "anon-callable mcp_ functions"
       ]
     },
@@ -15269,6 +15365,20 @@
         "function mcp_authorize_view(text,bytea) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118140000": {
@@ -15286,13 +15396,21 @@
       ],
       "20261118190000": [
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118150000": {},
     "20261118160000": {},
     "20261118170000": {},
     "20261118180000": {},
-    "20261118190000": {}
+    "20261118190000": {},
+    "20261123110000": {},
+    "20261123120000": {}
   },
   "expected_at_final_state": {
     "20261118100000": [
