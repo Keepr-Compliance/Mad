@@ -502,6 +502,11 @@ describe(`Keepr Cloud one computer per account [${DRIVER}]`, () => {
       const view = await a.e.service.getView();
       expect(view.status).toBe("other_computer");
       expect(view.turnOffDropped).toBe(true);
+      // Then the account is turned off from the active computer: "nothing was deleted online" is no longer true.
+      expect(await b.e.service.turnOff()).toEqual({ success: true });
+      const after = await a.e.service.getView();
+      expect(after.status).toBe("off");
+      expect(after.turnOffDropped).toBeUndefined();
     });
 
     it("the server refusing an owed turn-off (a move committed after the state read) drops it too", async () => {
