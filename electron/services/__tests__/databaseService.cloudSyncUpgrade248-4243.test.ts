@@ -1346,8 +1346,8 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       contact_emails: { where: "id = ?", arg: id(5, 1), over: { id: id(5, 20), email: "sweep@example.test" } },
       contact_phones: { where: "id = ?", arg: id(6, 1), over: { id: id(6, 20), phone_e164: "+12125550196" } },
       contact_source_links: { where: "id = ?", arg: id(7, 1), over: { id: id(7, 20), source_record_id: "rec-sweep" } },
-      // BACKLOG-4263 P5: a copy of D1's email link; a copy of D1's threaded text (marks through the thread link)
-      communications: { where: "id = ?", arg: id(18, 3), over: { id: id(18, 20), email_id: id(9, 2) } },
+      // BACKLOG-4263 P5: a copy of D1's text link (another text); a copy of D1's threaded text (marks through the thread link)
+      communications: { where: "id = ?", arg: id(18, 1), over: { id: id(18, 20), message_id: id(12, 2) } },
       messages: { where: "id = ?", arg: id(12, 4), over: { id: id(12, 20), external_id: "guid-sweep-copy" } },
     };
     // BACKLOG-4263 P5: the email and text UPDATE triggers fire only on a real change; each step sets a new value
