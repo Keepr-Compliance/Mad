@@ -27,6 +27,7 @@
  */
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import { OUTBOX_TOP_SQL } from "../db/cloudSyncTodoSql";
+import { DIRTY_TOP_SQL } from "../db/cloudSyncSql";
 import type { PassOutcome, PassSummary } from "./runner";
 
 /** How often the watcher looks at the outbox. */
@@ -40,6 +41,8 @@ export const FAILED_PASS_GAPS_MS = [10_000, 20_000, 40_000] as const;
 interface OutboxTop {
   at: string | null;
   seq: number | null;
+  /** BACKLOG-4263 P5: the newest deal mark (cloud_sync_dirty.marked_at), compared only with its own earlier value. */
+  dirtyAt: string | null;
 }
 
 export interface TodoOutboxWatcherDeps {
@@ -73,6 +76,8 @@ export class TodoOutboxWatcher {
   private lastPassStartMs: number | null = null;
   /** The outbox's newest values at the last pass start; null until a pass started (or the read failed). */
   private mark: OutboxTop | null = null;
+  /** BACKLOG-4263 P5: the last pass ended done with its email and text budget used up and work left. */
+  private continueWanted = false;
 
   constructor(private readonly deps: TodoOutboxWatcherDeps) {}
 
@@ -94,6 +99,7 @@ export class TodoOutboxWatcher {
   /** Sign-out: forget the last pass and the mark, so the next user gets no kick until their own pass ends done. */
   forgetLastPass(): void {
     this.lastOutcome = null;
+    this.continueWanted = false;
     this.failures = 0;
     this.lastPassStartMs = null;
     this.mark = null;
@@ -119,6 +125,7 @@ export class TodoOutboxWatcher {
     }
     if (summary.outcome === "queued") return;
     this.lastOutcome = summary.outcome;
+    this.continueWanted = summary.outcome === "done" && summary.budgetExhausted === true;
     if (passFailed(summary)) this.failures++;
     else if (summary.outcome === "done") this.failures = 0;
   }
@@ -135,7 +142,8 @@ export class TodoOutboxWatcher {
       const gap = gapAfterFailures(this.failures);
       if (gap === null) return;
       if (this.lastPassStartMs !== null && deps.now().getTime() - this.lastPassStartMs < gap) return;
-      if (!this.mark || !isNewer(this.readTop(), this.mark)) return;
+      if (!this.mark) return;
+      if (!this.continueWanted && !isNewer(this.readTop(), this.mark)) return;
       deps.kick();
     } catch {
       /* the next look, or the 60 s timer, tries again */
@@ -144,11 +152,17 @@ export class TodoOutboxWatcher {
 
   private readTop(): OutboxTop {
     const row = this.deps.db().prepare(OUTBOX_TOP_SQL).get(this.deps.projectRef) as Partial<OutboxTop> | undefined;
-    return { at: typeof row?.at === "string" ? row.at : null, seq: typeof row?.seq === "number" ? row.seq : null };
+    const dirty = this.deps.db().prepare(DIRTY_TOP_SQL).get() as { at?: unknown } | undefined;
+    return {
+      at: typeof row?.at === "string" ? row.at : null,
+      seq: typeof row?.seq === "number" ? row.seq : null,
+      dirtyAt: typeof dirty?.at === "string" ? dirty.at : null,
+    };
   }
 }
 
 function isNewer(now: OutboxTop, mark: OutboxTop): boolean {
   if (now.seq !== null && (mark.seq === null || now.seq > mark.seq)) return true;
+  if (now.dirtyAt !== null && (mark.dirtyAt === null || now.dirtyAt > mark.dirtyAt)) return true;
   return now.at !== null && (mark.at === null || now.at > mark.at);
 }

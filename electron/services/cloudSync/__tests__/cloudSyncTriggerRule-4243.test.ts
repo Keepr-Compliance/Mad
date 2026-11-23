@@ -42,8 +42,8 @@ const turnOn = (db: TestDb, user = USER_A, project = PROJECT) =>
   enableForUser(db, project, user, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" });
 
 describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
-  it("there are 22 triggers (16 dirty-mark, 6 todo capture: BACKLOG-4263 PR-4a removed the 6 checklist/item dirty-mark triggers)", () => {
-    expect(CLOUD_SYNC_TRIGGERS).toHaveLength(22);
+  it("there are 31 triggers (16 dirty-mark, 6 todo capture, 9 email and text marks: BACKLOG-4263 PR-4a removed the 6 checklist/item dirty-mark triggers, P5 added 9)", () => {
+    expect(CLOUD_SYNC_TRIGGERS).toHaveLength(31);
     expect(CLOUD_SYNC_TRIGGERS.filter((t) => t.name.startsWith("trg_cloud_sync_todo_"))).toHaveLength(6);
     for (const gone of ["checklist_insert", "checklist_update", "checklist_delete", "item_insert", "item_update", "item_delete"]) {
       expect(CLOUD_SYNC_TRIGGERS.map((t) => t.name)).not.toContain(`trg_cloud_sync_${gone}`);
@@ -72,7 +72,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     expect(e.server.calls).toHaveLength(0);
   });
 
-  it("C-b: turn-on creates all 22 triggers before the deals are marked, in one transaction; a deal added right after the mark is marked", () => {
+  it("C-b: turn-on creates all 31 triggers before the deals are marked, in one transaction; a deal added right after the mark is marked", () => {
     const db = realProfile();
     insertDeal(db, "d-before");
     // A deal added between the mark-all step and the end of the turn-on transaction.
@@ -123,7 +123,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     expect(triggers(db)).toEqual([]);
   });
 
-  it("C-c: with a second user still on, one user's turn-off keeps all 22; that user's deals stay unmarked", async () => {
+  it("C-c: with a second user still on, one user's turn-off keeps all 31; that user's deals stay unmarked", async () => {
     const db = realProfile();
     turnOn(db, USER_A);
     turnOn(db, USER_B);
@@ -164,7 +164,7 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     const db = freshDb({ triggers: false });
     ensureCloudSyncTriggers(db); // what an earlier build did on every open
     expect(triggers(db)).toEqual(ALL);
-    expect(applyCloudSyncTriggerRule(db)).toMatchObject({ wanted: false, dropped: 22 });
+    expect(applyCloudSyncTriggerRule(db)).toMatchObject({ wanted: false, dropped: 31 });
     expect(triggers(db)).toEqual([]);
   });
 

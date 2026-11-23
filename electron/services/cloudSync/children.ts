@@ -14,6 +14,8 @@
  * (todos/sender.ts), and the two old one-way item functions are dropped online (migration 20261118120000).
  */
 import type { ChildStateRow, DealChildRows } from "../db/cloudSyncDbService";
+import type { MessageStateRow } from "../db/cloudSyncMessagesDb";
+import { MESSAGE_HASH_VERSION, type ProjectedMessage } from "./messageProjection";
 import {
   buildPartyDto,
   HASH_VERSION,
@@ -113,9 +115,9 @@ export function hasChildWork(plan: ChildPlan): boolean {
 }
 
 /** Splits rows into calls of at most MAX_ROWS_PER_CALL rows and MAX_BYTES_PER_CALL serialised bytes. */
-export function batches(rows: ProjectedChild[]): ProjectedChild[][] {
-  const out: ProjectedChild[][] = [];
-  let cur: ProjectedChild[] = [];
+export function batches<T extends { payload: unknown }>(rows: T[]): T[][] {
+  const out: T[][] = [];
+  let cur: T[] = [];
   let bytes = 2;
   for (const r of rows) {
     const size = Buffer.byteLength(JSON.stringify(r.payload), "utf8") + 1;
@@ -129,4 +131,42 @@ export function batches(rows: ProjectedChild[]): ProjectedChild[][] {
   }
   if (cur.length > 0) out.push(cur);
   return out;
+}
+
+// ---------------------------------------------------------------- emails and texts (BACKLOG-4263 P5)
+
+export interface MessageTombstone {
+  key: string;
+  cloudId: string;
+}
+
+export interface MessagePlan {
+  send: ProjectedMessage[];
+  /** Live records of this deal whose key is not in the deal's selected set (never decided by row existence). */
+  tombstone: MessageTombstone[];
+}
+
+/**
+ * Send when the switch is on and: no record, the record is removed, has no online id, or its hash or hash version
+ * differs. Tombstone (switch on or off) a live record of this deal whose key is not selected.
+ */
+export function planMessages(selected: ProjectedMessage[], records: MessageStateRow[], uploadOn: boolean): MessagePlan {
+  const byKey = new Map(records.map((r) => [r.local_id, r]));
+  const live = new Set(selected.map((m) => m.key));
+  const send = uploadOn
+    ? selected.filter((m) => {
+        const st = byKey.get(m.key);
+        return !(st && st.removed === 0 && st.cloud_id !== null && st.content_hash === m.hash && st.hash_version === MESSAGE_HASH_VERSION);
+      })
+    : [];
+  const tombstone: MessageTombstone[] = [];
+  for (const r of records) {
+    if (r.removed !== 0 || !r.cloud_id || live.has(r.local_id)) continue;
+    tombstone.push({ key: r.local_id, cloudId: r.cloud_id });
+  }
+  return { send, tombstone };
+}
+
+export function hasMessageWork(plan: MessagePlan): boolean {
+  return plan.send.length > 0 || plan.tombstone.length > 0;
 }

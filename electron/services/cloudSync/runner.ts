@@ -22,12 +22,17 @@ import {
   batches,
   CHILD_KINDS,
   hasChildWork,
+  hasMessageWork,
   MAX_TOMBSTONES_PER_CALL,
   planChildren,
+  planMessages,
   projectChildren,
   type ChildPlan,
   type ChildTombstone,
+  type MessagePlan,
 } from "./children";
+import { MESSAGE_HASH_VERSION, projectMessage } from "./messageProjection";
+import * as messagesDb from "../db/cloudSyncMessagesDb";
 import { otherComputerActive, parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity, SessionUser } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
@@ -77,6 +82,10 @@ export const INTEGRITY_SQLSTATE = /^23[0-9A-Z]{3}$/;
 /** A tombstone answer that means the row is gone online. */
 export const TOMBSTONE_DONE_STATUSES = ["removed", "unchanged", "not_found"] as const;
 export const DEALS_PER_PASS = 200;
+/** BACKLOG-4263 P5 (plan §11.7): at most this many cloud_upsert_messages calls, rows and row-JSON bytes per pass. */
+export const MESSAGE_CALLS_PER_PASS = 4;
+export const MESSAGE_ROWS_PER_PASS = 2_000;
+export const MESSAGE_BYTES_PER_PASS = 32 * 1024 * 1024;
 
 export type PassOutcome =
   | "done"
@@ -150,6 +159,11 @@ export interface PassSummary {
   /** BACKLOG-4263 PR-4b: what the todo puller did, and the sender's second run after a full pull's scan. */
   pull?: TodoPullSummary;
   todosAfterPull?: TodoSendSummary;
+  /**
+   * BACKLOG-4263 P5: the pass stopped sending emails and texts because its per-pass budget was used up while a
+   * selected row of a marked deal was still unsent. The watcher asks for the next pass (after its 10 s floor).
+   */
+  budgetExhausted?: boolean;
 }
 
 class StopPass extends Error {
@@ -165,6 +179,20 @@ function shortId(id: string): string {
 }
 
 type DealResult = "done" | "failed" | "kept";
+
+/** BACKLOG-4263 P5: what the emails and texts of this pass have spent so far, and why sending stopped. */
+interface MessagePassState {
+  /** The last state answer's switches.messages_upload. */
+  uploadOn: boolean;
+  /** The server answered feature_off during this pass: no more sends this pass. */
+  featureOff: boolean;
+  calls: number;
+  rows: number;
+  bytes: number;
+  budgetExhausted: boolean;
+}
+
+const freshMessagePass = (uploadOn: boolean): MessagePassState => ({ uploadOn, featureOff: false, calls: 0, rows: 0, bytes: 0, budgetExhausted: false });
 
 export class CloudSyncRunner {
   private running: Promise<PassSummary> | null = null;
@@ -182,6 +210,8 @@ export class CloudSyncRunner {
    * null before any state read this launch. Decides whether a turn-off sends this computer's install id.
    */
   private serverHasOneComputer: boolean | null = null;
+  /** BACKLOG-4263 P5: this pass's email and text sending state. */
+  private msgPass: MessagePassState = freshMessagePass(false);
   /**
    * BACKLOG-4263 P2: users whose owed turn-off was dropped this launch because another computer became active (for
    * the screen's line). In memory only; cleared when Keepr Cloud is turned on or moved here again.
@@ -572,6 +602,10 @@ export class CloudSyncRunner {
     }
 
     store.preparePass(db, deps.projectRef, pinned.userId, state.acceptedAt, this.log, this.now());
+    // BACKLOG-4263 P5 (plan §11.6, §12.2): the last-seen messages_upload value; off → on marks every eligible deal once.
+    const uploadOn = state.switches?.messagesUpload === true;
+    if (state.switches) messagesDb.applyMessagesUploadSwitch(db, deps.projectRef, pinned.userId, uploadOn, this.now());
+    this.msgPass = freshMessagePass(uploadOn);
 
     let done = 0;
     let failed = 0;
@@ -581,6 +615,8 @@ export class CloudSyncRunner {
     this.passUser = pinned.userId;
     try {
       if (this.reconcileDue(db, pinned.userId)) await this.reconcile(db, pinned, installId);
+      // BACKLOG-4263 P5: the email and text reconcile, its own step with its own due marker (C-5h, delta MF-1).
+      await this.reconcileMessages(db, pinned, installId);
       const due = store.selectDueDirty(db, pinned.userId, this.now(), DEALS_PER_PASS);
       for (const row of due) {
         this.guard(pinned);
@@ -588,6 +624,9 @@ export class CloudSyncRunner {
         if (r === "done") done++;
         else if (r === "failed") failed++;
       }
+      // BACKLOG-4263 P5 (plan DM-1): a deal upload in this pass that un-removed a deal online made the email and text
+      // reconcile due; it runs now (a no-op when not due), so its marks are in place for the next pass.
+      await this.reconcileMessages(db, pinned, installId);
       // BACKLOG-4263 PR-4c (Q8): Delete for good still owed, after the deals (their removals went first).
       await this.finishOwedPurges(db, pinned, installId);
       // BACKLOG-4263 PR-4a: todo changes, after the deals (an op names its deal by cloud id).
@@ -623,7 +662,16 @@ export class CloudSyncRunner {
     } finally {
       this.passUser = null;
     }
-    return this.finish({ outcome: "done", done, failed, state, todos: todoSummary, pull: pullSummary, todosAfterPull: afterPull });
+    return this.finish({
+      outcome: "done",
+      done,
+      failed,
+      state,
+      todos: todoSummary,
+      pull: pullSummary,
+      todosAfterPull: afterPull,
+      budgetExhausted: this.msgPass.budgetExhausted,
+    });
   }
 
   private wrongAccount(state: ServerState, done = 0, failed = 0): PassSummary {
@@ -800,9 +848,10 @@ export class CloudSyncRunner {
       state.content_hash === projected.hash &&
       state.hash_version === HASH_VERSION;
     const plan = this.planDealChildren(db, pinned.userId, row.transaction_id);
+    let msgPlan = this.planDealMessages(db, pinned.userId, row.transaction_id);
 
     // The shortcut: nothing to send for the header or any child, and the server confirmed it all.
-    if (state?.last_status === "synced" && unchanged && !hasChildWork(plan)) {
+    if (state?.last_status === "synced" && unchanged && !hasChildWork(plan) && !hasMessageWork(msgPlan)) {
       this.clearMark(db, row);
       return "done";
     }
@@ -817,9 +866,11 @@ export class CloudSyncRunner {
     // R3: the mark call is last, after the header and every child call of this pass was accepted.
     let currentPlan = plan;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const children = await this.syncChildren(db, pinned, installId, row, cloudId as string, currentPlan);
+      const children = await this.syncChildren(db, pinned, installId, row, cloudId as string, currentPlan, msgPlan);
       let notFound = children.kind === "not_found";
       if (children.kind === "failed") return children.result;
+      // BACKLOG-4263 P5: emails or texts left unsent (budget used up, or feature_off): the mark stays, not parked.
+      if (children.kind === "kept") return "kept";
       if (!notFound) {
         this.guard(pinned);
         const res = await this.deps.client.markDealSynced(pinned.userId, installId, cloudId as string);
@@ -848,6 +899,7 @@ export class CloudSyncRunner {
       cloudId = again.cloudId;
       cloudVersion = again.version;
       currentPlan = this.planDealChildren(db, pinned.userId, row.transaction_id);
+      msgPlan = this.planDealMessages(db, pinned.userId, row.transaction_id);
     }
     this.park(db, row, "not_found");
     return "failed";
@@ -1052,6 +1104,100 @@ export class CloudSyncRunner {
     return summary;
   }
 
+  /**
+   * BACKLOG-4263 P5 (plan §2 "Message reconcile", delta MF-1/MF-2, DM-1): compares this install's online email and
+   * text rows with this database's records, when its own marker says it is due. One local transaction, after a
+   * compare-and-set on the marker and the enabled flag:
+   * - an online row with no record, of an eligible local deal: adopted (a record with no hash; never overwrites) and
+   *   its deal marked, so the planner re-sends it if selected and tombstones it if not;
+   * - a live record whose online row is missing, removed or different: its hash forgotten and its deal marked, or,
+   *   for a deal that is not eligible here, recorded removed;
+   * - the marker written ok. A failed read records a failure instead (back-off), and nothing else.
+   * It makes no server write itself. Rows of other installs are never listed (cloud_list_install_rows filters by
+   * install).
+   */
+  async reconcileMessages(db: SqlDb, pinned: SessionUser, installId: string): Promise<boolean> {
+    const { projectRef } = this.deps;
+    const before = messagesDb.readReconcileMarker(db, projectRef, pinned.userId);
+    if (!messagesDb.messageReconcileDue(before, this.now())) return false;
+    // Deals still to be uploaded (never failed yet) have no online id: their rows could not be mapped. Wait (still due),
+    // at most RECONCILE_HOLD_MAX_MS from the first wait; the call after the deal loop, or a later pass, runs it.
+    if (messagesDb.dealsAwaitingRecord(db, projectRef, pinned.userId) > 0) {
+      const since = messagesDb.reconcileWaitingSince(db, projectRef, pinned.userId);
+      if (since === null) {
+        messagesDb.recordReconcileWaiting(db, projectRef, pinned.userId, this.now());
+        return false;
+      }
+      if (this.now().getTime() - since < messagesDb.RECONCILE_HOLD_MAX_MS) return false;
+    }
+    type Online = { cloudId: string; cloudDealId: string; hash: string | null; removed: boolean };
+    const online = new Map<string, Online>();
+    const dealByCloud = new Map<string, string>();
+    for (const st of store.readUserState(db, projectRef, pinned.userId)) {
+      if (st.entity === "deal" && st.cloud_id) dealByCloud.set(st.cloud_id, st.local_id);
+    }
+    let after: string | null = null;
+    let complete = false;
+    for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
+      this.guard(pinned);
+      const res = await this.deps.client.listInstallRows(pinned.userId, installId, "message", after, RECONCILE_PAGE_SIZE);
+      this.stopOn(res);
+      if (res.kind !== "ok" || !Array.isArray(res.body.rows)) break;
+      for (const r of res.body.rows as Array<Record<string, unknown>>) {
+        if (!r || typeof r !== "object" || typeof r.cloud_id !== "string" || typeof r.local_id !== "string") continue;
+        if (typeof r.cloud_deal_id !== "string" || (r.channel_kind !== "email" && r.channel_kind !== "text")) continue;
+        const tx = dealByCloud.get(r.cloud_deal_id);
+        if (!tx) continue;
+        const key = messagesDb.recordKey(tx, r.channel_kind, r.local_id);
+        const removed = r.removed === true;
+        if (removed && online.get(key)?.removed === false) continue;
+        online.set(key, { cloudId: r.cloud_id, cloudDealId: r.cloud_deal_id, hash: typeof r.content_hash === "string" ? r.content_hash : null, removed });
+      }
+      after = typeof res.body.next_after === "string" ? res.body.next_after : null;
+      if (!after) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete) {
+      this.log.warn("[CloudSync] Message reconcile read failed", {});
+      messagesDb.recordMessageReconcileFailure(db, projectRef, pinned.userId, before, this.now());
+      return false;
+    }
+    const eligible = store.readEligibleDealIds(db, pinned.userId);
+    const records = new Map(messagesDb.messageStatesOfUser(db, projectRef, pinned.userId).map((r) => [r.local_id, r]));
+    const w: messagesDb.MessageReconcileWrites = { adopt: [], nullHashes: [], gone: [], markDeals: [] };
+    const mark = new Set<string>();
+    for (const [key, on] of online) {
+      const tx = messagesDb.parseRecordKey(key)?.transactionId;
+      if (!tx || !eligible.has(tx)) continue;
+      const rec = records.get(key);
+      if (!rec) {
+        // Adopted whether removed or not: a removed deal's rows come back live when the deal is uploaded again.
+        w.adopt.push({ key, transactionId: tx, cloudId: on.cloudId, cloudDealId: on.cloudDealId });
+        mark.add(tx);
+      } else if (
+        (rec.removed === 0 && (rec.cloud_id !== on.cloudId || on.removed || rec.content_hash !== on.hash)) ||
+        (rec.removed !== 0 && !on.removed)
+      ) {
+        // Revisited: re-sent if selected, tombstoned if not (a record recorded removed but live online included).
+        w.nullHashes.push(key);
+        mark.add(tx);
+      }
+    }
+    for (const [key, rec] of records) {
+      if (rec.removed !== 0 || !rec.cloud_id || online.has(key)) continue;
+      if (eligible.has(rec.transaction_id)) {
+        w.nullHashes.push(key);
+        mark.add(rec.transaction_id);
+      } else {
+        w.gone.push(key);
+      }
+    }
+    w.markDeals = [...mark];
+    return messagesDb.applyMessageReconcile(db, projectRef, pinned.userId, before, w, this.now());
+  }
+
   private planDealChildren(db: SqlDb, userId: string, transactionId: string): ChildPlan {
     const { projectRef } = this.deps;
     const projectedChildren = projectChildren(store.readDealChildren(db, transactionId));
@@ -1061,6 +1207,13 @@ export class CloudSyncRunner {
       store.getChildStatesOfDeal(db, projectRef, userId, transactionId),
       (kind, localId) => store.getChildState(db, projectRef, userId, kind, localId),
     );
+  }
+
+  /** BACKLOG-4263 P5: the deal's selected emails and texts against this database's records of them. */
+  private planDealMessages(db: SqlDb, userId: string, transactionId: string): MessagePlan {
+    const selected = messagesDb.selectDealMessages(db, transactionId).map(projectMessage);
+    const records = messagesDb.messageStatesOfDeal(db, this.deps.projectRef, userId, transactionId);
+    return planMessages(selected, records, this.msgPass.uploadOn);
   }
 
   /**
@@ -1077,7 +1230,8 @@ export class CloudSyncRunner {
     row: store.DirtyRow,
     cloudDealId: string,
     plan: ChildPlan,
-  ): Promise<{ kind: "ok" } | { kind: "not_found" } | { kind: "failed"; result: DealResult }> {
+    msgPlan: MessagePlan,
+  ): Promise<{ kind: "ok" } | { kind: "not_found" } | { kind: "kept" } | { kind: "failed"; result: DealResult }> {
     const { projectRef } = this.deps;
     let allAccepted = true;
 
@@ -1151,6 +1305,82 @@ export class CloudSyncRunner {
       if (r === "not_found") return { kind: "not_found" };
       if (r !== "ok") return { kind: "failed", result: r };
     }
+    // BACKLOG-4263 P5: emails and texts. Tombstones first (never gated by the switch or the budget), then sends.
+    for (let i = 0; i < msgPlan.tombstone.length; i += MAX_TOMBSTONES_PER_CALL) {
+      const chunk = msgPlan.tombstone.slice(i, i + MAX_TOMBSTONES_PER_CALL);
+      this.guard(pinned);
+      const res = await this.deps.client.tombstone(pinned.userId, installId, "message", chunk.map((t) => t.cloudId));
+      this.stopOn(res);
+      if (res.kind !== "ok") return { kind: "failed", result: this.recordFailure(db, row, res) };
+      const byCloud = new Map<string, Record<string, unknown>>();
+      for (const r of Array.isArray(res.body.results) ? (res.body.results as Array<Record<string, unknown>>) : []) {
+        if (r && typeof r === "object" && typeof r.cloud_id === "string") byCloud.set(r.cloud_id, r);
+      }
+      const gone: string[] = [];
+      for (const t of chunk) {
+        const st = byCloud.get(t.cloudId)?.status;
+        if (typeof st === "string" && (TOMBSTONE_DONE_STATUSES as readonly string[]).includes(st)) gone.push(t.key);
+        else allAccepted = false;
+      }
+      if (gone.length > 0) {
+        this.recordRemoved(db, projectRef, pinned.userId, "message", gone, this.now());
+        this.sentThisPass++;
+      }
+    }
+    let unsent = false;
+    const mp = this.msgPass;
+    for (const batch of batches(msgPlan.send)) {
+      if (mp.featureOff) {
+        unsent = true;
+        break;
+      }
+      const roomRows = MESSAGE_ROWS_PER_PASS - mp.rows;
+      const take = batch.slice(0, Math.max(0, roomRows));
+      const bytes = take.reduce((n, m) => n + Buffer.byteLength(JSON.stringify(m.payload), "utf8") + 1, 2);
+      if (mp.calls >= MESSAGE_CALLS_PER_PASS || take.length === 0 || (mp.calls > 0 && mp.bytes + bytes > MESSAGE_BYTES_PER_PASS)) {
+        mp.budgetExhausted = true;
+        unsent = true;
+        break;
+      }
+      mp.calls++;
+      mp.rows += take.length;
+      mp.bytes += bytes;
+      this.guard(pinned);
+      const res = await this.deps.client.upsertMessages(pinned.userId, installId, cloudDealId, take.map((m) => m.payload));
+      this.stopOn(res);
+      if (res.kind === "refused" && res.code === "feature_off") {
+        mp.featureOff = true;
+        unsent = true;
+        break;
+      }
+      if (res.kind === "refused" && res.code === "not_found") return { kind: "not_found" };
+      if (res.kind !== "ok") return { kind: "failed", result: this.recordFailure(db, row, res) };
+      const byLocal = new Map<string, Record<string, unknown>>();
+      for (const r of Array.isArray(res.body.results) ? (res.body.results as Array<Record<string, unknown>>) : []) {
+        if (r && typeof r === "object" && typeof r.local_id === "string") byLocal.set(r.local_id, r);
+      }
+      const accepted: store.AcceptedChild[] = [];
+      for (const sent of take) {
+        const r = byLocal.get(sent.localId);
+        const status = typeof r?.status === "string" ? r.status : "";
+        if (r && (SAVED_ROW_STATUSES as readonly string[]).includes(status) && r.content_hash === sent.hash && typeof r.cloud_id === "string") {
+          accepted.push({ localId: sent.key, cloudId: r.cloud_id, hash: sent.hash, version: typeof r.version === "number" ? r.version : null });
+        } else {
+          allAccepted = false;
+          this.log.warn("[CloudSync] Row not saved", { kind: "message", code: status || "missing", deal: shortId(row.transaction_id) });
+        }
+      }
+      if (accepted.length > 0) {
+        this.recordSaved(db, projectRef, pinned.userId, "message", row.transaction_id, cloudDealId, accepted, MESSAGE_HASH_VERSION, this.now());
+        this.sentThisPass++;
+      }
+      if (take.length < batch.length) {
+        mp.budgetExhausted = true;
+        unsent = true;
+        break;
+      }
+    }
+
     const order: ChildKind[] = ["party"];
     const removed = await tombstone(order.flatMap((k) => plan.tombstone.filter((t) => t.kind === k)));
     if (removed !== "ok") return { kind: "failed", result: removed };
@@ -1159,6 +1389,7 @@ export class CloudSyncRunner {
       this.park(db, row, "row_not_saved");
       return { kind: "failed", result: "failed" };
     }
+    if (unsent) return { kind: "kept" };
     return { kind: "ok" };
   }
 
@@ -1201,6 +1432,9 @@ export class CloudSyncRunner {
       // its archive after its online copy was purged, or after a machine rebind) is forgotten, and the deal's
       // todos are queued again against the new copy.
       todoStore.resetTodoDealIfOtherCloudDeal(db, this.deps.projectRef, pinned.userId, row.transaction_id, cloudId, this.now());
+      // BACKLOG-4263 P5 (plan DM-1): the server un-removed this deal online (migration 20261123100000 DEAL:unremove,
+      // `restored`). Its email and text rows online come back with it: the email and text reconcile is due now.
+      if (r.restored === true) messagesDb.deleteReconcileMarker(db, this.deps.projectRef, pinned.userId);
     })();
     return { kind: "saved", cloudId, version };
   }

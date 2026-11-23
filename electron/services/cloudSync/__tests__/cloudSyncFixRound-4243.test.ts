@@ -13,7 +13,7 @@ import { prepareRestoredFile } from "../../db/cloudSyncTriggers";
 import type { RpcTransport } from "../cloudClient";
 
 function stateRows(db: TestDb) {
-  return db.prepare("SELECT owner_user_id, local_id, cloud_id, content_hash, last_status FROM cloud_sync_state ORDER BY local_id").all() as Array<{
+  return db.prepare("SELECT owner_user_id, local_id, cloud_id, content_hash, last_status FROM cloud_sync_state WHERE entity <> 'switch' ORDER BY local_id").all() as Array<{
     owner_user_id: string;
     local_id: string;
     cloud_id: string | null;

@@ -166,6 +166,108 @@ function markByContact(contactExpr: string): string {
 /** Child columns whose change marks the deal: each projection's own source list. */
 export const PARTY_TRIGGER_COLUMNS: readonly string[] = [...PARTY_ROW_COLUMNS.filter((c) => c !== "id"), "removed_reason"];
 
+// ---------------------------------------------------------------- emails and texts (BACKLOG-4263 P5)
+
+/** Marks the deals that link this text through a whole-thread link (the thread arm of the selection). */
+function markByThread(ref: "NEW" | "OLD"): string {
+  return `INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at)
+  SELECT c.transaction_id, 1, CURRENT_TIMESTAMP FROM communications c
+   WHERE c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL
+     AND c.thread_id = ${ref}.thread_id AND c.user_id = ${ref}.user_id AND c.transaction_id IS NOT NULL
+  ON CONFLICT (transaction_id) DO UPDATE SET generation = generation + 1, marked_at = excluded.marked_at;`;
+}
+
+/** Marks the deals that link this row directly (`communications.<col> = NEW.id`). */
+function markByLink(col: "message_id" | "email_id"): string {
+  return `INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at)
+  SELECT c.transaction_id, 1, CURRENT_TIMESTAMP FROM communications c
+   WHERE c.${col} = NEW.id AND c.transaction_id IS NOT NULL
+  ON CONFLICT (transaction_id) DO UPDATE SET generation = generation + 1, marked_at = excluded.marked_at;`;
+}
+
+/** `communications` columns the selection reads. */
+export const COMMUNICATION_TRIGGER_COLUMNS = [
+  "transaction_id",
+  "message_id",
+  "email_id",
+  "thread_id",
+  "user_id",
+  "link_source",
+  "link_confidence",
+  "match_reason",
+  "linked_at",
+] as const;
+/** `messages` columns the selection and the projection read (a retag rewrites four of them in place). */
+export const MESSAGE_TRIGGER_COLUMNS = [
+  "body_text",
+  "associated_message_type",
+  "associated_message_guid",
+  "message_type",
+  "thread_id",
+  "user_id",
+  "sent_at",
+  "received_at",
+  "participants",
+  "channel",
+  "direction",
+  "external_id",
+  "subject",
+] as const;
+/** `emails` columns the projection reads. */
+export const EMAIL_TRIGGER_COLUMNS = [
+  "subject",
+  "body_plain",
+  "body_html",
+  "sender",
+  "recipients",
+  "cc",
+  "thread_id",
+  "sent_at",
+  "received_at",
+  "direction",
+  "user_id",
+] as const;
+
+const changed = (cols: readonly string[]) => `(${cols.map((c) => `OLD.${c} IS NOT NEW.${c}`).join(" OR ")})`;
+const LINK_COLS = { communications: ["id", "transaction_id", "message_id", "email_id", "thread_id", "user_id"] };
+
+export const MESSAGE_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
+  spec("trg_cloud_sync_comm_insert", "communications", "INSERT", markBody("NEW.transaction_id"), LINK_COLS),
+  spec(
+    "trg_cloud_sync_comm_update",
+    "communications",
+    `UPDATE OF ${COMMUNICATION_TRIGGER_COLUMNS.join(", ")}`,
+    markTwo("NEW.transaction_id", "OLD.transaction_id"),
+    { communications: ["id", ...COMMUNICATION_TRIGGER_COLUMNS] },
+    `${GATE}\n  AND ${changed(COMMUNICATION_TRIGGER_COLUMNS)}`,
+  ),
+  spec("trg_cloud_sync_comm_delete", "communications", "DELETE", markBody("OLD.transaction_id"), LINK_COLS),
+  spec("trg_cloud_sync_msg_insert", "messages", "INSERT", markByThread("NEW"), { messages: ["id", "thread_id", "user_id"], ...LINK_COLS }, `${GATE}\n  AND NEW.thread_id IS NOT NULL`),
+  spec("trg_cloud_sync_msg_delete", "messages", "DELETE", markByThread("OLD"), { messages: ["id", "thread_id", "user_id"], ...LINK_COLS }, `${GATE}\n  AND OLD.thread_id IS NOT NULL`),
+  spec(
+    "trg_cloud_sync_msg_update",
+    "messages",
+    `UPDATE OF ${MESSAGE_TRIGGER_COLUMNS.join(", ")}`,
+    `${markByLink("message_id")}\n  ${markByThread("NEW")}\n  ${markByThread("OLD")}`,
+    { messages: ["id", ...MESSAGE_TRIGGER_COLUMNS], ...LINK_COLS },
+    `${GATE}\n  AND ${changed(MESSAGE_TRIGGER_COLUMNS)}`,
+  ),
+  spec(
+    "trg_cloud_sync_email_update",
+    "emails",
+    `UPDATE OF ${EMAIL_TRIGGER_COLUMNS.join(", ")}`,
+    markByLink("email_id"),
+    { emails: ["id", ...EMAIL_TRIGGER_COLUMNS], ...LINK_COLS },
+    `${GATE}\n  AND ${changed(EMAIL_TRIGGER_COLUMNS)}`,
+  ),
+  spec("trg_cloud_sync_hidden_insert", "transaction_hidden_texts", "INSERT", markBody("NEW.transaction_id"), {
+    transaction_hidden_texts: ["transaction_id", "message_id"],
+  }),
+  spec("trg_cloud_sync_hidden_delete", "transaction_hidden_texts", "DELETE", markBody("OLD.transaction_id"), {
+    transaction_hidden_texts: ["transaction_id", "message_id"],
+  }),
+];
+
 export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
   spec("trg_cloud_sync_tx_insert", "transactions", "INSERT", markBody("NEW.id"), { transactions: ["id", "user_id"] }, OWNER_GATE("NEW.user_id")),
   spec(
@@ -224,6 +326,8 @@ export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
   ]),
   // BACKLOG-4263 PR-3: the six todo capture triggers (cloudSyncTodoSql.ts). Same lifecycle rule.
   ...CLOUD_SYNC_TODO_TRIGGERS,
+  // BACKLOG-4263 P5: a deal's attached emails and texts (selection: cloudSyncMessagesDb.ts).
+  ...MESSAGE_TRIGGERS,
 ];
 
 // ---------------------------------------------------------------- engine statements
@@ -410,6 +514,10 @@ export const CLOUD_SYNC_ACTIVE_SQL = `SELECT 1 FROM cloud_sync_settings WHERE en
 
 export const SWITCH_ENTITY = "switch";
 export const MOVE_PENDING_ID = "move_pending";
+/** BACKLOG-4263 P5: when the email and text reconcile last ran (see below). */
+export const MESSAGE_RECONCILE_ID = "message_reconcile";
+/** BACKLOG-4263 P5: the last messages_upload switch value seen (plan §12.2). */
+export const MESSAGES_UPLOAD_ID = "messages_upload";
 
 /** Writes one marker row of this user (or refreshes it): project_ref, owner, local_id, last_status, updated_at. */
 export const UPSERT_SWITCH_MARKER_SQL = `INSERT INTO cloud_sync_state
@@ -440,4 +548,49 @@ export const RECORD_ACCEPTED_AT_SQL = `UPDATE cloud_sync_settings SET accepted_a
  */
 export const DELETE_STATE_AFTER_MOVE_SQL = `DELETE FROM cloud_sync_state
  WHERE project_ref = ? AND owner_user_id = ?
-   AND (entity IN ('message', 'file') OR (entity = '${SWITCH_ENTITY}' AND local_id = '${MOVE_PENDING_ID}'))`;
+   AND (entity IN ('message', 'file')
+        OR (entity = '${SWITCH_ENTITY}' AND local_id IN ('${MOVE_PENDING_ID}', '${MESSAGE_RECONCILE_ID}')))`;
+
+// ---------------------------------------------------------------- emails and texts (BACKLOG-4263 P5)
+//
+// Two more 'switch' rows of one user (same no-migration rule as move_pending above):
+//   'switch' / 'message_reconcile'  when the email and text reconcile last ran: last_status 'ok' | 'failed',
+//                                   cloud_version = failed runs in a row, updated_at = the run. Absent (or any
+//                                   other shape) = due. Deleted with every bulk forget of email and text records
+//                                   and when a deal upsert answers restored.
+//   'switch' / 'messages_upload'    the last messages_upload switch value seen: cloud_version 1 = on, 0 = off.
+//                                   Absent = off.
+
+/** Upserts a 'switch' row with its status and counter: project_ref, owner, local_id, last_status, cloud_version, updated_at. */
+export const UPSERT_SWITCH_VALUE_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, last_status, cloud_version, updated_at)
+VALUES (?, ?, '${SWITCH_ENTITY}', ?, '', ?, ?, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
+  last_status = excluded.last_status, cloud_version = excluded.cloud_version, updated_at = excluded.updated_at`;
+
+export const SELECT_SWITCH_VALUE_SQL = `SELECT last_status, cloud_version, updated_at FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = '${SWITCH_ENTITY}' AND local_id = ?`;
+
+/** Email and text records of one deal (entity 'message'). */
+export const SELECT_MESSAGE_STATE_OF_DEAL_SQL = `SELECT entity, local_id, transaction_id, cloud_id, content_hash, hash_version, removed, last_status
+  FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = 'message' AND transaction_id = ?`;
+
+/** Every email and text record of the user. */
+export const SELECT_MESSAGE_STATE_OF_USER_SQL = `SELECT local_id, transaction_id, cloud_id, cloud_deal_id, content_hash, removed
+  FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = 'message'`;
+
+/** The reconcile's adopt: a record for an online row this database has none for (hash unknown); never overwrites. */
+export const ADOPT_MESSAGE_STATE_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, cloud_deal_id, content_hash,
+   hash_version, cloud_version, removed, last_status, last_error_code, updated_at)
+VALUES (?, ?, 'message', ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO NOTHING`;
+
+/** The reconcile: a record whose online row is gone or removed and that is not selected any more. */
+export const MARK_MESSAGE_GONE_SQL = `UPDATE cloud_sync_state SET removed = 1, last_status = 'removed', updated_at = ?
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = 'message' AND local_id = ?`;
+
+/** Watcher: the newest dirty mark (compared with its own value at pass start, never with a clock). */
+export const DIRTY_TOP_SQL = "SELECT max(marked_at) AS at FROM cloud_sync_dirty";
