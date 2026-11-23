@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """BACKLOG-4263 sync 2.49, P1 (migration S1 20261123100000): test-project files, generated from the migration text.
 
+  apply-20261123100000.sql     the migration text unchanged + its ledger row, in one transaction
   rollback-20261123100000.sql  puts back the bodies and signatures S1 replaced (copied from the head migrations), drops
                                what S1 created, removes the ledger row; one transaction; RAISEs unless its post-check holds
   harness-s1.sql               TEST DATABASE ONLY, run AFTER S1 is applied. One call that ends in RAISE (nothing is kept):
                                fixtures, the single-session controls, each control's mutants (proven applied first), then
                                the rollback file and its post-check, then RAISE with every result.
 
-`python3 gen.py`         writes both files
+`python3 gen.py`         writes these files
 `python3 gen.py check`   fails when a written file differs from what the migrations give now
-`python3 gen.py report <kt-sql output>`  reads the harness result and prints PASS / FAIL per control and mutant
+`python3 gen.py report <kt-sql output>`  reads the harness result (kt-sql's JSON error body or plain text) and prints PASS /
+                         FAIL per control and mutant; exit 0 only when every control PASSes and every mutant is RED
+`python3 gen.py selftest`  offline self-test of `report` on canned outputs in both shapes (no database)
 
 Two-session controls (claim versus writer, the claim race, turn-off versus claim) are in concurrency/ (hand-written).
 """
@@ -210,11 +213,24 @@ MUTANTS += [
              ' THEN')], 'c3c_unlicensed'),
     ('M_state_no_active_key', 'get_my_cloud_autosave_state',
      [mutant('get_my_cloud_autosave_state', "    'active_install_id', s.active_install_id,", "    'active_install_idX', s.active_install_id,")], 'c_state_keys'),
-    ('M_backfill_least_recent', None, [], 'c2b_backfill'),
+    # wrong implementation: the push answers computer_not_active only after its ops were applied (c1_push's write clause)
+    ('M_push_gate_after_write', 'cloud_todo_push',
+     [sub1(sub1(mutant('cloud_todo_push', gate_lines('cloud_todo_push', 'push'), ''), 'v_unk boolean;', 'v_unk boolean; v_res jsonb;'),
+           "  RETURN public._cloud_todo_apply(v_uid, jsonb_build_object('kind', 'desktop', 'ref', p_source_install_id::text,\n"
+           "           'install_id', p_source_install_id, 'label', 'Keepr desktop'), v_ops);\n",
+           "  v_res := public._cloud_todo_apply(v_uid, jsonb_build_object('kind', 'desktop', 'ref', p_source_install_id::text,\n"
+           "           'install_id', p_source_install_id, 'label', 'Keepr desktop'), v_ops);\n"
+           + gate_lines('cloud_todo_push', 'push') + "  RETURN v_res;\n")], 'c1_push'),
+    # the backfill rule (fn None): (old, new) replacements of the statement the case reads from s1_sql
+    ('M_backfill_least_recent', None, [('max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC')], 'c2b_backfill'),
+    ('M_backfill_tie_highest', None, [('d.source_install_id) w', 'd.source_install_id DESC) w')], 'c2b_backfill'),
 ]
 for mid, fn, stmts, _ in MUTANTS:
-    for s in stmts:
-        assert s != create(S1, fn)[0], mid
+    for st_ in stmts:
+        if fn is None:
+            assert BACKFILL_FIXTURE.count(st_[0]) == 1 and st_[1] not in BACKFILL_FIXTURE, mid
+        else:
+            assert st_ != create(S1, fn)[0], mid
 
 CASES = {}
 # fixture names: A (the licensed test user), IA / IB / IC (installs), dA / dB / dC (deals), pA / pB (parties), bA (blob of IA)
@@ -226,7 +242,7 @@ CASES['c_state_keys'] = """
 
 
 C1_CALL = {  # {I} install key, {D} deal key, {P} party key
-    'push': "pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.nowt(), '[]')",
+    'push': "pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.nowt(), pg_temp.clop(pg_temp.f('{D}'), 'c1-cl-{I}'))",
     'deal': "pg_temp.call('cloud_upsert_deal', '%L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.dp(pg_temp.s('{I}'), 'c1-deal-{I}'))",
     'parties': "pg_temp.call('cloud_upsert_parties', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.s('{D}'), pg_temp.rows('c1-p-{I}'))",
     'messages': "pg_temp.call('cloud_upsert_messages', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.s('{D}'), pg_temp.mrows('c1-m-{I}'))",
@@ -243,11 +259,19 @@ def c1call(p, inst, deal, party):
     return C1_CALL[p].replace('{I}', inst).replace('{D}', deal).replace('{P}', party)
 
 
+# c1_push sends one create_checklist op on the caller's own deal; c1_confirm gives the blob bA its storage object (right
+# size), so without the gate the inactive call would write: a checklist + todo op + history row, or bA's uploaded_at.
+C1_PRELUDE = {'confirm': """
+  INSERT INTO storage.objects (bucket_id, name, metadata)
+  SELECT 'cloud-deal-files', b.storage_path, jsonb_build_object('size', b.size_bytes::text) FROM public.cloud_blobs b WHERE b.id = pg_temp.f('bA');"""}
+C1_OK_A = {'confirm': "(ra ->> 'ok') = 'true' AND (ra ->> 'state') = 'uploaded'",
+           'push': "(ra ->> 'ok') = 'true' AND (ra -> 'results' -> 0 ->> 'status') = 'added'"}
+
+
 def c1(p):
-    ok_a = ("(ra ->> 'error') = 'object_missing'" if p == 'confirm'
-            else "(ra ->> 'ok') = 'true'" + (" AND (ra -> 'results' -> 0 ->> 'status') = 'applied'" if p in C1_APPLIED else ''))
+    ok_a = C1_OK_A.get(p) or ("(ra ->> 'ok') = 'true'" + (" AND (ra -> 'results' -> 0 ->> 'status') = 'applied'" if p in C1_APPLIED else ''))
     return f"""
-  PERFORM pg_temp.switch(true);
+  PERFORM pg_temp.switch(true);{C1_PRELUDE.get(p, '')}
   before := pg_temp.fp();
   rb := {c1call(p, 'IB', 'dB', 'pB')};
   after := pg_temp.fp();
@@ -309,7 +333,8 @@ CASES['c2_null_active'] = """
                       jsonb_build_object('deal', ra, 'register', rb, 'first_claim', v)::text);"""
 CASES['c2_same'] = """
   PERFORM pg_temp.switch(true);
-  x_t := (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A'));
+  UPDATE public.cloud_autosave_settings SET active_since = timestamptz '2026-01-01 00:00:00+00' WHERE user_id = pg_temp.f('A');
+  x_t := timestamptz '2026-01-01 00:00:00+00';
   v := pg_temp.claim('IA', true);
   RETURN pg_temp.pass((v ->> 'ok') = 'true' AND NOT v ? 'replaced' AND pg_temp.moves() = 0 AND pg_temp.notices() = 0
                       AND (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A')) = x_t, v::text);"""
@@ -334,7 +359,8 @@ CASES['c2b_backfill'] = """
     'removed_ignored', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_3')) = pg_temp.f('bf_3_i1'),
     'disabled_null', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_4')) IS NULL,
     'no_deal_null', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_5')) IS NULL,
-    'set_kept', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_6')) = pg_temp.f('bf_6_i1'));
+    'set_kept', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_6')) = pg_temp.f('bf_6_i1'),
+    'max_not_min', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_7')) = pg_temp.f('bf_7_i2'));
   RETURN pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_each(v) e WHERE e.value <> 'true'::jsonb), v::text);"""
 CASES['c3_clear'] = """
   PERFORM pg_temp.switch(true);
@@ -500,6 +526,10 @@ $h$;
 CREATE FUNCTION pg_temp.dp(inst text, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_object('source_install_id', inst, 'local_id', lid, 'content_hash', pg_temp.h(lid))::text
 $h$;
+CREATE FUNCTION pg_temp.clop(deal uuid, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT jsonb_build_array(jsonb_build_object('op_id', md5('p4263:sync2-s1-op:' || lid)::uuid, 'kind', 'create_checklist',
+                                              'deal_id', deal, 'local_id', lid, 'template_id', 'c1-template'))::text
+$h$;
 CREATE FUNCTION pg_temp.rows(lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_array(jsonb_build_object('local_id', lid, 'content_hash', pg_temp.h(lid)))::text
 $h$;
@@ -521,7 +551,7 @@ BEGIN
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   SELECT pg_temp.fx(k), 'p4263-s1-' || substr(md5('s1-harness'), 1, 8) || '-' || lower(k) || '@example.test', 'authenticated', 'authenticated',
          '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-    FROM unnest(ARRAY['A', 'bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6']) k;
+    FROM unnest(ARRAY['A', 'bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6', 'bf_7']) k;
   INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
   VALUES (A, 'p4263-s1-' || substr(md5('s1-harness'), 1, 8) || '-a@example.test', 'email', A::text, 'Fixture s1') ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.organizations (id, name, slug) VALUES (O, 'Fixture s1', 'p4263-s1-' || substr(md5('s1-harness'), 1, 8));
@@ -554,12 +584,14 @@ BEGIN
   UPDATE public.cloud_autosave_settings SET active_install_id = NULL, active_since = NULL WHERE user_id = A;
   r := pg_temp.claim('IA', false);
   IF r ->> 'ok' IS DISTINCT FROM 'true' OR pg_temp.active() IS DISTINCT FROM pg_temp.f('IA') THEN RAISE EXCEPTION 'FIXTURE claim failed: %', r; END IF;
-  -- backfill users: settings and deals written directly (owner role); one deal per (user, install)
-  INSERT INTO pg_temp.s1_fx SELECT k, pg_temp.fx(k) FROM unnest(ARRAY['bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6',
-    'bf_1_i1', 'bf_1_i2', 'bf_1_i3', 'bf_2_i1', 'bf_2_i2', 'bf_3_i1', 'bf_3_i2', 'bf_4_i1', 'bf_6_i1', 'bf_6_i2']) k;
+  -- backfill users: settings and deals written directly (owner role); one deal per (user, install), except bf_7_i2 (two)
+  INSERT INTO pg_temp.s1_fx SELECT k, pg_temp.fx(k) FROM unnest(ARRAY['bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6', 'bf_7',
+    'bf_1_i1', 'bf_1_i2', 'bf_1_i3', 'bf_2_i1', 'bf_2_i2', 'bf_3_i1', 'bf_3_i2', 'bf_4_i1', 'bf_6_i1', 'bf_6_i2',
+    'bf_7_i1', 'bf_7_i2', 'bf_7_i3']) k;
   INSERT INTO public.cloud_autosave_settings (user_id, enabled, notice_version, accepted_at, active_install_id)
   VALUES (pg_temp.f('bf_1'), true, 1, now(), NULL), (pg_temp.f('bf_2'), true, 1, now(), NULL), (pg_temp.f('bf_3'), true, 1, now(), NULL),
-         (pg_temp.f('bf_4'), false, 1, now(), NULL), (pg_temp.f('bf_5'), true, 1, now(), NULL), (pg_temp.f('bf_6'), true, 1, now(), pg_temp.f('bf_6_i1'));
+         (pg_temp.f('bf_4'), false, 1, now(), NULL), (pg_temp.f('bf_5'), true, 1, now(), NULL), (pg_temp.f('bf_6'), true, 1, now(), pg_temp.f('bf_6_i1')),
+         (pg_temp.f('bf_7'), true, 1, now(), NULL);
   INSERT INTO public.cloud_deals (owner_user_id, source_install_id, local_transaction_id, content_hash, last_synced_at, removed_at)
   VALUES (pg_temp.f('bf_1'), pg_temp.f('bf_1_i1'), 'bf-1-1', pg_temp.h('a'), now() - interval '3 days', NULL),
          (pg_temp.f('bf_1'), pg_temp.f('bf_1_i2'), 'bf-1-2', pg_temp.h('b'), now() - interval '1 day', NULL),
@@ -569,7 +601,13 @@ BEGIN
          (pg_temp.f('bf_3'), pg_temp.f('bf_3_i1'), 'bf-3-1', pg_temp.h('f'), now() - interval '2 days', NULL),
          (pg_temp.f('bf_3'), pg_temp.f('bf_3_i2'), 'bf-3-2', pg_temp.h('g'), now() - interval '1 hour', now()),
          (pg_temp.f('bf_4'), pg_temp.f('bf_4_i1'), 'bf-4-1', pg_temp.h('h'), now(), NULL),
-         (pg_temp.f('bf_6'), pg_temp.f('bf_6_i2'), 'bf-6-2', pg_temp.h('i'), now(), NULL);
+         (pg_temp.f('bf_6'), pg_temp.f('bf_6_i2'), 'bf-6-2', pg_temp.h('i'), now(), NULL),
+         -- bf_7: bf_7_i2 holds both the newest deal and an older one; bf_7_i1 sits in between, bf_7_i3 is oldest.
+         -- greatest max(last_synced_at) picks bf_7_i2; greatest min(last_synced_at) would pick bf_7_i1.
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i1'), 'bf-7-1', pg_temp.h('j'), now() - interval '24 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i2'), 'bf-7-2a', pg_temp.h('k'), now() - interval '36 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i2'), 'bf-7-2b', pg_temp.h('l'), now() - interval '1 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i3'), 'bf-7-3', pg_temp.h('m'), now() - interval '48 hours', NULL);
 END
 $fx$;
 """
@@ -601,8 +639,9 @@ def dq(s, tag):
 mut_blocks = []
 for i, (mid, fn, stmts, primary) in enumerate(MUTANTS):
     if fn is None:  # the backfill rule: the case reads its statement from s1_sql
-        apply_ = (f"    UPDATE pg_temp.s1_sql SET s = replace(s, 'max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC') WHERE k = 'backfill';\n"
-                  "    applied := (SELECT s LIKE '%min(d.last_synced_at) DESC%' FROM pg_temp.s1_sql WHERE k = 'backfill');\n")
+        (old_, new_), = stmts
+        apply_ = (f"    UPDATE pg_temp.s1_sql SET s = replace(s, '{old_}', '{new_}') WHERE k = 'backfill';\n"
+                  f"    applied := (SELECT strpos(s, '{new_}') > 0 FROM pg_temp.s1_sql WHERE k = 'backfill');\n")
     else:
         sig = 'public.' + fn + '(' + (HEAD.get(fn, (None, None))[1] if fn in HEAD else CREATED[fn]).replace(' ', '') + ')'
         apply_ = ''.join(f"    EXECUTE {dq(s, f'$mu{i}_{k}$')};\n" for k, s in enumerate(stmts)) + \
@@ -627,7 +666,8 @@ HARNESS = f"""-- harness-s1.sql (generated by {REL}/gen.py; do not hand-edit)
 -- its post-check -> RAISE 'S1_RESULT <json>'. Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()".
 -- Locks (every one is released by the final RAISE; lock_timeout 3s throughout):
 --   row locks on the rows it inserts or changes: the fixture users (auth.users, public.users, organizations,
---     organization_members, organization_plans, member_addons, cloud_* rows of those users) and the ONE row of
+--     organization_members, organization_plans, member_addons, cloud_* rows of those users, one storage.objects row
+--     inside c1_confirm, no file behind it) and the ONE row of
 --     cloud_release_switches (its UPDATE makes the coordinator's switch flip wait until this call ends);
 --   the mutants' CREATE OR REPLACE FUNCTION calls lock those pg_proc rows (only another replace of the same function
 --     waits; callers keep the committed body);
@@ -696,7 +736,22 @@ END
 $end4263s1$;
 """
 
-OUTS = {os.path.join(HERE, 'rollback-20261123100000.sql'): ROLLBACK, os.path.join(HERE, 'harness-s1.sql'): HARNESS}
+S1_VERSION, S1_LEDGER_NAME = S1_NAME[:14], S1_NAME[15:-4]
+APPLY = f"""-- apply-{S1_VERSION}.sql (generated by {REL}/gen.py; do not hand-edit)
+-- Migration: supabase/migrations/{S1_NAME}  file md5 {md5(S1)}
+-- One transaction: the migration text unchanged, then its ledger row. Send this file as one call. If the apply tool
+-- writes the ledger row itself, remove the INSERT below.
+-- Re-run: the migration text is re-runnable; the INSERT is not. When the ledger row already exists the INSERT fails
+-- (duplicate version) and the whole call rolls back, so nothing changes (inferred from the ledger's version key; not run).
+-- Then run supabase/tests/backlog-4263-prod/postcheck-{S1_VERSION}.sql (read-only; it requires this ledger row).
+
+{S1}
+INSERT INTO supabase_migrations.schema_migrations (version, name, statements)
+VALUES ('{S1_VERSION}', '{S1_LEDGER_NAME}', ARRAY[]::text[]);
+"""
+
+OUTS = {os.path.join(HERE, f'apply-{S1_VERSION}.sql'): APPLY,
+        os.path.join(HERE, 'rollback-20261123100000.sql'): ROLLBACK, os.path.join(HERE, 'harness-s1.sql'): HARNESS}
 # two-session mutants (concurrency/run.sh --mutant): each is a NEW function under its own name (<name>_m4263); the live
 # functions are never replaced. run.sh creates the one its case needs, the session files call it through a placeholder,
 # and the trap drops it and checks that no *_m4263 function is left.
@@ -752,25 +807,107 @@ OUTS[os.path.join(CC, 'drop-mutants.sql')] = (
     + GUARD_SQL + ''.join(f'DROP FUNCTION IF EXISTS {sg};\n' for sg in MUTANT_SIGS)
     + "SELECT count(*) AS left FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE '%\\_m4263';\n")
 
-if len(sys.argv) > 2 and sys.argv[1] == 'report':
-    raw = open(sys.argv[2]).read()
-    msg = raw[raw.index('S1_RESULT ') + 10:]
-    res = json.loads(msg[:msg.rindex('}') + 1])
-    bad = 0
+
+def unwrap(raw):
+    """The harness's RAISE text from kt-sql's output: drop its 'kt-sql: ...' status lines; when what is left is the
+    Management API's JSON body {"message": "..."}, take the message; otherwise (plain psql-style text) keep it."""
+    text = '\n'.join(l for l in raw.replace('\r\n', '\n').split('\n') if not l.startswith('kt-sql: ')).strip()
+    try:
+        body = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(body, dict) and isinstance(body.get('message'), str):
+        return body['message']
+    return text
+
+
+def report(raw):
+    """(printed lines, ok). ok only when every control is PASS, every mutant is applied and RED on its primary control
+    (FAIL:, not ERROR), no mutant carries an error, and the rollback step is ok. Anything unreadable is not ok."""
+    msg = unwrap(raw)
+    i = msg.find('S1_RESULT ')
+    if i < 0:
+        return ['NOT OK: no S1_RESULT in the output: ' + msg[:300].replace('\n', ' ')], False
+    try:
+        res, _ = json.JSONDecoder().raw_decode(msg[i + len('S1_RESULT '):])
+    except ValueError as e:
+        return [f'NOT OK: S1_RESULT is not complete JSON ({e})'], False
+    if not isinstance(res, dict) or not isinstance(res.get('controls'), dict):
+        return ['NOT OK: S1_RESULT has no controls object'], False
+    out, bad = [], 0
     for c in ORDER:
-        r = res.get('controls', {}).get(c, 'missing')
+        r = res['controls'].get(c, 'missing')
         bad += r != 'PASS'
-        print(('PASS ' if r == 'PASS' else 'FAIL ') + c + ('' if r == 'PASS' else ': ' + str(r)[:600]))
+        out.append(('PASS ' if r == 'PASS' else 'FAIL ') + c + ('' if r == 'PASS' else ': ' + str(r)[:600]))
     for mid, _, _, primary in MUTANTS:
-        o = res.get('mutant:' + mid, {})
+        o = res.get('mutant:' + mid)
+        o = o if isinstance(o, dict) else {}
         red = sorted(c for c in ORDER if o.get(c, 'PASS') != 'PASS')
         ok = o.get('applied') is True and str(o.get(primary, '')).startswith('FAIL:') and 'error' not in o
         bad += not ok
-        print(('RED  ' if ok else 'GREEN') + f' {mid}: applied={o.get("applied")} primary={primary} red={red}' + (f' error={o.get("error")}' if 'error' in o else ''))
-    print('rollback: ' + str(res.get('rollback')))
+        out.append(('RED  ' if ok else 'GREEN') + f' {mid}: applied={o.get("applied")} primary={primary} red={red}' + (f' error={o.get("error")}' if 'error' in o else ''))
+    out.append('rollback: ' + str(res.get('rollback')))
     bad += res.get('rollback') != 'ok'
-    print(f"time: {res.get('t_start')} -> {res.get('t_end')}")
-    sys.exit(1 if bad else 0)
+    out.append(f"time: {res.get('t_start')} -> {res.get('t_end')}")
+    out.append(f'controls {len(ORDER)} mutants {len(MUTANTS)}: ' + ('OK' if not bad else f'NOT OK ({bad} not as expected)'))
+    return out, not bad
+
+
+def selftest():
+    """Offline: report() on canned outputs in kt-sql's two shapes (verdict lines only, no row data). Returns failures."""
+    def result(controls=None, mutants=None, rollback='ok'):
+        r = {'t_start': '2026-11-23T07:21:22.908979+00:00', 't_end': '2026-11-23T07:21:26.300032+00:00', 'rollback': rollback,
+             'controls': {c: 'PASS' for c in ORDER}}
+        r['controls'].update(controls or {})
+        for mid, _, _, primary in MUTANTS:
+            r['mutant:' + mid] = {**{c: 'PASS' for c in ORDER}, 'applied': True, primary: 'FAIL: {"x": 1}'}
+        for mid, o in (mutants or {}).items():
+            r['mutant:' + mid].update(o)
+        return 'ERROR:  P0001: S1_RESULT ' + json.dumps(r) + '\nCONTEXT:  PL/pgSQL function inline_code_block line 4 at RAISE\n'
+    plain = lambda m: m
+    api = lambda m: json.dumps({'message': 'Failed to run sql query: ' + m}) + '\nkt-sql: HTTP 400\n'
+    first_mid, first_primary = MUTANTS[0][0], MUTANTS[0][3]
+    cases = [  # (label, raise text, expected ok, text the output must contain)
+        ('all PASS / RED', result(), True, f'controls {len(ORDER)} mutants {len(MUTANTS)}: OK'),
+        ('one GREEN mutant', result(mutants={'M_backfill_least_recent': {'c2b_backfill': 'PASS'}}), False, 'GREEN M_backfill_least_recent'),
+        ('mutant not applied', result(mutants={first_mid: {'applied': False}}), False, f'GREEN {first_mid}: applied=False'),
+        ('primary ERROR is not RED', result(mutants={first_mid: {first_primary: 'ERROR 42883 x'}}), False, f'GREEN {first_mid}'),
+        ('mutant error key', result(mutants={first_mid: {'error': 'MUTATION NOT APPLIED'}}), False, 'error=MUTATION NOT APPLIED'),
+        ('control ERROR', result(controls={ORDER[0]: 'ERROR P0001 boom'}), False, f'FAIL {ORDER[0]}: ERROR'),
+        ('control FAIL', result(controls={'c2b_backfill': 'FAIL: {}'}), False, 'FAIL c2b_backfill'),
+        ('rollback ERROR', result(rollback='ERROR 55P03 lock'), False, 'rollback: ERROR'),
+        ('crash before result', 'ERROR:  P0001: harness-s1.sql refuses to run: TEST DATABASE ONLY\n', False, 'no S1_RESULT'),
+        ('truncated result', result()[:4000], False, 'not complete JSON'),
+        ('empty', '', False, 'no S1_RESULT'),
+    ]
+    fails = []
+    for label, text, want, needle in cases:
+        for shape, wrap in (('plain', plain), ('kt-sql json', api)):
+            raw = wrap(text) if text else ('' if shape == 'plain' else '\nkt-sql: HTTP 400\n')
+            try:
+                lines, ok = report(raw)
+            except Exception as e:  # a crash is a failure of the parser
+                lines, ok = [f'CRASH {type(e).__name__}: {e}'], None
+            got = '\n'.join(lines)
+            good = ok is want and needle in got
+            print(('ok   ' if good else 'FAIL ') + f'{label} [{shape}]: ok={ok}' + ('' if good else ' | ' + got[-300:]))
+            fails += [] if good else [f'{label} [{shape}]']
+    for label, raw in (('success-shaped array', '[{"x": 1}]'), ('API body without S1_RESULT', api('ERROR:  42P01: relation x does not exist'))):
+        lines, ok = report(raw)
+        good = ok is False
+        print(('ok   ' if good else 'FAIL ') + f'{label}: ok={ok}')
+        fails += [] if good else [label]
+    return fails
+
+
+if len(sys.argv) > 2 and sys.argv[1] == 'report':
+    lines, ok = report(open(sys.argv[2], encoding='utf-8').read())
+    print('\n'.join(lines))
+    sys.exit(0 if ok else 1)
+if len(sys.argv) > 1 and sys.argv[1] == 'selftest':
+    f = selftest()
+    print(f'selftest: {"all cases as expected" if not f else "FAILED: " + ", ".join(f)}')
+    sys.exit(1 if f else 0)
 if len(sys.argv) > 1 and sys.argv[1] == 'check':
     diff = [os.path.relpath(k, REPO) for k, v in OUTS.items() if not os.path.exists(k) or open(k, encoding='utf-8').read() != v]
     print('differs: ' + ', '.join(diff) if diff else 'all generated files match')

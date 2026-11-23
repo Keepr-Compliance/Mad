@@ -7,9 +7,16 @@ runs per batch; `harness.py` resets `pg_stat_statements` after each call.
 Prerequisite on the test project: S1 `20261123100000` applied (E1 refuses to apply without
 `cloud_autosave_settings.active_install_id`, `active_since` and `cloud_release_switches.one_computer`).
 
+Applying E1 on the test project: send `apply-20261123110000.sql` as one call (not the bare migration). It holds the
+text of `supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql` unchanged, then the ledger row
+(`INSERT INTO supabase_migrations.schema_migrations`, version `20261123110000`, name `backlog_4263_cloud_blob_erase`),
+in one transaction. Re-run: when the ledger row already exists, the INSERT fails (duplicate version) and the whole call
+rolls back, so nothing changes (inferred, not run). Then run `../backlog-4263-prod/postcheck-20261123110000.sql`.
+
 | Script | What it does | Commits? |
 |---|---|---|
-| `harness.py check` | offline: every mutant fragment matches its function exactly once | no database call |
+| `harness.py check` | offline: every mutant fragment matches its function exactly once, and `apply-20261123110000.sql` matches E1 | no database call |
+| `harness.py write` | offline: writes `apply-20261123110000.sql` from E1 (checked also by `broker-portal/__tests__/migrations/apply-wrappers-4263.test.ts`) | no database call |
 | `harness.py run --controls` | one call: E3 and E1 rollback files, E1 from the working tree, helpers, 17 controls each in a subtransaction undone at its end, then RAISE | no: the call ends in RAISE |
 | `harness.py run --mutants` | the same setup, then 26 mutants (exact-string replace on one E1 function, checked by `md5(prosrc)` in the database before its probe) | no |
 | `harness.py run --controls --mutants` | both in one call | no |
