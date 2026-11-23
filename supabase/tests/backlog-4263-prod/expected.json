@@ -59,7 +59,7 @@
     },
     "20261123140000": {
       "file": "supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql",
-      "file_md5": "e190a0d70eb15ae2ac040f7c95aa740d"
+      "file_md5": "80b4ec3bbbe472b1f3db5ab34057d049"
     }
   },
   "labels": {

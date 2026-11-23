@@ -29,8 +29,9 @@
 --   {"not_entitled":true} otherwise. Messages: not removed, link_state 'linked' or 'needs_review', of the person's
 --   confirmed, live deals. While switches.one_computer is on and active_install_id is set, messages of a deal whose
 --   source_install_id is not the active computer are not returned (list: none, with messages_hidden true; by id:
---   not_found); while one_computer is on and no active computer is set, no message is returned. Files: name, type, size and the reason a file was not saved, only through a returned message, at most
---   20 per message plus a files_more count. Participants: at most 20 per message plus participants_more. Each shown
+--   not_found); while one_computer is on and no active computer is set, no message is returned. Files: name, type,
+--   size and the reason a file was not saved, only through a returned message, at most 20 per message plus a
+--   files_more count. Participants: at most 20 per message plus participants_more. Each shown
 --   value is capped: subject 300 characters, snippet 300, each participant 320, filename 200, mime type 100,
 --   thread_key 200, direction 20.
 -- list_deal_messages: newest first by (sent_at, else received_at, else the time the row was saved), then id. Page:
