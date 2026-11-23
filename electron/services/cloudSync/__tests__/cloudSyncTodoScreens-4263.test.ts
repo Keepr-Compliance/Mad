@@ -622,14 +622,14 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       expect(e.todosChanged.count).toBe(base + 1);
     });
 
-    it("answers the server does not keep (locked, every op): sent but not confirmed, no event on two passes", async () => {
+    it("answers the server does not keep (not_found, every op): sent but not confirmed, no event on two passes", async () => {
       const { db, e } = await synced();
       const base = e.todosChanged.count;
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
-      // Answer shape as helpers/fakeServer.ts documents for a not-kept status ({op_id, entity, status: "locked"}).
+      // Answer shape as helpers/fakeServer.ts documents for a not-kept status ({op_id, status}); not_found reaches a desktop op.
       e.server.override = (fn, args) =>
         fn === "cloud_todo_push"
-          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((op) => ({ op_id: op.op_id, entity: "item", status: "locked" })) }, error: null, status: 200 }
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((op) => ({ op_id: op.op_id, entity: "item", status: "not_found" })) }, error: null, status: 200 }
           : undefined;
       const r1 = await e.service.kick();
       expect(r1!.todos).toMatchObject({ sent: 1, retried: 1, confirmed: 0 });
