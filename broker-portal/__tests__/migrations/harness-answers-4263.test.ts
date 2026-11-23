@@ -14,7 +14,8 @@ import { join } from 'path';
 
 const REPO = join(__dirname, '../../..');
 const DIR = 'supabase/tests/backlog-4263-sync2-t';
-const read = (p: string): string => readFileSync(join(REPO, p), 'utf8');
+// LF text, as answers.py reads it (a Windows checkout may hold CRLF)
+const read = (p: string): string => readFileSync(join(REPO, p), 'utf8').replace(/\r\n?/g, '\n');
 const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex');
 const REPORT = read(`${DIR}/answers-report.txt`);
 
