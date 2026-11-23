@@ -308,6 +308,10 @@ describe('BACKLOG-4263 P9 rollback and harness', () => {
     expect(HARNESS).toContain(`$rbq$\n${ROLLBACK}\n$rbq$`);
     expect(HARNESS.trimEnd().endsWith("RAISE EXCEPTION 'T4263_RESULT %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);\nEND\n$end4263t$;")).toBe(true);
     expect(HARNESS).toContain("SET LOCAL lock_timeout = '3s';");
+    const controlsOnly = read(join(DIR, 'harness-t-controls.sql'));
+    expect(code(controlsOnly).trimStart().startsWith('DO $guard4263t$')).toBe(true);
+    expect(controlsOnly).not.toContain("pg_temp.rec('mutant:");
+    expect(controlsOnly).toContain(`$rbq$\n${ROLLBACK}\n$rbq$`);
     // fixture ids are made at run time; the only literal id is the all-zero instance id of auth.users rows
     expect([...new Set(HARNESS.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [])]).toEqual(['00000000-0000-0000-0000-000000000000']);
   });

@@ -11,8 +11,10 @@
 -- Locks (every one is released by the final RAISE; lock_timeout 3s throughout):
 --   row locks on the rows it inserts or changes: the fixture users (auth.users, public.users, organizations,
 --     organization_members, organization_plans, member_addons, cloud_* and mcp_* rows of those users), the ONE row of
---     cloud_release_switches and the ONE row of mcp_settings (their UPDATEs make a switch flip or a portal-secret
---     change wait until this call ends; reads are not blocked);
+--     cloud_release_switches and the ONE row of mcp_settings until this call ends. Waiting on them: a switch flip, a
+--     portal-secret change, and the erase job's scrub (cloud_blob_erase_scrub takes the switch row FOR SHARE; the job
+--     runs at minute 23 of every hour, so do not start this call between minute 15 and minute 30). Plain reads are not
+--     blocked;
 --   a mutant or control that changes a function or a constraint holds that lock only inside its own subtransaction,
 --     which is undone (and its locks released) at its end: pg_proc rows (CREATE OR REPLACE), mcp_message_reads
 --     (ADD CONSTRAINT, ACCESS EXCLUSIVE), and for one mutant SHARE ROW EXCLUSIVE on mcp_connections (a NOT VALID foreign
@@ -224,8 +226,8 @@ BEGIN
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'FIXTURE deal % failed: %', k, left(r::text, 400); END IF;
   RETURN pg_temp.put(k, (r -> 'results' -> 0 ->> 'cloud_id')::uuid);
 END $h$;
-CREATE FUNCTION pg_temp.tomb(inst text, kind text, ids uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
-  SELECT pg_temp.as_user('A', 'cloud_tombstone', '%L::uuid, %L::uuid, %L, %L::uuid[]', pg_temp.s('A'), pg_temp.s(inst), kind, ids::text)
+CREATE FUNCTION pg_temp.tomb(u text, inst text, kind text, ids uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT pg_temp.as_user(u, 'cloud_tombstone', '%L::uuid, %L::uuid, %L, %L::uuid[]', pg_temp.s(u), pg_temp.s(inst), kind, ids::text)
 $h$;
 CREATE FUNCTION pg_temp.claim(u text, inst text, rep boolean) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.as_user(u, 'cloud_claim_install', '%L::uuid, %L::uuid, %L::boolean', pg_temp.s(u), pg_temp.s(inst), rep::text)

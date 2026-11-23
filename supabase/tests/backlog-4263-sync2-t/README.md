@@ -15,7 +15,10 @@ Status: WRITTEN, NOT RUN. Nothing here has been run on any database.
    ledger INSERT fails (duplicate version) and the whole call rolls back (inferred, not run). The last statement swaps the
    call-log tool CHECK under `lock_timeout = '3s'` (ACCESS EXCLUSIVE on `mcp_call_log` until commit).
 3. Post-check (read-only): `../backlog-4263-prod/postcheck-20261123140000.sql`. Expected `postcheck = ok`.
-4. Harness: `~/.claude/bin/kt-sql harness-t.sql > out.txt; python3 gen.py report out.txt`, then
+4. Harness, first the controls only: `~/.claude/bin/kt-sql harness-t-controls.sql > out.txt; python3 gen.py report out.txt`;
+   when every control passes, the full call `harness-t.sql` (controls and the 51 mutants). Do not start a call between
+   minute 15 and minute 30 of the hour: the call holds the `cloud_release_switches` row, and the erase job's scrub
+   (minute 23) takes that row `FOR SHARE` and would wait. After each call run
    `~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()"`. At most 3 full runs per batch.
    The call ends in RAISE (nothing persists). Its last step runs the rollback file and its post-check inside the
    same transaction (so the rollback is proven, then undone with everything else).
@@ -39,3 +42,4 @@ Status: WRITTEN, NOT RUN. Nothing here has been run on any database.
 | `apply-20261123140000.sql` | The migration text unchanged + its ledger row |
 | `rollback-20261123140000.sql` | Undoes 20261123140000; refuses while the read log holds rows |
 | `harness-t.sql` | Guard, applied check, fixtures, controls, mutants, rollback, RAISE |
+| `harness-t-controls.sql` | The same call without the mutants (cheaper first run) |

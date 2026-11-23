@@ -179,8 +179,8 @@ BEGIN
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'FIXTURE deal % failed: %', k, left(r::text, 400); END IF;
   RETURN pg_temp.put(k, (r -> 'results' -> 0 ->> 'cloud_id')::uuid);
 END $h$;
-CREATE FUNCTION pg_temp.tomb(inst text, kind text, ids uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
-  SELECT pg_temp.as_user('A', 'cloud_tombstone', '%L::uuid, %L::uuid, %L, %L::uuid[]', pg_temp.s('A'), pg_temp.s(inst), kind, ids::text)
+CREATE FUNCTION pg_temp.tomb(u text, inst text, kind text, ids uuid[]) RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT pg_temp.as_user(u, 'cloud_tombstone', '%L::uuid, %L::uuid, %L, %L::uuid[]', pg_temp.s(u), pg_temp.s(inst), kind, ids::text)
 $h$;
 CREATE FUNCTION pg_temp.claim(u text, inst text, rep boolean) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.as_user(u, 'cloud_claim_install', '%L::uuid, %L::uuid, %L::boolean', pg_temp.s(u), pg_temp.s(inst), rep::text)
