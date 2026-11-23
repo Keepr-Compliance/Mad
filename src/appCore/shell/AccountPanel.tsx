@@ -49,7 +49,6 @@ import {
 import type { AppStateMachine } from "../state/types";
 import { AccountAvatar } from "./AccountAvatar";
 import { useVisibleSettingsTabs } from "../../components/settings/useVisibleSettingsTabs";
-import { useKeeprCloudSettings } from "../../components/settings/cloudSync/useKeeprCloudSettings";
 import { formatPlanLabel } from "../../components/settings/account/formatPlanLabel";
 import { useLicense } from "../../contexts/LicenseContext";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
@@ -197,11 +196,9 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
   const { licenseType } = useLicense();
   // BACKLOG-4174: no rows until the plan and strict reads have both settled,
   // so no row shows and then vanishes (same list as the Settings tab strip).
-  // BACKLOG-4263: the Keepr Cloud row follows main's view exactly as the strip does (Settings.tsx); read on each
-  // open (this component mounts only while the panel is open); no row while the view is still loading.
-  const cloud = useKeeprCloudSettings();
-  const cloudVisible = !!cloud.view && cloud.view.status !== "hidden";
-  const tabs = useVisibleSettingsTabs(cloudVisible).tabs ?? [];
+  // BACKLOG-4263: Keepr Cloud visibility is the third session read: known on a reopen's first frame, re-asked in
+  // the background on each open (this component mounts only while the panel is open).
+  const tabs = useVisibleSettingsTabs().tabs ?? [];
   const { copied, copy } = useCopyText("AccountPanel");
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
   const appVersion = useAppVersion();
