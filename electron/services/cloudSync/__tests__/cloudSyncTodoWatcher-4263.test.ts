@@ -307,6 +307,20 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(h.watchKicks()).toEqual([h.t0 + 70_000]);
     });
 
+    it("listeners in the reverse order (refresh before the identity hears the event): the watcher only stays off; never on while signed out", async () => {
+      const h = await setup();
+      h.e.service.refreshSchedule(); // sign-out, reversed: the refresh runs first
+      h.e.session.userId = null;
+      h.e.emit("cleared", null);
+      expect(h.activeWatchTimers()).toBe(0);
+      h.e.session.userId = USER_A;
+      h.e.service.refreshSchedule(); // sign-in, reversed: the refresh runs before the epoch moves
+      h.e.emit("saved", USER_A);
+      expect(h.activeWatchTimers()).toBe(0);
+      h.e.service.refreshSchedule(); // the next refresh (any session event) starts it
+      expect(h.activeWatchTimers()).toBe(1);
+    });
+
     it("stop() clears the 5 s timer", async () => {
       const h = await setup();
       h.e.service.stop();
