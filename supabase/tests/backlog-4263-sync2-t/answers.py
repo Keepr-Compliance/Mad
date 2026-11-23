@@ -140,6 +140,8 @@ OPS = r"(?:IS\s+NOT\s+DISTINCT\s+FROM|IS\s+DISTINCT\s+FROM|<>|!=|(?<![:<>!])=)"
 def compare_free_literals(text):
     """Literals of text that are not the right side of a compare."""
     spans = [(m.start(), m.end()) for m in re.finditer(OPS + r"\s*'(?:[^']|'')*'", text, re.I)]
+    # an expected answer kept in a variable (`nf jsonb := '{"ok":false,...}'`) is compared later, not passed in
+    spans += [(m.start(), m.end()) for m in re.finditer(r"\b[a-z_][a-z0-9_]*\s+jsonb\s*:=\s*'\{(?:[^']|'')*'", text)]
     spans += [(m.start(), m.end()) for m in re.finditer(r"->>\s*'(?:[^']|'')*'\s*\)?\s+(?:NOT\s+)?IN\s*\(\s*'(?:[^']|'')*'(?:\s*,\s*'(?:[^']|'')*')*\s*\)", text, re.I)]
     out = set()
     for m in LIT.finditer(text):
