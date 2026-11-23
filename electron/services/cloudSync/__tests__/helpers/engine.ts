@@ -5,6 +5,7 @@
 import { CloudClient } from "../../cloudClient";
 import { CloudSyncService } from "../../cloudSyncService";
 import { SessionIdentity } from "../../session";
+import { WATCH_INTERVAL_MS } from "../../todoOutboxWatcher";
 import { FakeServer } from "./fakeServer";
 import { PROJECT, USER_A } from "./fixtures";
 import type { TestDb } from "./sqlite";
@@ -22,6 +23,8 @@ export interface Engine {
   logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }>;
   reports: string[];
   timers: Array<{ fn: () => void; ms: number; cleared: boolean }>;
+  /** BACKLOG-4263 P0: the todo outbox watcher's 5 s intervals, kept apart so `timers` stays the pass timer. */
+  watchTimers: Array<{ fn: () => void; ms: number; cleared: boolean }>;
   online: { value: boolean };
   device: { id: string };
   feature: { allowed: boolean; reads: number };
@@ -52,6 +55,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
   const logs: Engine["logs"] = [];
   const reports: string[] = [];
   const timers: Engine["timers"] = [];
+  const watchTimers: Engine["watchTimers"] = [];
   const online = { value: true };
   const device = { id: DEVICE_1 };
   const feature = { allowed: true, reads: 0 };
@@ -85,11 +89,16 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     openAiApps: async () => true,
     aiAppsAvailable: () => true,
     setInterval: (fn, ms) => {
+      if (ms === WATCH_INTERVAL_MS) {
+        watchTimers.push({ fn, ms, cleared: false });
+        return -watchTimers.length;
+      }
       timers.push({ fn, ms, cleared: false });
       return timers.length;
     },
     clearInterval: (handle) => {
-      const t = timers[(handle as number) - 1];
+      const h = handle as number;
+      const t = h < 0 ? watchTimers[-h - 1] : timers[h - 1];
       if (t) t.cleared = true;
     },
     now: () => clock.now,
@@ -113,6 +122,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     logs,
     reports,
     timers,
+    watchTimers,
     online,
     device,
     feature,
