@@ -45,7 +45,9 @@ def p(x): print(json.dumps(x))
 if '/*t:precheck*/' in sql:
     r = {'by_id': 0, 'by_pattern': 0, 'mutants': 0, 'marked_runs': 0, 'auth_users': 25, 'orphans': 0, 'one_computer': True}
     r.update(cfg.get('pre', {})); p([r])
-elif '/*t:fkcount*/' in sql: p([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': cfg.get('fk', 0)}])
+elif '/*t:fkcount*/' in sql:
+    done = any(re.search(r'/\*t:(teardown|delete)\*/', open(os.path.join(out, f)).read()) for f in os.listdir(out))
+    p([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': cfg.get('fk', 0) if done else cfg.get('fk_pre', 0)}])
 elif '/*t:authcount*/' in sql: p([{'n': cfg.get('auth_after', 25)}])
 elif '/*t:verify*/' in sql: p([{'verdict': 'clean'}])
 elif '/*t:residue*/' in sql: p([{'n': 0, 'auth_users': cfg.get('auth_after', 25)}])
@@ -113,6 +115,7 @@ for case, mut in CASES:
           len(w) >= 2 and all("SET LOCAL lock_timeout = '3s';" in t for t in w)
           and not any(re.search(r'\bLOCK\s+TABLE\b', t, re.I) for t in texts) and 'pg_stat_statements_reset' in texts[-1])
     check(f'absent {label}: first call is the precheck', bool(texts) and '/*t:precheck*/' in texts[0])
+    check(f'switch {label}: no call writes cloud_release_switches', not any(re.search(r'\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+public\.cloud_release_switches', t) for t in texts))
     dels = [t for t in texts if re.search(r'\bDELETE\b', t) and 'CREATE FUNCTION' not in t]
     check(f'bykey {label}: no DELETE keyed on an email pattern; teardown names the user id',
           dels and not any(re.search(r"DELETE[^;]*LIKE\s+'p4263", t) for t in dels) and all(USER in t for t in dels))
@@ -124,6 +127,9 @@ for what, cfg in (('fixture id', {'by_id': 1}), ('fixture address', {'by_pattern
     rc, out, texts = drive(['R2', RUN, USER, '--mutant'], {'pre': cfg})
     check(f'absent: precheck reports {what} -> {len(texts)} call(s) sent, refused', rc != 0 and len(texts) == 1
           and 'nothing was created' in out)
+rc, out, texts = drive(['R1', RUN, USER], {'fk_pre': 1})
+check(f'absent: per-table count query not 0 before setup -> {len(texts)} call(s) sent, refused', rc != 0 and len(texts) == 2
+      and 'nothing was created' in out)
 for case in ('R3', 'R4', 'R5', 'R6'):
     rc, out, texts = drive([case, RUN, USER], {'pre': {'one_computer': False}})
     check(f'switch: {case} with the switch off -> {len(texts)} call(s) sent', rc != 0 and len(texts) == 1 and 'one_computer' in out)

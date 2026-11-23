@@ -46,7 +46,9 @@ def p(x): print(json.dumps(x))
 if '/*t:precheck*/' in sql:
     r = {'by_id': 0, 'by_pattern': 0, 'mutants': 0, 'marked_runs': 0, 'auth_users': 25, 'orphans': 0, 'one_computer': True}
     r.update(cfg.get('pre', {})); p([r])
-elif '/*t:fkcount*/' in sql: p([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': cfg.get('fk', 0)}])
+elif '/*t:fkcount*/' in sql:
+    done = any(re.search(r'/\*t:(teardown|delete)\*/', open(os.path.join(out, f)).read()) for f in os.listdir(out))
+    p([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': cfg.get('fk', 0) if done else cfg.get('fk_pre', 0)}])
 elif '/*t:authcount*/' in sql: p([{'n': cfg.get('auth_after', 25)}])
 elif '/*t:verify*/' in sql: p([{'verdict': 'clean'}])
 elif '/*t:residue*/' in sql: p([{'n': 0, 'auth_users': cfg.get('auth_after', 25)}])
@@ -137,6 +139,9 @@ for what, cfg in (('fixture id', {'by_id': 1}), ('fixture address', {'by_pattern
     rc, out, texts = drive(['attach', USER, 'single_statement_fence'], {'pre': cfg})
     check(f'absent: precheck reports {what} -> {len(texts)} call(s) sent, refused', rc != 0 and len(texts) == 1
           and 'nothing was created' in out)
+rc, out, texts = drive(['attach', USER], {'fk_pre': 1})
+check(f'absent: per-table count query not 0 before setup -> {len(texts)} call(s) sent, refused', rc != 0 and len(texts) == 2
+      and 'nothing was created' in out)
 rc, out, texts = drive(['c6g_wait', USER], {'auth_after': 24})
 m = re.search(r'RUN ([0-9a-f]{16})', out)
 check('notclean: auth.users total changed -> TEARDOWN NOT CLEAN with user and run id', rc != 0 and 'TEARDOWN NOT CLEAN' in out

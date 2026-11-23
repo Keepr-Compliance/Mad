@@ -1,5 +1,5 @@
 #!/bin/bash
-# BACKLOG-4263 S1 two-session controls. TEST DATABASE ONLY. PREREQUISITE: migration 20261123100000 applied (committed).
+# BACKLOG-4263 S1 two-session controls. TEST DATABASE ONLY. WRITTEN, NOT RUN against a database. Needs 20261123100000 applied.
 #
 # Usage:
 #   run.sh R<n> <run-id> <fixture-user-id> [--mutant]   one case. <run-id> is 16 hex characters and <fixture-user-id> a
@@ -12,7 +12,8 @@
 # Unlike harness-s1.sql these COMMIT fixture rows and remove them in the teardown (always, from the trap, then verified).
 # Every file sent starts with guard.sql, which refuses any database that is not the test database; the session-1 file
 # starts with its hold marker, before the guard (see "Gate" below).
-# Order of a run: argument checks -> precheck (one read-only call; nothing is created unless it is clean) -> mutant
+# Order of a run: argument checks -> precheck and the per-table count query (read-only; nothing is created unless
+# both are clean) -> mutant
 # create (--mutant only) -> setup -> the two sessions -> state -> verdict -> trap.
 # Precheck refuses when: an auth user has the fixture id; an auth user has a p4263s1cc-*@example.test address; any
 # public.*_m4263 function exists; or (R3-R6) public.cloud_release_switches.one_computer is not already true. The
@@ -165,6 +166,8 @@ echo "  leftovers, if this run is killed: run.sh cleanup ${RUN} ${A}"
 
 case "$CASE" in R3|R4|R5|R6) NEED_ON=1 ;; *) NEED_ON=0 ;; esac
 precheck "$NEED_ON"
+FK0="$(fk_counts "precheck, rows of ${A}" 2>/dev/null | tail -1)" || true
+[ "$FK0" = 0 ] || { echo "refusing to start: the per-table count query answered ${FK0:-nothing} (needs 0 before setup); nothing was created" >&2; exit 1; }
 echo "precheck clean: no fixture user, no *_m4263 function; auth.users ${AUTH_BEFORE}; one_computer ${ON}"
 
 cleanup() {

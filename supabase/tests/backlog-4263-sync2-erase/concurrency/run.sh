@@ -1,5 +1,5 @@
 #!/bin/bash
-# BACKLOG-4263 sync plan P3: two-session controls for the erase job. Venue: the test project through ~/.claude/bin/kt-sql.
+# BACKLOG-4263 sync plan P3: two-session controls for the erase job (test project, ~/.claude/bin/kt-sql). WRITTEN, NOT RUN.
 # Needs E1 applied on the test project and the coordinator's go, with the fixture user id named in the before-note
 # FIRST: the id is an argument, never generated here. Make one with: python3 -c 'import uuid; print(uuid.uuid4())'
 #
@@ -8,7 +8,8 @@
 #        run.sh c6g_wait <fixture-user-id> [read_before_lock]         C-6g (i):  a batch holds the settings row -> move waits
 #        run.sh cleanup  <fixture-user-id> <run-id>                   remove a fixture user the trap did not remove
 #
-# Order: argument checks -> precheck (one read-only call; nothing is created unless it is clean) -> own-name copy
+# Order: argument checks -> precheck and the per-table count query (read-only; nothing is created unless both
+# are clean) -> own-name copy
 # (when the case needs one) -> setup -> the two sessions -> verdict -> trap.
 # Precheck refuses when: an auth user has the fixture id; any p4263c-*@example.test user exists; any public.*_m4263
 # function exists; any cloud_blob_erase_runs row is marked p4263c; (attach) 900 or more unreferenced blobs are older
@@ -103,12 +104,16 @@ fill precheck.sql pre.sql
 $K "$tmp/pre.sql" > "$tmp/pre.out" 2>&1 || { echo "refusing to start: precheck failed: $(head -c 300 "$tmp/pre.out")" >&2; exit 1; }
 line="$(python3 -I "$here/verdict.py" precheck "$tmp/pre.out" "$CASE")" || { echo "refusing to start: ${line}" >&2; exit 1; }
 AUTH_BEFORE="${line#ok auth_users=}"
+FK0="$(fk_counts "precheck, rows of ${U}" 2>/dev/null | tail -1)" || true
+[ "$FK0" = 0 ] || { echo "refusing to start: the per-table count query answered ${FK0:-nothing} (needs 0 before setup); nothing was created" >&2; exit 1; }
 echo "precheck clean: no fixture user, no *_m4263 function, no marked run row; auth.users ${AUTH_BEFORE}"
 
 SETUP=0; COPY_MADE=0; VERDICT=INCONCLUSIVE
 cleanup() {
   rc=$?; set +e; trap - EXIT INT TERM
   wait 2>/dev/null
+  # interrupted: the server-side sessions may still hold rows for up to their 4 s hold; wait before the first call
+  [ "$INTERRUPTED" = 1 ] && sleep 8
   STOP=0
   if [ "$COPY_MADE" = 1 ]; then
     left="$(copies_left)"
@@ -123,7 +128,8 @@ cleanup() {
   case "$VERDICT" in PASS|CAUGHT) ;; *) rc=1 ;; esac
   exit $rc
 }
-trap cleanup EXIT; trap 'exit 130' INT TERM
+INTERRUPTED=0
+trap cleanup EXIT; trap 'INTERRUPTED=1; exit 130' INT TERM
 
 if [ -n "$COPY" ]; then
   E1="${root}/supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql"

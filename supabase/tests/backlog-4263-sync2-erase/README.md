@@ -37,7 +37,8 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 
 - **Order:** argument checks; one read-only precheck (no user with the fixture id, no `p4263c-*@example.test` user,
   no `public.*_m4263` function, no `cloud_blob_erase_runs` row marked `p4263c`, and for `attach` fewer than 900
-  unreferenced blobs older than 24 h); nothing is created unless it is clean. Then the own-name copy, setup, the two
+  unreferenced blobs older than 24 h), then the per-table count query once (must answer 0); nothing is created
+  unless both are clean. Written and checked offline only; never run against a database. Then the own-name copy, setup, the two
   sessions, the verdict and the trap.
 - **Live functions are never replaced.** `copyfn.py` builds `public.cloud_blob_erase_claim_m4263` or
   `public.cloud_blob_erase_scrub_m4263` from the E1 text with one exact-string change (`CREATE FUNCTION`, never
@@ -61,7 +62,7 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 - **Shared rows:** `attach`'s session B runs the live claim across the whole database (row locks on eligible real
   rows until its RAISE, about 3 s; rolled back). `c6g_skip` B and `c6g_wait` A set `cloud_release_switches.one_computer`
   on only when it is off, inside their DO that ends in RAISE (rolled back; a writer to that row waits meanwhile).
-- **Trap:** drops the copy; prints the fixture user's row count in every table that references `auth.users`
+- **Trap:** after an interrupt it waits 8 s first (a session may still hold rows); drops the copy; prints the fixture user's row count in every table that references `auth.users`
   (catalogue query at run time, counts only); deletes `auth.users` by the exact id and this run's exact email
   (rows cascade); checks residue (direct and second-level rows, marked run rows) and that the `auth.users` total
   equals the precheck's. Any failure prints `TEARDOWN NOT CLEAN` with the user id, the run id and the counts left,

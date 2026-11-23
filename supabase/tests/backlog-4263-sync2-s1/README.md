@@ -81,7 +81,8 @@ run.sh R<n> <run-id> <fixture-user-id> [--mutant]   # both chosen before the run
 run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftovers (only if its email is that run's)
 ```
 
-- **Order:** argument checks; one read-only precheck; nothing is created unless it is clean; then the mutant
+- **Order:** argument checks; one read-only precheck, then the per-table count query once (it must answer 0, so its
+  dynamic SQL is proven readable before anything is committed); nothing is created unless both are clean; then the mutant
   (`--mutant`), setup, the two sessions, the state call, the verdict, the trap.
 - **Precheck** (`precheck.sql`) refuses when an auth user has the fixture id, any `p4263s1cc-*@example.test` user
   exists, any `public.*_m4263` function exists, or (R3–R6) `one_computer` is not already true. R3–R6 therefore refuse
