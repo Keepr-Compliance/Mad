@@ -193,9 +193,10 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+    // BACKLOG-4263 hand-test fixes 4: two lines per row (line 1 what, with screen-reader "from … to"; line 2 who · when).
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-      "You, on a computer · 5 min ago · Note: from ai → from desk (not kept)",
-      "Claude · removed",
+      "Note from from ai →  to from desk (not kept)You, on a computer · 5 min ago",
+      "RemovedClaude",
     ]);
     cloud.history.mockResolvedValueOnce({ success: false, error: "offline", rows: [] });
     fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
@@ -280,7 +281,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     expect(await screen.findByText("History needs an internet connection.")).toBeInTheDocument();
   });
 
-  it("History has one Dismiss that closes it; the due-date editor still opens and closes", async () => {
+  it("History has one close control, a plain ×, that closes it; the due-date editor still opens and closes", async () => {
     cloud.history.mockResolvedValueOnce({ success: true, rows: [{ who: "Claude", at: null, what: "removed", part: null, oldText: null, newText: null, kept: true }] });
     await show(ON);
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
@@ -288,8 +289,8 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     const list = await screen.findByTestId(`checklist-history-${T_ITEM.id}`);
     await within(list).findByRole("listitem");
     const buttons = within(list).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Dismiss"]);
-    expect(buttons[0].className).toContain("bg-white border border-gray-300");
+    // BACKLOG-4263 hand-test fixes 4: the bottom Dismiss became a × on the heading line (the founder's ask).
+    expect(buttons.map((b) => [b.textContent, b.getAttribute("aria-label")])).toEqual([["×", "Close history"]]);
     fireEvent.click(buttons[0]);
     expect(screen.queryByTestId(`checklist-history-${T_ITEM.id}`)).toBeNull();
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
@@ -328,7 +329,7 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
     fireEvent.click(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`));
     const li = await screen.findByRole("listitem");
-    expect(li.textContent).toBe(`Claude · Note: ${"y".repeat(200)}… → ${"y".repeat(200)}…`);
+    expect(li.textContent).toBe(`Note from ${"y".repeat(200)}… →  to ${"y".repeat(200)}…Claude`);
   });
 
   it("a History row of a kind this screen does not know shows only who (SR probe)", async () => {
@@ -353,6 +354,78 @@ describe("Checklist tab — Keepr Cloud parts (PR-6)", () => {
     const h = within(await screen.findByTestId("checklist-recently-removed")).getByText("Recently removed");
     expect(h.tagName).toBe("H4");
     expect(h.className).toContain("text-lg font-semibold");
+  });
+
+  // ---- fix 7: the event now also follows the user's own changes once the server has answered them ----
+  // Recently removed item: the shape main's listRemovedTodos returns (todoScreens.ts, CloudTodoRemovedResult).
+  const REMOVED_ITEM = { entity: "item" as const, cloudId: "c-own", title: "Order the appraisal", removedAt: "2026-11-22T10:00:00Z" };
+
+  it.each([
+    // Over IPC every answer is a new object: both the checklists and the Keepr Cloud parts change identity.
+    ["both change (as over IPC)", true, true],
+    ["only the Keepr Cloud parts change identity", false, true],
+    ["only the checklists change identity", true, false],
+  ])("own removal: the event after the server's answer shows it in Recently removed without reopening (%s)", async (_n, freshChecklists, freshCloud) => {
+    const same = { success: true, checklists: data };
+    checklists().get.mockImplementation(async () => (freshChecklists ? { success: true, checklists: fixtureChecklistsWithMyItems() } : same));
+    cloud.getForDeal.mockImplementation(async () => (freshCloud ? { ...ON, notices: [], markers: {} } : ON));
+    render(<Harness />);
+    await screen.findByTestId(`checklist-item-${T_ITEM.id}`);
+    await waitFor(() => expect(cloud.listRemoved).toHaveBeenCalled());
+    await act(async () => undefined);
+    expect(screen.queryByTestId("checklist-removed-c-own")).toBeNull();
+    cloud.listRemoved.mockResolvedValue({ success: true, items: [REMOVED_ITEM] });
+    await act(async () => changed!());
+    expect(await screen.findByTestId("checklist-removed-c-own")).toHaveTextContent("Order the appraisal");
+  });
+
+  describe("the event while the user is editing (it now follows his own edits about once a minute)", () => {
+    // As over IPC: a new object per answer, and the checklist answer arrives in a later task (held, then released),
+    // so a frame between the event and the answer is rendered.
+    const fireAsOverIpc = async () => {
+      let release: () => void = () => undefined;
+      checklists().get.mockImplementation(
+        () => new Promise((r) => (release = () => r({ success: true, checklists: fixtureChecklistsWithMyItems() }))),
+      );
+      cloud.getForDeal.mockImplementation(async () => ({ ...ON, notices: [], markers: {} }));
+      const gets = checklists().get.mock.calls.length;
+      await act(async () => changed!());
+      await act(async () => undefined);
+      expect(checklists().get.mock.calls.length).toBe(gets + 1);
+      await act(async () => release());
+      await act(async () => undefined);
+    };
+
+    it("a note being typed keeps its text", async () => {
+      await show(ON);
+      fireEvent.click(screen.queryByTestId(`checklist-add-note-${T_ITEM.id}`) ?? screen.getByTestId(`checklist-edit-note-${T_ITEM.id}`));
+      const box = within(screen.getByTestId(`checklist-note-editor-${T_ITEM.id}`)).getByRole("textbox");
+      fireEvent.change(box, { target: { value: "half typed" } });
+      await fireAsOverIpc();
+      expect(within(screen.getByTestId(`checklist-note-editor-${T_ITEM.id}`)).getByRole("textbox")).toHaveValue("half typed");
+    });
+
+    it("a My item name being typed keeps its text", async () => {
+      await show(ON);
+      fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
+      fireEvent.click(screen.getByTestId(`my-item-rename-${M_ITEM.id}`));
+      fireEvent.change(screen.getByTestId(`my-item-rename-input-${M_ITEM.id}`), { target: { value: "new na" } });
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`my-item-rename-input-${M_ITEM.id}`)).toHaveValue("new na");
+      expect(checklists().renameMyItem).not.toHaveBeenCalled();
+    });
+
+    it("an open row menu stays open (My items and template rows)", async () => {
+      await show(ON);
+      fireEvent.click(screen.getByTestId(`my-item-menu-toggle-${M_ITEM.id}`));
+      expect(screen.getByTestId(`my-item-menu-${M_ITEM.id}`)).toBeInTheDocument();
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`my-item-menu-${M_ITEM.id}`)).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId(`cloud-item-menu-toggle-${T_ITEM.id}`));
+      expect(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`)).toBeInTheDocument();
+      await fireAsOverIpc();
+      expect(screen.getByTestId(`cloud-item-history-${T_ITEM.id}`)).toBeInTheDocument();
+    });
   });
 
   it("cloud-todos:changed re-reads the checklists and the Keepr Cloud parts", async () => {

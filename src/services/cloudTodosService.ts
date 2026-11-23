@@ -50,7 +50,10 @@ export const cloudTodosService = {
       return { success: false, error: UNREACHABLE };
     }
   },
-  /** Subscribes to `cloud-todos:changed`; returns the unsubscribe (a no-op when the bridge is absent). */
+  /**
+   * Subscribes to `cloud-todos:changed` (a pass changed todos here, or the server answered this computer's todo
+   * changes); returns the unsubscribe (a no-op when the bridge is absent).
+   */
   onChanged(callback: () => void): () => void {
     try {
       return window.api.cloudTodos.onChanged(callback);

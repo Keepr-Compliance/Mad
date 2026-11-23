@@ -10,6 +10,8 @@ import type { CloudSyncResult, CloudSyncView } from "../../../../electron/types/
 
 export interface KeeprCloudSettingsState {
   view: CloudSyncView | null;
+  /** BACKLOG-4263: a view read has finished (a null view after it means main could not be reached). */
+  viewRead: boolean;
   busy: boolean;
   /** A fixed message key, or null. */
   message: "turn_off_done" | "turn_off_offline" | "reclaim_done" | "failed" | null;
@@ -30,12 +32,12 @@ export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
 }
 
 export function useKeeprCloudSettings(): UseKeeprCloudSettings {
-  const [state, setState] = useState<KeeprCloudSettingsState>({ view: null, busy: false, message: null });
+  const [state, setState] = useState<KeeprCloudSettingsState>({ view: null, viewRead: false, busy: false, message: null });
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
     const view = await cloudSyncService.getView();
-    if (mounted.current) setState((s) => ({ ...s, view }));
+    if (mounted.current) setState((s) => ({ ...s, view, viewRead: true }));
   }, []);
 
   useEffect(() => {
@@ -52,7 +54,7 @@ export function useKeeprCloudSettings(): UseKeeprCloudSettings {
       const r = await fn();
       const message = r.success ? (onSuccess ? onSuccess(r) : null) : "failed";
       const view = await cloudSyncService.getView();
-      if (mounted.current) setState({ view, busy: false, message });
+      if (mounted.current) setState({ view, viewRead: true, busy: false, message });
       return r.success;
     },
     [],

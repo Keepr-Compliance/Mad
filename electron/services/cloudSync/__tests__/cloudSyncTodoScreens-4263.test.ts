@@ -552,6 +552,144 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       await e.service.kick();
       expect(e.todosChanged.count).toBe(base + 1);
     });
+
+    // ---- the server answered this computer's own todo changes (fix 7) ----
+
+    it("own note edit: the pass that sends it reports the event once (pull wrote nothing); the next pass does not", async () => {
+      const { db, e } = await synced();
+      const base = e.todosChanged.count;
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      const r = await e.service.kick();
+      expect(r!.todos).toMatchObject({ outcome: "done", confirmed: 1 });
+      expect(r!.pull).toMatchObject({ outcome: "done", localWrites: 0 });
+      expect(e.todosChanged.count).toBe(base + 1);
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base + 1);
+    });
+
+    it("no loop: the reads the screen makes on the event queue no op and write no todo, so the next passes stay silent", async () => {
+      const { db, deal, e, s } = await synced();
+      const base = e.todosChanged.count;
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base + 1);
+      const todoRows = () => db.prepare("SELECT * FROM transaction_checklist_items ORDER BY id").all();
+      const before = { outbox: outbox(db), items: todoRows() };
+      expect(before.outbox).toEqual([]);
+      // What the renderer asks on the event: the provider's forDeal, Recently removed, an open History.
+      await s.forDeal(deal);
+      await s.listRemovedTodos(deal);
+      await s.history(I1);
+      expect(outbox(db)).toEqual(before.outbox);
+      expect(todoRows()).toEqual(before.items);
+      const pushes = calls(e, "cloud_todo_push");
+      await e.service.kick();
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base + 1);
+      expect(calls(e, "cloud_todo_push")).toBe(pushes);
+    });
+
+    it("own item removal: answered 'removed', the event is reported and Recently removed lists it", async () => {
+      const { db, deal, e, s } = await synced();
+      const base = e.todosChanged.count;
+      const cloudId = onlineItem(e, I2).id;
+      db.prepare(DELETE_PRIVATE_ITEM_SQL).run(I2, deal, MY_ITEMS_TEMPLATE_ID);
+      const r = await e.service.kick();
+      expect(r!.todos).toMatchObject({ confirmed: 1 });
+      expect(r!.pull!.localWrites).toBe(0);
+      expect(e.todosChanged.count).toBe(base + 1);
+      expect((await s.listRemovedTodos(deal)).items.map((i) => [i.entity, i.cloudId])).toEqual([["item", cloudId]]);
+    });
+
+    it("a change the server refused and kept (not_restorable: the item was deleted for good online): the event is reported and the not-kept notice is there", async () => {
+      const { db, deal, e, s } = await synced();
+      const base = e.todosChanged.count;
+      const gone = onlineItem(e, I1);
+      gone.removed = true;
+      gone.purged = true;
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("too late", I1);
+      const r = await e.service.kick();
+      expect(r!.todos).toMatchObject({ confirmed: 1, retried: 0 });
+      expect(r!.pull!.localWrites).toBe(0);
+      expect(e.todosChanged.count).toBe(base + 1);
+      expect((await s.forDeal(deal)).notices.map((n) => n.kind)).toContain("not_accepted");
+    });
+
+    it("an own edit answered 'lost' (a later change elsewhere won): the event is reported", async () => {
+      const { db, e } = await synced();
+      const base = e.todosChanged.count;
+      const t = onlineItem(e, I1);
+      t.parts.note = { rev: t.parts.note.rev + 1, value: "from the phone", at: Date.now() + 60_000, by: "ai_app:conn-1", edit_seq: null };
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk", I1);
+      const r = await e.service.kick();
+      expect(r!.todos).toMatchObject({ confirmed: 1 });
+      expect(e.todosChanged.count).toBe(base + 1);
+    });
+
+    it("answers the server does not keep (not_found, every op): sent but not confirmed, no event on two passes", async () => {
+      const { db, e } = await synced();
+      const base = e.todosChanged.count;
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      // Answer shape as helpers/fakeServer.ts documents for a not-kept status ({op_id, status}); not_found reaches a desktop op.
+      e.server.override = (fn, args) =>
+        fn === "cloud_todo_push"
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((op) => ({ op_id: op.op_id, entity: "item", status: "not_found" })) }, error: null, status: 200 }
+          : undefined;
+      const r1 = await e.service.kick();
+      expect(r1!.todos).toMatchObject({ sent: 1, retried: 1, confirmed: 0 });
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base);
+      expect(outbox(db)).toHaveLength(1);
+      e.server.override = null;
+    });
+
+    it("after-pull send on a deal locked here: the held op is answered once, one event, then the passes stay silent", async () => {
+      const { db, deal, e } = await synced();
+      db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(deal);
+      e.server.aiSet(onlineItem(e, I1), "note", "ai during review");
+      const base = e.todosChanged.count;
+      const r = await e.service.kick();
+      expect(r!.pull!.held).toBeGreaterThan(0);
+      expect(r!.todosAfterPull).toMatchObject({ confirmed: 1 });
+      expect(e.todosChanged.count).toBe(base + 1);
+      const pushes = calls(e, "cloud_todo_push");
+      await e.service.kick();
+      await e.service.kick();
+      expect(e.todosChanged.count).toBe(base + 1);
+      expect(outbox(db)).toEqual([]);
+      expect(calls(e, "cloud_todo_push")).toBe(pushes);
+    });
+
+    describe("sweep over the pass summary (shapes taken from a real pass, counts set per case)", () => {
+      const cases: Array<[string, { pullWrites: number; first?: number; afterPull?: number; outcome?: "done" | "stopped" }, number]> = [
+        ["first send only", { pullWrites: 0, first: 1 }, 1],
+        ["after-pull send only", { pullWrites: 0, first: 0, afterPull: 1 }, 1],
+        ["both sends", { pullWrites: 0, first: 2, afterPull: 1 }, 1],
+        ["neither (both sends ran, nothing confirmed)", { pullWrites: 0, first: 0, afterPull: 0 }, 0],
+        ["pull wrote locally only", { pullWrites: 1, first: 0 }, 1],
+        ["a stopped pass with no todosAfterPull, its first send confirmed", { pullWrites: 0, first: 1, outcome: "stopped" }, 1],
+        ["a stopped pass with no todosAfterPull, nothing confirmed", { pullWrites: 0, first: 0, outcome: "stopped" }, 0],
+      ];
+      it.each(cases)("%s", async (_name, c, events) => {
+        const { db, e } = await synced();
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("shape", I1);
+        const real = await pass(e);
+        expect(real.todos).toBeDefined();
+        expect(real.pull).toBeDefined();
+        const summary = {
+          ...real,
+          outcome: c.outcome ?? real.outcome,
+          todos: { ...real.todos!, confirmed: c.first ?? 0 },
+          pull: { ...real.pull!, localWrites: c.pullWrites },
+          todosAfterPull: c.afterPull === undefined ? undefined : { ...real.todos!, confirmed: c.afterPull },
+        };
+        if (c.afterPull === undefined) delete (summary as { todosAfterPull?: unknown }).todosAfterPull;
+        const base = e.todosChanged.count;
+        jest.spyOn(e.service.runner!, "runPass").mockResolvedValueOnce(summary);
+        await e.service.kick();
+        expect(e.todosChanged.count).toBe(base + events);
+      });
+    });
   });
 
   // ================================================================ OFFPULL
