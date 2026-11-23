@@ -7,6 +7,8 @@
 -- Locks: DROP TABLE takes ACCESS EXCLUSIVE on mcp_message_reads and, through its foreign key, a lock on auth.users;
 -- the CHECK swap takes ACCESS EXCLUSIVE on mcp_call_log; both until commit, lock_timeout 3s.
 -- Deploy order: the portal without the message tools first, then this file.
+-- lock_timeout 3s is set before the first statement.
+SET LOCAL lock_timeout = '3s';
 DO $pre4263tr$
 DECLARE r record; v_md5 text;
 BEGIN
@@ -44,7 +46,6 @@ DROP FUNCTION IF EXISTS public._mcp_r_list_deal_messages(uuid, text, boolean, in
 DROP FUNCTION IF EXISTS public._mcp_msg_people(jsonb, boolean);
 DROP FUNCTION IF EXISTS public._mcp_conn_reads_messages(uuid);
 DROP TABLE IF EXISTS public.mcp_message_reads;
-SET LOCAL lock_timeout = '3s';
 DO $chk4263tr$
 DECLARE
   v_name text;

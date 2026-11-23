@@ -16,7 +16,7 @@ Status: WRITTEN, NOT RUN. Nothing here has been run on any database.
    call-log tool CHECK under `lock_timeout = '3s'` (ACCESS EXCLUSIVE on `mcp_call_log` until commit).
 3. Post-check (read-only): `../backlog-4263-prod/postcheck-20261123140000.sql`. Expected `postcheck = ok`.
 4. Harness, first the controls only: `~/.claude/bin/kt-sql harness-t-controls.sql > out.txt; python3 gen.py report out.txt`;
-   when every control passes, the full call `harness-t.sql` (controls and the 51 mutants). Do not start a call between
+   when every control passes, the full call `harness-t.sql` (controls and the 57 mutants). Do not start a call between
    minute 15 and minute 30 of the hour: the call holds the `cloud_release_switches` row, and the erase job's scrub
    (minute 23) takes that row `FOR SHARE` and would wait. After each call run
    `~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()"`. At most 3 full runs per batch.
