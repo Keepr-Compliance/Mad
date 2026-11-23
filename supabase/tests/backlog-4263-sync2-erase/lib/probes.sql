@@ -7,7 +7,8 @@ CREATE FUNCTION pg_temp.p_grants() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE bad text := ''; f text; r text; t text;
 BEGIN
   FOREACH f IN ARRAY ARRAY['public.cloud_blob_erase_secret()', 'public.cloud_blob_erase_claim(boolean,integer,integer)',
-                           'public.cloud_blob_erase_finish(uuid,uuid[],jsonb,text)', 'public.cloud_blob_erase_scrub(uuid,uuid,boolean,integer)'] LOOP
+                           'public.cloud_blob_erase_finish(uuid,uuid[],jsonb,text)', 'public.cloud_blob_erase_scrub(uuid,uuid,boolean,integer)',
+                           'public.cloud_blob_erase_note(uuid,jsonb,text)'] LOOP
     FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
       IF has_function_privilege(r, f, 'EXECUTE') THEN bad := bad || r || ' runs ' || f || '; '; END IF;
     END LOOP;
@@ -127,7 +128,15 @@ END $p$;
 -- C-6c: the orphan sweep fences only unreferenced blobs older than 24 h (registration and upload)
 CREATE FUNCTION pg_temp.p_c6c() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(13); d uuid; old_b uuid; young_b uuid; ref_b uuid; late_up uuid; never_up uuid; bad text := '';
+        c jsonb; n_widened bigint;
 BEGIN
+  -- precondition for the listing assertions below: the claim lists at most 1000 blobs ordered by purge_requested_at,
+  -- so a wrong listing of unfenced blobs is only visible while fewer than 900 blobs in the whole database are fenced
+  -- or uploaded and unreferenced. Otherwise this control cannot tell, and says so instead of passing.
+  SELECT count(*) INTO n_widened FROM public.cloud_blobs b
+   WHERE (b.purge_requested_at IS NOT NULL OR b.uploaded_at IS NOT NULL)
+     AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id);
+  IF n_widened >= 900 THEN RETURN 'PRECONDITION ' || n_widened || ' fenced or uploaded unreferenced blobs (need < 900)'; END IF;
   d := pg_temp.mk_deal(u, pg_temp.fx(1301), 'c6c');
   old_b    := pg_temp.mk_blob(u, 'c6c-old',   now() - interval '25 hours', now() - interval '25 hours', NULL);
   young_b  := pg_temp.mk_blob(u, 'c6c-young', now() - interval '23 hours', now() - interval '23 hours', NULL);
@@ -135,7 +144,10 @@ BEGIN
   late_up  := pg_temp.mk_blob(u, 'c6c-late',  now() - interval '3 days',   now() - interval '1 hour',   NULL);
   never_up := pg_temp.mk_blob(u, 'c6c-never', now() - interval '25 hours', NULL,                        NULL);
   PERFORM pg_temp.mk_file(u, d, 'c6c', NULL, ref_b, NULL);
-  PERFORM pg_temp.claim(false);
+  c := pg_temp.claim(false);
+  IF young_b = ANY (pg_temp.ids(c)) THEN bad := bad || 'unfenced young blob listed for erasing; '; END IF;
+  IF late_up = ANY (pg_temp.ids(c)) THEN bad := bad || 'unfenced recently uploaded blob listed for erasing; '; END IF;
+  IF ref_b = ANY (pg_temp.ids(c)) THEN bad := bad || 'referenced blob listed for erasing; '; END IF;
   IF (SELECT purge_requested_at FROM public.cloud_blobs WHERE id = old_b) IS NULL THEN bad := bad || 'old orphan not fenced; '; END IF;
   IF (SELECT purge_requested_at FROM public.cloud_blobs WHERE id = never_up) IS NULL THEN bad := bad || 'never-uploaded orphan not fenced; '; END IF;
   IF (SELECT purge_requested_at FROM public.cloud_blobs WHERE id = young_b) IS NOT NULL THEN bad := bad || 'young blob fenced; '; END IF;
@@ -234,6 +246,30 @@ BEGIN
   c := pg_temp.claim(false);
   IF NOT (own = ANY (pg_temp.ids(c))) THEN bad := bad || 'scrubbed blob not listed by the next claim; '; END IF;
   RETURN CASE WHEN bad = '' THEN 'PASS' ELSE 'FAIL ' || bad END;
+END $p$;
+
+-- note (after the scrub): adds only keys the run row does not hold; moves ok to partial, never a failed run back
+CREATE FUNCTION pg_temp.p_note() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE c jsonb; run uuid; run2 uuid; r record; t text;
+BEGIN
+  c := pg_temp.claim(false); run := (c ->> 'run_id')::uuid;
+  PERFORM pg_temp.finish(run, '{}');
+  SELECT * INTO r FROM public.cloud_blob_erase_runs WHERE id = run;
+  IF r.outcome <> 'ok' OR NOT (r.counts ? 'blob_rows_deleted') THEN RETURN 'FAIL setup: ' || r.outcome || ' ' || r.counts::text; END IF;
+  PERFORM pg_temp.svc(format('SELECT public.cloud_blob_erase_note(%L::uuid, %L::jsonb, %L)::text', run,
+                             '{"blob_rows_deleted": 99, "scrub_errors": 2, "scrub_owners_left": 3, "Bad-Key": 1, "scrub_text": "x"}', 'partial'));
+  SELECT * INTO r FROM public.cloud_blob_erase_runs WHERE id = run;
+  IF (r.counts ->> 'blob_rows_deleted')::int <> 0 THEN RETURN 'FAIL note overwrote blob_rows_deleted: ' || r.counts::text; END IF;
+  IF (r.counts ->> 'scrub_errors')::int IS DISTINCT FROM 2 OR (r.counts ->> 'scrub_owners_left')::int IS DISTINCT FROM 3 THEN RETURN 'FAIL scrub counts not added'; END IF;
+  IF r.counts ? 'Bad-Key' OR r.counts ? 'scrub_text' THEN RETURN 'FAIL note kept a non-count key'; END IF;
+  IF r.outcome <> 'partial' THEN RETURN 'FAIL outcome not moved to partial: ' || r.outcome; END IF;
+  c := pg_temp.claim(false); run2 := (c ->> 'run_id')::uuid;
+  PERFORM pg_temp.svc(format('SELECT public.cloud_blob_erase_finish(%L::uuid, %L::uuid[], %L::jsonb, %L)::text', run2, '{}', '{}', 'failed'));
+  PERFORM pg_temp.svc(format('SELECT public.cloud_blob_erase_note(%L::uuid, %L::jsonb, %L)::text', run2, '{}', 'partial'));
+  IF (SELECT outcome FROM public.cloud_blob_erase_runs WHERE id = run2) <> 'failed' THEN RETURN 'FAIL note changed a failed run'; END IF;
+  t := pg_temp.call('', format('SELECT public.cloud_blob_erase_note(%L::uuid, %L::jsonb, %L)::text', run, '{}', 'ok'));
+  IF t NOT LIKE 'ERR 42501%service_role only%' THEN RETURN 'FAIL no-claim note: ' || t; END IF;
+  RETURN 'PASS';
 END $p$;
 
 -- the scrub does nothing while one_computer is off or no computer is active

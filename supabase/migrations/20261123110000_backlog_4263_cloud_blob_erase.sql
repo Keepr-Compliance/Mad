@@ -25,6 +25,8 @@
 --    In dry_run mode (the default) it writes only its own run row, and returns counts and the owner list.
 -- 5. cloud_blob_erase_finish()   service_role only. Deletes a cloud_blobs row only while it is fenced, no file row
 --    references it and its object is gone from storage.objects, and only for a live run. Records counts and outcome.
+--    cloud_blob_erase_note()     service_role only. After the scrub, adds the scrub counts the run row does not hold yet,
+--    and moves outcome 'ok' to 'partial' when asked.
 -- 6. cloud_blob_erase_scrub()    service_role only. One batch for one owner: at most p_limit (1..1000) live file and
 --    message rows of deals whose source_install_id is not the owner's active_install_id, while
 --    cloud_release_switches.one_computer is on, are removed and scrubbed as cloud_tombstone does, and their blobs
@@ -314,6 +316,36 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_blob_erase_finish(uuid, uuid[], jsonb, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_finish(uuid, uuid[], jsonb, text) TO service_role;
+
+-- ============================================================================ 5b. note, after the scrub
+-- Adds the scrub step's counts to a run row that finish already closed: only snake_case keys with numeric values that
+-- the row does not hold yet (counts written by the SQL functions win), and moves outcome 'ok' to 'partial' when asked.
+CREATE OR REPLACE FUNCTION public.cloud_blob_erase_note(p_run_id uuid, p_counts jsonb, p_outcome text) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE
+  v_new jsonb;
+  v_n integer;
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501';
+  END IF;
+  IF p_run_id IS NULL OR p_outcome IS NULL OR p_outcome NOT IN ('ok', 'partial') THEN
+    RAISE EXCEPTION 'bad note argument' USING ERRCODE = '22023';
+  END IF;
+  SELECT coalesce(jsonb_object_agg(e.k, e.v), '{}'::jsonb) INTO v_new
+    FROM public.cloud_blob_erase_runs r, jsonb_each(coalesce(p_counts, '{}'::jsonb)) AS e(k, v)
+   WHERE r.id = p_run_id
+     AND e.k ~ '^[a-z][a-z0-9_]{0,63}$' AND jsonb_typeof(e.v) = 'number'
+     AND NOT (r.counts ? e.k);                                                               /*NOTE:new_keys_only*/
+  UPDATE public.cloud_blob_erase_runs r
+     SET counts = r.counts || v_new,
+         outcome = CASE WHEN p_outcome = 'partial' AND r.outcome = 'ok' THEN 'partial' ELSE r.outcome END   /*NOTE:outcome*/
+   WHERE r.id = p_run_id;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN jsonb_build_object('noted', v_n = 1, 'keys_added', (SELECT count(*) FROM jsonb_object_keys(v_new)));
+END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_note(uuid, jsonb, text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_note(uuid, jsonb, text) TO service_role;
 
 -- ============================================================================ 6. scrub, one batch for one owner
 CREATE OR REPLACE FUNCTION public.cloud_blob_erase_scrub(p_run_id uuid, p_owner uuid, p_dry_run boolean DEFAULT true,

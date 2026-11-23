@@ -64,13 +64,14 @@ describe('BACKLOG-4263 cloud blob erase migration (E1)', () => {
       cloud_blob_erase_claim: 'boolean, integer, integer',
       cloud_blob_erase_finish: 'uuid, uuid[], jsonb, text',
       cloud_blob_erase_scrub: 'uuid, uuid, boolean, integer',
+      cloud_blob_erase_note: 'uuid, jsonb, text',
     };
     for (const [fn, sig] of Object.entries(sigs)) {
       expect(fnBody(fn)).toContain("IF auth.role() IS DISTINCT FROM 'service_role' THEN RAISE EXCEPTION 'service_role only' USING ERRCODE = '42501'");
       expect(E1).toContain(`REVOKE ALL ON FUNCTION public.${fn}(${sig}) FROM PUBLIC, anon, authenticated, service_role;`);
       expect(E1).toContain(`GRANT EXECUTE ON FUNCTION public.${fn}(${sig}) TO service_role;`);
     }
-    expect(count(E1, 'GRANT EXECUTE ON FUNCTION')).toBe(4);
+    expect(count(E1, 'GRANT EXECUTE ON FUNCTION')).toBe(5);
     expect(E1).not.toMatch(/GRANT [^;]+ TO [^;]*\b(anon|authenticated|PUBLIC)\b/);
   });
 
@@ -185,6 +186,14 @@ describe('BACKLOG-4263 cloud blob erase migration (E1)', () => {
     expect(firstRead).not.toMatch(/FOR (UPDATE|SHARE)/);
   });
 
+  it('note adds only keys the run row does not hold, and only moves ok to partial', () => {
+    const body = fnBody('cloud_blob_erase_note');
+    expect(body).toContain('AND NOT (r.counts ? e.k);');
+    expect(body).toContain("outcome = CASE WHEN p_outcome = 'partial' AND r.outcome = 'ok' THEN 'partial' ELSE r.outcome END");
+    expect(body).toContain("p_outcome NOT IN ('ok', 'partial')");
+    expect(body).not.toMatch(/\bDELETE\b|purge_requested_at|cloud_blobs/);
+  });
+
   it('owners list: switch on, active computer set, oldest move first', () => {
     const body = fnBody('cloud_blob_erase_claim');
     expect(body).toContain('coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false)');
@@ -212,6 +221,7 @@ describe('BACKLOG-4263 cloud blob erase rollback files', () => {
     for (const s of [
       'DROP FUNCTION IF EXISTS public.cloud_blob_erase_invoke();',
       'DROP FUNCTION IF EXISTS public.cloud_blob_erase_scrub(uuid, uuid, boolean, integer);',
+      'DROP FUNCTION IF EXISTS public.cloud_blob_erase_note(uuid, jsonb, text);',
       'DROP FUNCTION IF EXISTS public.cloud_blob_erase_finish(uuid, uuid[], jsonb, text);',
       'DROP FUNCTION IF EXISTS public.cloud_blob_erase_claim(boolean, integer, integer);',
       'DROP FUNCTION IF EXISTS public.cloud_blob_erase_secret();',

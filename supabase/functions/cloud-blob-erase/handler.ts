@@ -14,6 +14,7 @@
  *   3. rpc/cloud_blob_erase_finish -> deletes only blob rows whose object is gone
  *   4. rpc/cloud_blob_erase_scrub  -> one batch per owner per round, round-robin, oldest move first, until every
  *      owner is done or the time budget is spent (a dry run makes one counting round)
+ *   5. rpc/cloud_blob_erase_note   -> adds the scrub counts, and a partial outcome, to the run row
  * Bytes fenced by a scrub batch are erased by the next run's step 2.
  * Which rows and objects qualify is decided in SQL (the service role bypasses RLS, so the rules live in the
  * SECURITY DEFINER functions).
@@ -58,6 +59,8 @@ export interface EraseCounts {
   scrub_skipped: number;
   scrub_errors: number;
   scrub_owners_left: number;
+  scrub_ms: number;
+  note_errors?: number;
 }
 
 interface ClaimResult {
@@ -216,13 +219,17 @@ export function emptyCounts(mode: "dry_run" | "live"): EraseCounts {
   return {
     mode, blobs_listed: 0, rowless_listed: 0, objects_removed: 0, rowless_removed: 0, remove_errors: 0,
     blob_rows_deleted: 0, blob_rows_kept: 0, scrub_owners: 0, scrub_rounds: 0, scrub_batches: 0,
-    rows_scrubbed: 0, rows_would_scrub: 0, scrub_skipped: 0, scrub_errors: 0, scrub_owners_left: 0,
+    rows_scrubbed: 0, rows_would_scrub: 0, scrub_skipped: 0, scrub_errors: 0, scrub_owners_left: 0, scrub_ms: 0,
   };
 }
 
-function numericCounts(c: EraseCounts): Record<string, number> {
+const SCRUB_KEY = /^(scrub_|rows_)/;
+/** Numeric counts of the erase step (sent to finish) or of the scrub step (sent to note, after the scrub). */
+function numericCounts(c: EraseCounts, step: "erase" | "scrub"): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(c)) if (typeof v === "number") out[k] = v;
+  for (const [k, v] of Object.entries(c)) {
+    if (typeof v === "number" && SCRUB_KEY.test(k) === (step === "scrub")) out[k] = v;
+  }
   return out;
 }
 
@@ -315,23 +322,36 @@ export async function handleRequest(req: Request, deps: HandlerDeps): Promise<Re
     }
 
     stage = "finish";
-    const outcome = counts.remove_errors > 0 ? "partial" : "ok";
+    // A rowless object is listed from storage.objects, so each one listed must come back removed.
+    const removeShort = counts.remove_errors > 0 || counts.rowless_removed < counts.rowless_listed;
     const fin = (await rpc(deps, "finish", "cloud_blob_erase_finish", {
       p_run_id: runId,
       p_blob_ids: finishIds,
-      p_counts: numericCounts(counts),
-      p_outcome: outcome,
+      p_counts: numericCounts(counts, "erase"),
+      p_outcome: removeShort ? "partial" : "ok",
     })) as { blob_rows_deleted?: number; blob_rows_kept?: number };
     counts.blob_rows_deleted = Number(fin?.blob_rows_deleted) || 0;
     counts.blob_rows_kept = Number(fin?.blob_rows_kept) || 0;
 
     // ── Then scrub non-active computers' rows ─────────────────────────────
     stage = "scrub";
+    const scrubStarted = deps.now();
     await scrubRounds(deps, live, runId, owners, started, counts);
+    counts.scrub_ms = deps.now() - scrubStarted;
 
-    const failed = outcome === "partial" || counts.scrub_errors > 0;
+    // A blob row kept after its remove succeeded means the object is still there: bytes not erased.
+    const eraseShort = removeShort || counts.blob_rows_kept > 0;
+    const failed = eraseShort || counts.scrub_errors > 0;
+    stage = "note";
+    try {
+      await rpc(deps, "note", "cloud_blob_erase_note", {
+        p_run_id: runId, p_counts: numericCounts(counts, "scrub"), p_outcome: failed ? "partial" : "ok",
+      });
+    } catch {
+      counts.note_errors = 1;
+    }
     deps.log(JSON.stringify({ cloud_blob_erase: failed ? "partial" : "ok", ...counts }));
-    if (failed) await captureFailure(deps, counts.scrub_errors > 0 ? "scrub" : "remove", 0, counts, runId);
+    if (failed) await captureFailure(deps, eraseShort ? "remove" : "scrub", 0, counts, runId);
     await checkIn(deps, checkInId, failed ? "error" : "ok", (deps.now() - started) / 1000);
     return json({ outcome: failed ? "partial" : "ok", ...counts });
   } catch (err) {
@@ -340,7 +360,7 @@ export async function handleRequest(req: Request, deps: HandlerDeps): Promise<Re
     if (runId && failedStage !== "finish") {
       try {
         await rpc(deps, "finish", "cloud_blob_erase_finish", {
-          p_run_id: runId, p_blob_ids: [], p_counts: numericCounts(counts), p_outcome: "failed",
+          p_run_id: runId, p_blob_ids: [], p_counts: numericCounts(counts, "erase"), p_outcome: "failed",
         });
       } catch {
         // the run row stays 'running'; the missed check-in reports it

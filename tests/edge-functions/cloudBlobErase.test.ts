@@ -52,6 +52,9 @@ function makeDeps(opts: {
   scrubStatusFor?: string;
   clockStep?: number;
   secret?: () => Response;
+  storageEmpty?: boolean;
+  finishKept?: number;
+  noteStatus?: number;
 } = {}) {
   const calls: Call[] = [];
   const logs: string[] = [];
@@ -76,7 +79,12 @@ function makeDeps(opts: {
     if (url.endsWith('/rpc/cloud_blob_erase_finish')) {
       if (opts.finishStatus) return ok({ message: `BODYMARKER ${blob(1).path}` }, opts.finishStatus);
       const ids = JSON.parse(body).p_blob_ids as string[];
-      return ok({ blob_rows_deleted: ids.length, blob_rows_kept: 0 });
+      const kept = Math.min(opts.finishKept ?? 0, ids.length);
+      return ok({ blob_rows_deleted: ids.length - kept, blob_rows_kept: kept });
+    }
+    if (url.endsWith('/rpc/cloud_blob_erase_note')) {
+      if (opts.noteStatus) return ok({ message: 'BODYMARKER' }, opts.noteStatus);
+      return ok({ noted: true, keys_added: 1 });
     }
     if (url.endsWith('/rpc/cloud_blob_erase_scrub')) {
       const a = JSON.parse(body);
@@ -94,7 +102,7 @@ function makeDeps(opts: {
       if (opts.failRemoveFor && names.some((x) => x.includes(opts.failRemoveFor!))) {
         return ok({ error: `STORAGEMARKER ${names[0]}` }, 500);
       }
-      return ok(names.map((name) => ({ name, bucket_id: 'cloud-deal-files' })));
+      return ok(opts.storageEmpty ? [] : names.map((name) => ({ name, bucket_id: 'cloud-deal-files' })));
     }
     if (url.includes('sentry.test')) return new Response('{}', { status: 200 });
     throw new Error(`unexpected fetch ${url}`);
@@ -208,7 +216,7 @@ describe('live run', () => {
     expect(res.status).toBe(200);
     expect(order(calls)).toEqual([
       'cloud_blob_erase_secret', 'cloud_blob_erase_claim', 'remove', 'remove', 'cloud_blob_erase_finish',
-      'cloud_blob_erase_scrub', 'cloud_blob_erase_scrub',
+      'cloud_blob_erase_scrub', 'cloud_blob_erase_scrub', 'cloud_blob_erase_note',
     ]);
     expect(removes(calls).map((c) => JSON.parse(c.body).prefixes)).toEqual([[blob(1).path, blob(2).path], [ROWLESS]]);
     expect(rpcArgs(calls, 'cloud_blob_erase_finish')[0]).toMatchObject({
@@ -270,6 +278,55 @@ describe('live run', () => {
     expect(res.status).toBe(200);
     expect(rpcArgs(calls, 'cloud_blob_erase_scrub').map((a) => a.p_owner)).toEqual([OWNER_A, OWNER_B]);
     expect(await res.json()).toMatchObject({ outcome: 'partial', scrub_errors: 1, rows_scrubbed: 3 });
+  });
+});
+
+describe('run row: finish carries the erase counts, note carries the scrub counts afterwards', () => {
+  it('finish gets no scrub key; note gets the scrub keys, the duration and the outcome', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, clockStep: 5 });
+    await handleRequest(post(), deps);
+    const fin = rpcArgs(calls, 'cloud_blob_erase_finish')[0].p_counts;
+    expect(Object.keys(fin).filter((k) => /^(scrub_|rows_)/.test(k))).toEqual([]);
+    expect(fin).toMatchObject({ objects_removed: 2, blobs_listed: 2 });
+    const note = rpcArgs(calls, 'cloud_blob_erase_note');
+    expect(note).toHaveLength(1);
+    expect(note[0]).toMatchObject({ p_run_id: RUN_ID, p_outcome: 'ok' });
+    expect(note[0].p_counts).toMatchObject({ scrub_rounds: 1, scrub_batches: 2, rows_scrubbed: 6, scrub_owners_left: 0, scrub_errors: 0, scrub_ms: 10 });
+    expect(Object.keys(note[0].p_counts).filter((k) => !/^(scrub_|rows_)/.test(k))).toEqual([]);
+  });
+  it('a scrub error reaches the run row as a partial outcome through note', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, scrubStatusFor: OWNER_A });
+    await handleRequest(post(), deps);
+    const note = rpcArgs(calls, 'cloud_blob_erase_note')[0];
+    expect(note.p_outcome).toBe('partial');
+    expect(note.p_counts.scrub_errors).toBe(1);
+  });
+  it('a failing note does not fail the run', async () => {
+    const { deps } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, noteStatus: 500 });
+    const res = await handleRequest(post(), deps);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ outcome: 'ok', note_errors: 1 });
+  });
+});
+
+describe('a remove that erases nothing is not reported as ok', () => {
+  it('blob rows kept after their remove succeeded: partial, Sentry event, note partial', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, claim: { ...CLAIM, rowless: [] }, storageEmpty: true, finishKept: 2 });
+    const res = await handleRequest(post(), deps);
+    expect(await res.json()).toMatchObject({ outcome: 'partial', blob_rows_kept: 2, objects_removed: 0 });
+    expect(rpcArgs(calls, 'cloud_blob_erase_note')[0].p_outcome).toBe('partial');
+    expect(sentry(calls).some((b) => b.includes('"type":"event"'))).toBe(true);
+  });
+  it('a rowless object listed but not reported removed: finish is told partial', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, claim: { ...CLAIM, blobs: [] }, storageEmpty: true });
+    const res = await handleRequest(post(), deps);
+    expect(rpcArgs(calls, 'cloud_blob_erase_finish')[0].p_outcome).toBe('partial');
+    expect(await res.json()).toMatchObject({ outcome: 'partial', rowless_listed: 1, rowless_removed: 0 });
+  });
+  it('fenced blobs whose object never existed: removed count short but rows deleted, still ok', async () => {
+    const { deps } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, claim: { ...CLAIM, rowless: [] }, storageEmpty: true, finishKept: 0 });
+    const res = await handleRequest(post(), deps);
+    expect(await res.json()).toMatchObject({ outcome: 'ok', objects_removed: 0, blob_rows_deleted: 2 });
   });
 });
 

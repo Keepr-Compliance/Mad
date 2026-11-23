@@ -1,54 +1,82 @@
 #!/bin/bash
 # BACKLOG-4263 sync plan P3: two-session controls for the erase job. Venue: the test project through ~/.claude/bin/kt-sql.
 # WRITTEN, NOT RUN. Needs E1 applied on the test project (the sessions call the committed functions) and the
-# coordinator's go: setup COMMITS one fixture user (invented id, printed before anything is written) with one settings
-# row, two deals, rows and one blob; the EXIT/INT/TERM trap deletes that user (rows cascade) and prints a residue
-# count that must be 0. Each session itself ends in RAISE, so the sessions change nothing; only the fixture is
-# committed and removed. lock_timeout 3 s in every session; holds are 2 s.
+# coordinator's go, with the fixture user id named in the before-note FIRST: the id is an argument, never generated here.
+# Make one with: python3 -c 'import uuid; print(uuid.uuid4())'
 #
-# Usage: run.sh attach   [single_statement_fence]   P3 condition 1: attach (A) versus orphan sweep (B)
-#        run.sh c6g_skip [no_skip_locked]           C-6g (ii): a claim holds the settings row -> the batch skips the owner
-#        run.sh c6g_wait [read_before_lock]         C-6g (i):  a batch holds the settings row -> the move waits for it
+# Usage: run.sh attach   <fixture-user-id> [single_statement_fence]   P3 condition 1: attach (A) versus orphan sweep (B)
+#        run.sh c6g_skip <fixture-user-id> [no_skip_locked]           C-6g (ii): a claim holds the settings row -> skip
+#        run.sh c6g_wait <fixture-user-id> [read_before_lock]         C-6g (i):  a batch holds the settings row -> move waits
+#        run.sh cleanup  <fixture-user-id>                            remove a fixture user the trap did not remove
+#
+# Rows COMMITTED by setup (8): 1 auth.users (email p4263c-<run>@example.test, inserted with session_replication_role =
+# replica, so no insert trigger writes anywhere else), 1 cloud_autosave_settings, 2 cloud_deals, 3 cloud_deal_messages,
+# 1 cloud_blobs (no stored object). attach's session A commits 1 cloud_deal_files row more (9). Every other session
+# ends in RAISE; a run row a session writes is marked counts {"p4263c": 1} and rolls back with it.
+# The EXIT/INT/TERM trap (and `cleanup`) deletes the user (rows cascade) and counts what is left of it in auth.users,
+# cloud_autosave_settings, cloud_deals, cloud_deal_messages, cloud_deal_files, cloud_blobs, plus cloud_blob_erase_runs
+# rows marked p4263c: must be 0. Setup refuses an id that already exists; cleanup refuses an id whose email is not a
+# p4263c fixture address. lock_timeout 3 s in every session; holds are 2 s.
+#
+# Verdict: pristine PASSES only when session B's P_B line shows the passing value. A mutant counts as CAUGHT only when
+# the P_B line is present and shows the failing value. No P_B line (gate timeout, lock timeout, any error) is
+# INCONCLUSIVE and exits 1, with or without a mutant.
 #
 # attach:   A locks blob X FOR UPDATE as cloud_upsert_files does (/*FILE:lockblobs*/, 20261118110000), inserts a file
-#           row with X, holds 2 s and COMMITS (the one session that commits: B must see the attach after its wait; the
-#           trap removes that row with the fixture user). B (gated on A's hold) runs the live claim, which ends in
-#           RAISE: its orphan arm locks X through _cloud_fence_unreferenced and must wait for A.
-#           PASS: B waited (>= 1.5 s) and X is not fenced. Mutant single_statement_fence replaces the helper call in
-#           B's own transaction with one UPDATE ... WHERE NOT EXISTS (file row): expected FAIL (X fenced although
-#           referenced: the subquery reads the statement's snapshot, taken before A committed).
+#           row with X, holds 2 s and COMMITS. B (gated on A's hold) runs the live claim, which ends in RAISE: its orphan
+#           arm locks X through _cloud_fence_unreferenced and must wait for A.
+#           PASS: waited_s >= 1.5 and fenced = false. Mutant single_statement_fence (one UPDATE ... WHERE NOT EXISTS,
+#           created in B's own transaction): CAUGHT when fenced = true.
 # c6g_skip: A takes the owner's settings row FOR UPDATE (what cloud_claim_install does), holds 2 s, RAISE. B (gated)
-#           runs cloud_blob_erase_scrub(owner, live). PASS: B answers 'skipped' in < 1 s. Mutant no_skip_locked
-#           (FOR SHARE without SKIP LOCKED, created in B's transaction): expected FAIL (B waits ~2 s, then scrubs).
-# c6g_wait: A runs the scrub with a 2 s sleep inserted right after its settings lock (created in A's transaction),
-#           RAISE. B (gated on A's sleep) moves the active computer (UPDATE ... SET active_install_id, what the claim
-#           writes), RAISE. PASS: B waited >= 1.5 s (no move can land inside a batch). Mutant read_before_lock puts the
-#           active-computer read and the sleep BEFORE the lock: expected FAIL (B does not wait; the batch then scrubs
-#           with the computer it read before the move).
+#           runs cloud_blob_erase_scrub(owner, live). PASS: waited_s < 1 and state = skipped. Mutant no_skip_locked:
+#           CAUGHT when waited_s >= 1.
+# c6g_wait: A runs the scrub with a 2 s sleep right after its settings lock (created in A's transaction), RAISE.
+#           B (gated on A's sleep) moves the active computer (what the claim writes), RAISE. PASS: waited_s >= 1.5.
+#           Mutant read_before_lock (read and sleep BEFORE the lock): CAUGHT when waited_s < 1.5.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$here" rev-parse --show-toplevel)"
 K=~/.claude/bin/kt-sql
-CASE="${1:-}"; MUT="${2:-}"
-case "$CASE" in attach|c6g_skip|c6g_wait) ;; *) sed -n '2,27p' "$0"; exit 2 ;; esac
+CASE="${1:-}"; U="${2:-}"; MUT="${3:-}"
+usage() { sed -n '2,35p' "$0"; exit 2; }
+case "$CASE" in attach|c6g_skip|c6g_wait|cleanup) ;; *) usage ;; esac
+echo "$U" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { echo "a fixture user id (lowercase uuid) is required"; usage; }
+num() { python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["n"])'; }
+residue() {
+  $K -c "SELECT (SELECT count(*) FROM auth.users WHERE id = '${U}') + (SELECT count(*) FROM public.cloud_autosave_settings WHERE user_id = '${U}')
+    + (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = '${U}') + (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = '${U}')
+    + (SELECT count(*) FROM public.cloud_deal_files WHERE owner_user_id = '${U}') + (SELECT count(*) FROM public.cloud_blobs WHERE owner_user_id = '${U}')
+    + (SELECT count(*) FROM public.cloud_blob_erase_runs WHERE counts ? 'p4263c') AS n" | num
+}
+remove_user() {
+  $K -c "DELETE FROM auth.users WHERE id = '${U}' AND email LIKE 'p4263c-%@example.test'" >/dev/null
+  left="$(residue)"
+  if [ "$left" = "0" ]; then echo "residue check: fixture user ${U} and its rows gone (0)"; return 0; fi
+  echo "RESIDUE: ${left} rows of ${U} left" >&2; return 1
+}
+if [ "$CASE" = cleanup ]; then
+  other="$($K -c "SELECT count(*) AS n FROM auth.users WHERE id = '${U}' AND email NOT LIKE 'p4263c-%@example.test'" | num)"
+  [ "$other" = "0" ] || { echo "refusing: ${U} is not a p4263c fixture user" >&2; exit 3; }
+  rc=0; remove_user || rc=1
+  $K -c "select extensions.pg_stat_statements_reset()" >/dev/null
+  exit $rc
+fi
+[ "$($K -c "SELECT count(*) AS n FROM auth.users WHERE id = '${U}'" | num)" = "0" ] || { echo "refusing: ${U} already exists" >&2; exit 3; }
 umask 077
 tmp="$(mktemp -d)"
 RUN="$(openssl rand -hex 8)"
-U="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 I1="$(python3 -c 'import uuid; print(uuid.uuid4())')"; I2="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-echo "fixture user ${U} (invented; committed for this run, deleted by the trap)"
-SETUP=0; VERDICT=FAIL
+echo "fixture user ${U} (named in the before-note; committed for this run, deleted by the trap)"
+SETUP=0; VERDICT=INCONCLUSIVE
 cleanup() {
   rc=$?; set +e; trap - EXIT INT TERM
   wait 2>/dev/null
   if [ "$SETUP" = 1 ]; then
-    $K -c "SET session_replication_role = origin; DELETE FROM auth.users WHERE id = '${U}'" >/dev/null
-    left="$($K -c "SELECT (SELECT count(*) FROM auth.users WHERE id = '${U}') + (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = '${U}') + (SELECT count(*) FROM public.cloud_blobs WHERE owner_user_id = '${U}') + (SELECT count(*) FROM public.cloud_autosave_settings WHERE user_id = '${U}') AS n" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["n"])')"
-    if [ "$left" = "0" ]; then echo "residue check: fixture user ${U} and its rows gone (0)"; else echo "RESIDUE: ${left} rows of ${U} left" >&2; rc=1; fi
+    remove_user || rc=1
     $K -c "select extensions.pg_stat_statements_reset()" >/dev/null
   fi
   rm -rf "$tmp"; echo "${CASE} ${MUT:-pristine}: ${VERDICT}"
-  [ "$VERDICT" = PASS ] || [ -n "$MUT" ] || rc=1
+  case "$VERDICT" in PASS|CAUGHT) ;; *) rc=1 ;; esac
   exit $rc
 }
 trap cleanup EXIT; trap 'exit 130' INT TERM
@@ -131,7 +159,7 @@ c6g_skip)
   { echo "SET LOCAL lock_timeout = '3s';"; [ -n "$PRE" ] && printf '%s\n' "$PRE"; echo "$GATE"; echo "$SVC";
     echo "UPDATE public.cloud_release_switches SET one_computer = true;"
     echo "DO \$b\$ DECLARE t0 timestamptz := clock_timestamp(); run uuid; r jsonb; BEGIN"
-    echo "INSERT INTO public.cloud_blob_erase_runs (mode) VALUES ('live') RETURNING id INTO run;"
+    echo "INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', '{\"p4263c\": 1}') RETURNING id INTO run;"
     echo "r := public.cloud_blob_erase_scrub(run, '${U}', false, 1000);"
     echo "RAISE EXCEPTION 'P_B %', json_build_object('waited_s', extract(epoch FROM clock_timestamp() - t0), 'answer', r); END \$b\$;"; } > "$tmp/b.sql"
   ;;
@@ -153,7 +181,7 @@ c6g_wait)
   else echo "unknown mutant $MUT"; exit 2; fi
   { echo "SET LOCAL lock_timeout = '3s';"; printf '%s\n' "$PRE"; echo "$SVC";
     echo "UPDATE public.cloud_release_switches SET one_computer = true;"
-    echo "DO \$a\$ DECLARE run uuid; r jsonb; BEGIN INSERT INTO public.cloud_blob_erase_runs (mode) VALUES ('live') RETURNING id INTO run;"
+    echo "DO \$a\$ DECLARE run uuid; r jsonb; BEGIN INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', '{\"p4263c\": 1}') RETURNING id INTO run;"
     echo "r := public.cloud_blob_erase_scrub(run, '${U}', false, 1000); RAISE EXCEPTION 'P_A %', r; END \$a\$;"; } > "$tmp/a.sql"
   { echo "SET LOCAL lock_timeout = '3s';"; echo "$GATE";
     echo "DO \$b\$ DECLARE t0 timestamptz := clock_timestamp(); BEGIN"
@@ -167,19 +195,26 @@ sleep 1
 ( $K "$tmp/b.sql" > "$tmp/b.out" 2>&1 || true ) & pb=$!
 wait $pa $pb
 echo "a: $(head -c 1500 "$tmp/a.out")"; echo "b: $(head -c 1500 "$tmp/b.out")"
-VERDICT="$(python3 - "$CASE" "$tmp/b.out" <<'PY'
+VERDICT="$(python3 - "$CASE" "$tmp/b.out" "${MUT}" <<'PY'
 import json, re, sys
-case, raw = sys.argv[1], open(sys.argv[2]).read()
-m = re.search(r'P_B (\{.*?\})', raw)
+case, raw, mut = sys.argv[1], open(sys.argv[2]).read(), sys.argv[3]
+try:  # kt-sql prints the API's JSON answer; the RAISE text sits in its "message", with its quotes escaped
+    raw = json.loads(raw.strip().split('\n')[0]).get('message', raw)
+except Exception:
+    pass
+m = re.search(r'P_B (\{.*?\})(?:\n|$)', raw) or re.search(r'P_B (\{.*\})', raw)
 if not m:
-    print('FAIL'); sys.exit()
+    print('INCONCLUSIVE'); sys.exit()
 b = json.loads(m.group(1))
 if case == 'attach':
-    ok = b['waited_s'] >= 1.5 and b['fenced'] is False
+    passing, failing = (b['waited_s'] >= 1.5 and b['fenced'] is False), b['fenced'] is True
 elif case == 'c6g_skip':
-    ok = b['waited_s'] < 1.0 and b['answer'].get('state') == 'skipped'
+    passing, failing = (b['waited_s'] < 1.0 and b['answer'].get('state') == 'skipped'), b['waited_s'] >= 1.0
 else:
-    ok = b['waited_s'] >= 1.5
-print('PASS' if ok else 'FAIL')
+    passing, failing = b['waited_s'] >= 1.5, b['waited_s'] < 1.5
+if mut:
+    print('CAUGHT' if failing else 'NOT_CAUGHT')
+else:
+    print('PASS' if passing else 'FAIL')
 PY
 )"

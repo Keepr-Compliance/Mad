@@ -12,8 +12,9 @@ control (C_*) and/or mutant (M_*) in its own subtransaction, undone at its end; 
 is an exact-string replace on one function of E1, read from the working tree: a fragment that does not match exactly
 once stops the script before anything is sent (MUTATION NOT APPLIED). In the database each mutant is checked by
 md5(prosrc) (or a catalogue probe for a DDL mutant) before its probe runs ('NOT APPLIED IN DB' otherwise). A mutant is
-caught when its probe returns FAIL; want=green marks a mutant expected to be equivalent. Zero controls and mutants run
-is a failure. Afterwards harness.py resets pg_stat_statements.
+caught only when its probe returns FAIL; a CRASH (the mutated function or the probe raised) or a PRECONDITION result
+is reported as such and makes the run not-ok. want=green marks a mutant expected to be equivalent. Zero controls and
+mutants run is a failure. Afterwards harness.py resets pg_stat_statements.
 
 Load on the shared test database: lock_timeout 3 s on every statement; no table-level lock on an existing table (E1
 creates its own two tables; the rollback drops only those); the live claim inside a control takes row locks
@@ -105,7 +106,7 @@ def ddl_mutant(mode, sql, verify, probe, want='red'):
 
 
 CONTROLS = ['p_grants()', 'p_invoke_url()', 'p_secrets(%s)' % q(E1), 'p_c6a()', 'p_c6b()', 'p_c6c()', 'p_c6d()', 'p_c6e()',
-            'p_c6f()', 'p_scrub_off()', 'p_owners()', 'p_c6g_seq()', 'p_dry_run()', 'p_e3(%s)' % q(E3),
+            'p_c6f()', 'p_note()', 'p_scrub_off()', 'p_owners()', 'p_c6g_seq()', 'p_dry_run()', 'p_e3(%s)' % q(E3),
             'p_rollback(%s, %s)' % (q(RB3), q(RB1))]
 CNAME = lambda c: c.split('(')[0]
 
@@ -118,6 +119,14 @@ def mutants():
         "     AND NOT EXISTS (SELECT 1 FROM storage.objects o\n                      WHERE o.bucket_id = 'cloud-deal-files' AND o.name = b.storage_path);   /*FINISH:object_gone*/",
         "     ;")], P('p_c6a()')))
     m.append(fn_mutant('C6a_finish_on_dry_run', F, [("    v_ids := '{}';                                                                           /*FINISH:live_only*/", "    NULL;")], P('p_c6a()')))
+    m.append(fn_mutant('Erase_lists_unfenced', C, [(
+        "       WHERE b.purge_requested_at IS NOT NULL                                                /*ERASE:fenced*/",
+        "       WHERE (b.purge_requested_at IS NOT NULL OR b.uploaded_at IS NOT NULL)")], P('p_c6c()')))
+    m.append(fn_mutant('Note_overwrites_counts', 'cloud_blob_erase_note', [(
+        "     AND NOT (r.counts ? e.k);                                                               /*NOTE:new_keys_only*/", "     ;")], P('p_note()')))
+    m.append(fn_mutant('Note_sets_any_outcome', 'cloud_blob_erase_note', [(
+        "         outcome = CASE WHEN p_outcome = 'partial' AND r.outcome = 'ok' THEN 'partial' ELSE r.outcome END   /*NOTE:outcome*/",
+        "         outcome = p_outcome")], P('p_note()')))
     m.append(fn_mutant('C6b_claim_lists_referenced', C, [(
         "         AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)     /*ERASE:unreferenced*/\n", "")], P('p_c6b()')))
     m.append(fn_mutant('C6b_finish_deletes_referenced', F, [(
@@ -229,9 +238,13 @@ def run(sel, show=False):
         elif k.startswith('M_'):
             n_mut += 1
             want = WANT.get(k, 'red')
-            red = v.startswith('FAIL') or v.startswith('CRASH')
+            # only a FAIL from the probe counts as caught; a CRASH (the mutated function or the probe errored) or a
+            # PRECONDITION result says nothing about the mutant and is a problem of the run
+            red = v.startswith('FAIL')
             ok = (red and want == 'red') or (v == 'PASS' and want == 'green')
-            print('%-6s %s want=%s -> %s' % ('CAUGHT' if (red and want == 'red') else ('EQUIV' if ok else 'MISSED'), k, want, v[:300]))
+            tag = 'CAUGHT' if (red and want == 'red') else ('EQUIV' if ok else ('CRASH' if v.startswith('CRASH') else
+                  ('PRECOND' if v.startswith('PRECONDITION') else 'MISSED')))
+            print('%-7s %s want=%s -> %s' % (tag, k, want, v[:300]))
             bad += 0 if ok else 1
     print('controls=%d mutants=%d problems=%d' % (n_ctl, n_mut, bad))
     if n_ctl + n_mut == 0:
