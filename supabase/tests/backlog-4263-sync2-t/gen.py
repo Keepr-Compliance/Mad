@@ -602,6 +602,24 @@ def report(raw):
     return out, bad == 0
 
 
+def report_fixtures(raw):
+    """(line, ok) for harness-t-fixtures.sql's output: ok only when T4263_FIXTURES_OK carries every expected count."""
+    msg = unwrap(raw)
+    i = msg.find('T4263_FIXTURES_OK ')
+    if i < 0:
+        return 'NOT OK: the fixtures did not run to the end: ' + msg[:400].replace('\n', ' '), False
+    try:
+        got, _ = json.JSONDecoder().raw_decode(msg[i + len('T4263_FIXTURES_OK '):])
+    except ValueError as e:
+        return f'NOT OK: T4263_FIXTURES_OK is not complete JSON ({e})', False
+    if not isinstance(got, dict):
+        return 'NOT OK: T4263_FIXTURES_OK is not an object', False
+    diff = {k: (got.get(k), v) for k, v in FIXTURE_EXPECT.items() if got.get(k) != v}
+    if diff:
+        return 'NOT OK: counts differ (got, expected): ' + json.dumps(diff), False
+    return 'OK: fixtures ran to the end; ' + json.dumps(got), True
+
+
 def selftest(green_ok=False):
     """report() on canned outputs in both transport shapes. With green_ok (the selftest's own control) a missed mutant
     is asserted to be ok, which must fail."""
@@ -639,6 +657,16 @@ def selftest(green_ok=False):
         found = 'S1_RESULT {' in u
         print(f"{'ok ' if found else 'BAD'} real kt-sql sample unwrapped ({len(u)} characters)")
         bad += not found
+    fwrap = lambda t: json.dumps({'message': 'Failed to run sql query: ERROR:  P0001: ' + t + '\nCONTEXT:  PL/pgSQL function inline_code_block'})
+    fcases = [('fixtures ok', fwrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT)), True),
+              ('fixtures crashed', fwrap('FIXTURE tombstone message failed: {}'), False),
+              ('fixtures count differs', fwrap('T4263_FIXTURES_OK ' + json.dumps({**FIXTURE_EXPECT, 'A_files': 1004})), False),
+              ('fixtures truncated', fwrap('T4263_FIXTURES_OK {"A_deals": 6'), False)]
+    for name, raw, want in fcases:
+        got = report_fixtures(raw)[1]
+        print(f"{'ok ' if got == want else 'BAD'} {name}: report-fixtures ok={got}, expected {want}")
+        bad += got != want
+    cases += fcases
     print(f'selftest: {len(cases)} cases, {bad} wrong')
     return 1 if bad else 0
 
@@ -650,19 +678,9 @@ if __name__ == '__main__':
         print('\n'.join(lines))
         sys.exit(0 if ok else 1)
     if a and a[0] == 'report-fixtures':
-        msg = unwrap(open(a[1], encoding='utf-8').read())
-        i = msg.find('T4263_FIXTURES_OK ')
-        if i < 0:
-            print('NOT OK: the fixtures did not run to the end: ' + msg[:400].replace('\n', ' '))
-            sys.exit(1)
-        try:
-            got, _ = json.JSONDecoder().raw_decode(msg[i + len('T4263_FIXTURES_OK '):])
-        except ValueError as e:
-            print(f'NOT OK: T4263_FIXTURES_OK is not complete JSON ({e})')
-            sys.exit(1)
-        diff = {k: (got.get(k), v) for k, v in FIXTURE_EXPECT.items() if got.get(k) != v}
-        print('OK: fixtures ran to the end; ' + json.dumps(got) if not diff else 'NOT OK: counts differ (got, expected): ' + json.dumps(diff))
-        sys.exit(0 if not diff else 1)
+        line, ok = report_fixtures(open(a[1], encoding='utf-8').read())
+        print(line)
+        sys.exit(0 if ok else 1)
     if a and a[0] == 'selftest':
         sys.exit(selftest(green_ok=len(a) > 1 and a[1] == '--control-green-ok'))
     if a and a[0] == 'check':
