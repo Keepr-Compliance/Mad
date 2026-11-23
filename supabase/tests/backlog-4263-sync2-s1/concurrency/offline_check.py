@@ -38,7 +38,14 @@ STUB = r'''import json, os, re, sys
 out = os.environ['STUB_OUT']
 sql = sys.argv[2] if sys.argv[1] == '-c' else open(sys.argv[1]).read()
 n = len(os.listdir(out)) + 1
-open(os.path.join(out, '%03d.sql' % n), 'w').write(sql)
+while True:  # the two sessions run at once: claim a sequence number atomically, never overwrite
+    try:
+        fd = os.open(os.path.join(out, '%03d.sql' % n), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        break
+    except FileExistsError:
+        n += 1
+with os.fdopen(fd, 'w') as fh:
+    fh.write(sql)
 cfg = json.loads(os.environ.get('STUB_CFG', '{}'))
 Z = '00000000-0000-0000-0000-000000000000'
 def p(x): print(json.dumps(x))
@@ -120,7 +127,7 @@ for case, mut in CASES:
     check(f'bykey {label}: no DELETE keyed on an email pattern; teardown names the user id',
           dels and not any(re.search(r"DELETE[^;]*LIKE\s+'p4263", t) for t in dels) and all(USER in t for t in dels))
     tags = [re.search(r'/\*t:(\w+)\*/', t).group(1) if re.search(r'/\*t:(\w+)\*/', t) else '' for t in texts]
-    ok = 'teardown' in tags and 'fkcount' in tags[:tags.index('teardown')] and 'fkcount' in tags[tags.index('teardown'):]
+    ok = 'teardown' in tags and tags[tags.index('teardown') - 1] == 'fkcount' and 'fkcount' in tags[tags.index('teardown'):]
     check(f'counts {label}: per-table counts before and after the teardown', ok)
 
 for what, cfg in (('fixture id', {'by_id': 1}), ('fixture address', {'by_pattern': 1}), ('mutant left', {'mutants': 1})):

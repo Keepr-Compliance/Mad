@@ -39,7 +39,14 @@ STUB = r'''import json, os, re, sys
 out = os.environ['STUB_OUT']
 sql = sys.argv[2] if sys.argv[1] == '-c' else open(sys.argv[1]).read()
 n = len(os.listdir(out)) + 1
-open(os.path.join(out, '%03d.sql' % n), 'w').write(sql)
+while True:  # the two sessions run at once: claim a sequence number atomically, never overwrite
+    try:
+        fd = os.open(os.path.join(out, '%03d.sql' % n), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        break
+    except FileExistsError:
+        n += 1
+with os.fdopen(fd, 'w') as fh:
+    fh.write(sql)
 cfg = json.loads(os.environ.get('STUB_CFG', '{}'))
 Z = '00000000-0000-0000-0000-000000000000'
 def p(x): print(json.dumps(x))
@@ -131,7 +138,7 @@ for case, mut in CASES:
     check(f'bykey {label}: the delete names the user id and this run\'s exact email',
           len(dels) == 1 and USER in dels[0] and f"email = 'p4263c-{run_id}@example.test'" in dels[0] and 'LIKE' not in dels[0])
     tags = [re.search(r'/\*t:(\w+)\*/', t).group(1) if re.search(r'/\*t:(\w+)\*/', t) else '' for t in texts]
-    ok = 'delete' in tags and 'fkcount' in tags[:tags.index('delete')] and 'fkcount' in tags[tags.index('delete'):]
+    ok = 'delete' in tags and tags[tags.index('delete') - 1] == 'fkcount' and 'fkcount' in tags[tags.index('delete'):]
     check(f'counts {label}: per-table counts before and after the delete', ok)
 
 for what, cfg in (('fixture id', {'by_id': 1}), ('fixture address', {'by_pattern': 1}), ('copy left', {'mutants': 1}),
