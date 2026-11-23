@@ -5,9 +5,17 @@
 -- that is not the test database) -> applied check -> helpers and fixtures -> 29 controls, each in a subtransaction
 -- that is undone -> 20 mutants, each proven installed before every control runs again under it -> the rollback file and
 -- its post-check -> RAISE 'S1_RESULT <json>'. Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()".
--- It takes no table lock on an existing table except: row locks on the fixture rows and on the one switches row (held
--- until the final RAISE), and the rollback file's ACCESS EXCLUSIVE on cloud_autosave_settings and the three new tables,
--- taken in the last step only, right before the RAISE. lock_timeout 3s.
+-- Locks (every one is released by the final RAISE; lock_timeout 3s throughout):
+--   row locks on the rows it inserts or changes: the fixture users (auth.users, public.users, organizations,
+--     organization_members, organization_plans, member_addons, cloud_* rows of those users) and the ONE row of
+--     cloud_release_switches (its UPDATE makes the coordinator's switch flip wait until this call ends);
+--   the mutants' CREATE OR REPLACE FUNCTION calls lock those pg_proc rows (only another replace of the same function
+--     waits; callers keep the committed body);
+--   last step only, right before the RAISE, the rollback file: ACCESS EXCLUSIVE on cloud_autosave_settings (DROP COLUMN),
+--     cloud_release_switches, cloud_computer_moves and cloud_computer_move_notices (DROP TABLE), and, NOT MEASURED, very
+--     likely ACCESS EXCLUSIVE on auth.users as well (dropping the two tables removes their foreign-key triggers on
+--     auth.users); every reader and writer of auth.users waits for it (up to 3 s for the lock, then milliseconds);
+--     ROW EXCLUSIVE plus a row lock on supabase_migrations.schema_migrations (the ledger row's DELETE).
 DO $guard4263s1$
 DECLARE n bigint := 0;
 BEGIN
@@ -6002,6 +6010,15 @@ $mu18_0$;
 END
 $controls4263s1$;
 -- ================================================================ the rollback file, verbatim
+-- Refuse outright unless this file runs as ONE transaction: the temp tables are ON COMMIT DROP, so under a transport
+-- that commits each statement they are already gone here and the rollback must not run.
+DO $one4263s1$
+BEGIN
+  IF to_regclass('pg_temp.s1_out') IS NULL THEN
+    RAISE EXCEPTION 'harness-s1.sql must run as one transaction (pg_temp.s1_out is gone); the rollback step did not run';
+  END IF;
+END
+$one4263s1$;
 DO $rb4263s1$
 BEGIN
   EXECUTE $rbq$
@@ -6013,7 +6030,11 @@ BEGIN
 -- cloud_computer_moves and cloud_release_switches (their rows go with them; counts in the NOTICE), and the columns
 -- cloud_autosave_settings.active_install_id / active_since; removes the ledger row. One transaction; RAISEs (nothing
 -- changed) unless the post-check holds. Run it before any rollback of 20261118120000 or 20261118110000.
--- Locks: DROP COLUMN and DROP TABLE take ACCESS EXCLUSIVE until commit; lock_timeout 3s.
+-- Locks (held until commit; lock_timeout 3s, so a lock not granted in 3 seconds fails the whole file and nothing changes):
+--   ACCESS EXCLUSIVE on cloud_autosave_settings (DROP COLUMN), cloud_release_switches, cloud_computer_moves and
+--   cloud_computer_move_notices (DROP TABLE); NOT MEASURED, very likely ACCESS EXCLUSIVE on auth.users too (dropping the
+--   two tables removes their foreign-key triggers on auth.users), so every auth.users reader and writer waits until
+--   commit; the replaced functions' pg_proc rows; ROW EXCLUSIVE plus a row lock on supabase_migrations.schema_migrations.
 DO $prerb4263s1$
 DECLARE r record; v text;
 BEGIN

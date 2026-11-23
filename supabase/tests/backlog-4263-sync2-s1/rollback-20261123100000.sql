@@ -6,7 +6,11 @@
 -- cloud_computer_moves and cloud_release_switches (their rows go with them; counts in the NOTICE), and the columns
 -- cloud_autosave_settings.active_install_id / active_since; removes the ledger row. One transaction; RAISEs (nothing
 -- changed) unless the post-check holds. Run it before any rollback of 20261118120000 or 20261118110000.
--- Locks: DROP COLUMN and DROP TABLE take ACCESS EXCLUSIVE until commit; lock_timeout 3s.
+-- Locks (held until commit; lock_timeout 3s, so a lock not granted in 3 seconds fails the whole file and nothing changes):
+--   ACCESS EXCLUSIVE on cloud_autosave_settings (DROP COLUMN), cloud_release_switches, cloud_computer_moves and
+--   cloud_computer_move_notices (DROP TABLE); NOT MEASURED, very likely ACCESS EXCLUSIVE on auth.users too (dropping the
+--   two tables removes their foreign-key triggers on auth.users), so every auth.users reader and writer waits until
+--   commit; the replaced functions' pg_proc rows; ROW EXCLUSIVE plus a row lock on supabase_migrations.schema_migrations.
 DO $prerb4263s1$
 DECLARE r record; v text;
 BEGIN

@@ -430,9 +430,42 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect(HARNESS).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{11}[1-9a-f]/i);
   });
 
-  it.each(['cloud_claim_install', 'cloud_confirm_blob', 'set_my_cloud_autosave'])('two-session pristine file for %s is the S1 statement', (name) => {
-    const f = read(join(DIR, `concurrency/pristine-${name}.sql`));
-    expect(f).toContain(statement(S1, name));
+  const MUTANTS: Array<[string, string, string]> = [
+    ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
+    ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],
+    ['mutant-off-no-active-check.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
+    ['mutant-deal-gate-before-lock.sql', 'cloud_upsert_deal', 'uuid, jsonb'],
+  ];
+  it.each(MUTANTS)('two-session %s creates only %s_m4263, never replaces the live function, guard first', (file, name, sig) => {
+    const f = read(join(DIR, 'concurrency', file));
+    const code = f.replace(/^--[^\n]*\n/gm, '');
+    expect(code.startsWith('DO $guard4263s1cc$')).toBe(true);
+    expect(f).not.toMatch(new RegExp(`FUNCTION public\\.${name}\\(`));
+    expect([...f.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(/gm)].map((m) => m[1])).toEqual([`${name}_m4263`]);
+    expect(f).not.toMatch(/CREATE OR REPLACE FUNCTION/);
+    expect(f).toContain(`REVOKE ALL ON FUNCTION public.${name}_m4263(${sig}) FROM PUBLIC, anon, authenticated, service_role;`);
+    expect([...f.matchAll(/^GRANT [^\n]*$/gm)].map((m) => m[0])).toEqual([`GRANT EXECUTE ON FUNCTION public.${name}_m4263(${sig}) TO authenticated;`]);
+    expect(read(join(DIR, 'concurrency/drop-mutants.sql'))).toContain(`DROP FUNCTION IF EXISTS public.${name}_m4263(${sig});`);
+    expect(body(f.replace(`public.${name}_m4263(`, `public.${name}(`), name)).not.toBe(body(S1, name));
+  });
+
+  it('two-session session files call functions only through placeholders, and no pristine replacement file remains', () => {
+    const cc = join(DIR, 'concurrency');
+    const files = readdirSync(cc);
+    expect(files.filter((f) => f.startsWith('pristine-'))).toEqual([]);
+    for (const f of files.filter((x) => /^(r\d-|claim-)/.test(x))) {
+      expect(`${f}: ${/public\.(cloud_claim_install|cloud_confirm_blob|set_my_cloud_autosave|cloud_upsert_deal)\(/.test(read(join(cc, f)))}`).toBe(`${f}: false`);
+    }
+    const run = read(join(cc, 'run.sh'));
+    expect(run).toContain('No claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE');
+    expect(run).toContain('refusing to start');
+    expect(read(join(cc, 'setup.sql')).length).toBeGreaterThan(0);
+  });
+
+  it('harness refuses its rollback step unless it runs as one transaction', () => {
+    const i = HARNESS.indexOf("IF to_regclass('pg_temp.s1_out') IS NULL THEN");
+    expect(i).toBeGreaterThan(0);
+    expect(i).toBeLessThan(HARNESS.indexOf('DO $rb4263s1$'));
   });
 });
 
