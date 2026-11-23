@@ -26,19 +26,45 @@ Conditions (senior review of PR #3632):
    `table cloud_autosave_settings grants service_role` (open finding F-12b) plus any CHECK / predicate text that differs
    from the predicted text (report only; see `../backlog-4263-prod/README.md`).
 2. `~/.claude/bin/kt-sql harness-s1.sql > out.txt` (one call, ends in `RAISE 'S1_RESULT …'`, nothing persists), then
-   `python3 gen.py report out.txt`. Expected: every control `PASS`, every mutant `RED` with its primary control reading
-   `FAIL:` (an `ERROR` does not count), `rollback: ok`. Then
+   `python3 gen.py report out.txt` (reads kt-sql's JSON error body with its `kt-sql: HTTP 400` line, or plain text; exit 0
+   only when the result below holds). Expected: all **29** controls `PASS`, all **22** mutants `RED` with their primary
+   control reading `FAIL:` (an `ERROR` does not count), `rollback: ok`, last line `controls 29 mutants 22: OK`. No mutant
+   is listed as equivalent. Offline self-test of the report reader: `python3 gen.py selftest` (canned outputs in both
+   shapes; no database). Then
    `~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()"`. At most 3 full runs per batch.
    The harness refuses outright, before its rollback step, if it is not running as one transaction.
 3. Two-session controls (`concurrency/run.sh`, below): `R1` and `R2` any time after step 1; `R3`–`R6` only after
    `one_computer` is on (the coordinator's flip, after P2 merges).
+
+## The existing-rows rule in `c2b_backfill`
+
+The rule (`/*BACKFILL:latest*/`): per account, `ORDER BY max(last_synced_at) DESC, source_install_id` over live deals,
+first row wins, so the install with the most recent save becomes active and a tie on that save goes to the lowest
+install id. Sub-cases: `latest` (bf_1), `tie_lowest` (bf_2), `removed_ignored` (bf_3), `disabled_null` (bf_4),
+`no_deal_null` (bf_5), `set_kept` (bf_6), `max_not_min` (bf_7). bf_7 gives one install two deals (36 h and 1 h old)
+against one deal 24 h old and one 48 h old, so greatest max and greatest min pick different installs: it is the
+sub-case that turns `M_backfill_least_recent` red (bf_1 to bf_6 have one deal per install, where max = min). bf_2's two
+installs share one save time, so only the id term decides: `M_backfill_tie_highest` (`source_install_id DESC`) picks
+the higher id and turns `tie_lowest` red. No mutant targets the `removed_at` / scope conditions; those sub-cases are
+checked only by the controls themselves.
+
+## Writes the c1 controls can see
+
+- `c1_push` sends one `create_checklist` op on the caller's own deal; without the gate the inactive call adds a
+  checklist, a todo op and a history row, all inside `pg_temp.fp()`. `M_push_gate_after_write` (the push answers
+  `computer_not_active` only after applying its ops) is caught by that fingerprint alone.
+- `c1_confirm` first inserts the storage object of blob bA (right size, no file behind it, undone with the case), so
+  without the gate the inactive confirm sets bA's `uploaded_at`, which `pg_temp.fp()` covers.
+- `c2_same` sets `active_since` to 2026-01-01 before the repeated claim, so "unchanged" can fail inside the one
+  transaction (`now()` does not move within it).
 
 ## Locks and time
 
 - **Migration** (its header): SHARE ROW EXCLUSIVE on `auth.users` from the new tables' foreign keys, held to commit;
   ACCESS EXCLUSIVE on `cloud_autosave_settings` for the ADD COLUMN (placed last); one row lock per settings row the
   existing-rows rule writes. `lock_timeout` 3 s; a lock not granted in 3 s fails the whole migration.
-- **Harness**: row locks on its own fixture rows and on the one `cloud_release_switches` row until its final `RAISE`
+- **Harness**: row locks on its own fixture rows (including one `storage.objects` row inside `c1_confirm`) and on the
+  one `cloud_release_switches` row until its final `RAISE`
   (the coordinator's switch flip waits for it); the mutants lock their pg_proc rows. Last step only, right before the
   `RAISE`, the rollback file: ACCESS EXCLUSIVE on `cloud_autosave_settings`, `cloud_release_switches`,
   `cloud_computer_moves`, `cloud_computer_move_notices`, and — **not measured** — very likely ACCESS EXCLUSIVE on
@@ -105,7 +131,7 @@ run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and a
 
 | File | What it is |
 |---|---|
-| `gen.py` | Generator, `check`, `report` |
+| `gen.py` | Generator, `check`, `report`, `selftest` |
 | `apply-20261123100000.sql` | The migration text unchanged + its ledger row, one transaction (checked by `broker-portal/__tests__/migrations/apply-wrappers-4263.test.ts`) |
 | `rollback-20261123100000.sql` | Undoes 20261123100000 (pre-check, bodies back, objects dropped, ledger row removed, post-check) |
 | `harness-s1.sql` | Single-session controls and their mutants; ends in a rollback |
