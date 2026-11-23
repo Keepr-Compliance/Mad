@@ -206,7 +206,7 @@ $post4263tr$;
 # ------------------------------------------------------------------------------------------------ mutants
 CONTROLS = ['c_c9a_permission', 'c_c9a_access', 'c_c9b_parts_big', 'c_c9b_list_big', 'c_c9b_sweep', 'c_c9c_log_rows', 'c_c9d_filters',
             'c_c9e_entitlement', 'c_c9f_log_fails', 'c_c9g_no_read_no_row', 'c_c9h_inactive', 'c_p9a_log_survives', 'c_log_view',
-            'c_marks_args', 'c_keyset_null', 'c_prune', 'c_catalogue']
+            'c_marks_args', 'c_keyset_null', 'c_prune', 'c_catalogue', 'c_strip', 'c_people', 'c_prune_loop']
 for c in CONTROLS:
     assert LIB['controls'].count(f'CREATE FUNCTION pg_temp.{c}()') == 1, c
 assert len(re.findall(r'^CREATE FUNCTION pg_temp\.c_', LIB['controls'], re.M)) == len(CONTROLS)
@@ -241,7 +241,13 @@ FN_MUTANTS = [
     ('access_switch_ignored', 'mcp_message_access', [("AND coalesce((SELECT w.messages_upload FROM public.cloud_release_switches w WHERE w.id), false));   /*ACCESS:switch*/", ");")], ['c_c9a_access'], 'red'),
     ('part_cut_by_characters', '_mcp_r_get_message', [("v_w := octet_length(to_jsonb(v_b)::text) - 2;", "v_w := char_length(v_b);")], ['c_c9b_sweep', 'c_c9b_parts_big'], 'red'),
     ('part_budget_ignores_header', '_mcp_r_get_message', [("v_budget := least(60000, 86000 - octet_length(v_frame::text));", "v_budget := 88000;")], ['c_c9b_parts_big'], 'red'),
-    ('cap_people_to_uncapped', '_mcp_msg_people', [("FROM s WHERE s.r = 'to' AND s.n <= 20)", "FROM s WHERE s.r = 'to')")], ['c_c9b_parts_big', 'c_c9b_list_big'], 'red'),
+    ('cap_people_to_uncapped', '_mcp_msg_people', [("WHERE s.n <= 20 /*CAP:people*/ AND", "WHERE")], ['c_c9b_parts_big', 'c_c9b_list_big'], 'red'),
+    ('people_extra_from_not_counted', '_mcp_msg_people', [("'more', (SELECT count(*) FROM s) - (SELECT count(*) FROM v))", "'more', (SELECT count(*) FROM s WHERE s.r <> 'from_more') - (SELECT count(*) FROM v))")], ['c_people'], 'red'),
+    ('people_cc_not_counted_in_list', '_mcp_msg_people', [("'more', (SELECT count(*) FROM s) - (SELECT count(*) FROM v))", "'more', (SELECT count(*) FROM s WHERE s.r <> 'cc' OR p_with_cc IS TRUE) - (SELECT count(*) FROM v))")], ['c_people', 'c_c9b_list_big'], 'red'),
+    ('body_not_stripped', '_mcp_r_get_message', [("v_text := public._mcp_strip(m.body_text);", "v_text := m.body_text;")], ['c_strip', 'c_c9b_parts_big'], 'red'),
+    ('hide_needs_active_list', '_mcp_r_list_deal_messages', [("v_hide := (v_st -> 'switches' -> 'one_computer') = to_jsonb(true);", "v_hide := (v_st -> 'switches' -> 'one_computer') = to_jsonb(true) AND jsonb_typeof(v_st -> 'active_install_id') = 'string';")], ['c_c9h_inactive'], 'red'),
+    ('hide_needs_active_get', '_mcp_r_get_message', [("v_hide := (v_st -> 'switches' -> 'one_computer') = to_jsonb(true);", "v_hide := (v_st -> 'switches' -> 'one_computer') = to_jsonb(true) AND jsonb_typeof(v_st -> 'active_install_id') = 'string';")], ['c_c9h_inactive'], 'red'),
+    ('prune_single_batch', '_mcp_prune_message_reads', [("EXIT WHEN v_b < 100000 OR", "EXIT WHEN true OR")], ['c_prune_loop'], 'red'),
     ('cap_files_list_uncapped', '_mcp_r_list_deal_messages', [("ORDER BY f.n) FILTER (WHERE f.n <= 20), '[]'::jsonb) AS files,", "ORDER BY f.n), '[]'::jsonb) AS files,")], ['c_c9b_list_big'], 'red'),
     ('cap_files_get_uncapped', '_mcp_r_get_message', [("ORDER BY f.n) FILTER (WHERE f.n <= 20), '[]'::jsonb),   /*CAP:files:get*/", "ORDER BY f.n), '[]'::jsonb),")], ['c_c9b_parts_big'], 'red'),
     ('cap_subject_list_uncapped', '_mcp_r_list_deal_messages', [("'subject', public._mcp_clean(left(m.subject, 2000), 300),", "'subject', m.subject,")], ['c_c9b_list_big'], 'red'),

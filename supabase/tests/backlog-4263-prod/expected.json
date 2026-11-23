@@ -55,7 +55,7 @@
     },
     "20261123140000": {
       "file": "supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql",
-      "file_md5": "3759b61c298a7233b71d94dd0af8d9bd"
+      "file_md5": "e190a0d70eb15ae2ac040f7c95aa740d"
     }
   },
   "labels": {
@@ -17738,7 +17738,7 @@
         "function _mcp_msg_people(jsonb,boolean) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "24a1f1504541371c0e2635983df7c69c"
+          "want": "9291e4ceae08ce1ffde941923e4671ee"
         },
         "function _mcp_msg_people(jsonb,boolean) owner": {
           "label": "MUST HOLD",
@@ -17823,7 +17823,7 @@
         "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "6606924cab924acb101df88e99f75aab"
+          "want": "edc8c35f58ec8c3e01d786083a107f61"
         },
         "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) owner": {
           "label": "MUST HOLD",
@@ -17908,7 +17908,7 @@
         "function _mcp_r_get_message(uuid,integer) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "61de437a47fe819c569c363be6ce010b"
+          "want": "c0b20b62a1b35b0661eebe9c19d717ba"
         },
         "function _mcp_r_get_message(uuid,integer) owner": {
           "label": "MUST HOLD",
@@ -18333,7 +18333,7 @@
         "function _mcp_prune_message_reads() md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "ff949d09e708b9a67062c2f4ac1ebbb4"
+          "want": "5fcc039167ee947d0f060adb39c98e8c"
         },
         "function _mcp_prune_message_reads() owner": {
           "label": "MUST HOLD",
@@ -25331,7 +25331,7 @@
         "function _mcp_msg_people(jsonb,boolean) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "24a1f1504541371c0e2635983df7c69c"
+          "want": "9291e4ceae08ce1ffde941923e4671ee"
         },
         "function _mcp_msg_people(jsonb,boolean) owner": {
           "label": "MUST HOLD",
@@ -25416,7 +25416,7 @@
         "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "6606924cab924acb101df88e99f75aab"
+          "want": "edc8c35f58ec8c3e01d786083a107f61"
         },
         "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) owner": {
           "label": "MUST HOLD",
@@ -25501,7 +25501,7 @@
         "function _mcp_r_get_message(uuid,integer) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "61de437a47fe819c569c363be6ce010b"
+          "want": "c0b20b62a1b35b0661eebe9c19d717ba"
         },
         "function _mcp_r_get_message(uuid,integer) owner": {
           "label": "MUST HOLD",
@@ -25926,7 +25926,7 @@
         "function _mcp_prune_message_reads() md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "ff949d09e708b9a67062c2f4ac1ebbb4"
+          "want": "5fcc039167ee947d0f060adb39c98e8c"
         },
         "function _mcp_prune_message_reads() owner": {
           "label": "MUST HOLD",

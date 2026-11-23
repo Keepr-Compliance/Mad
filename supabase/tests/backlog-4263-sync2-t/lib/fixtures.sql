@@ -81,7 +81,7 @@ BEGIN
   -- each, 500 files with 300-character names and 200-character types; m_big1's body is 1,000,000 characters of quotes,
   -- newlines, control characters, four-byte and two-byte characters
   big := left(repeat('a"' || E'\n' || chr(1) || chr(128512) || chr(233), 166667), 1000000);
-  INSERT INTO pg_temp.t_txt VALUES ('big1_md5', md5(big));
+  INSERT INTO pg_temp.t_txt VALUES ('big1_md5', md5(public._mcp_strip(big)));
   who := jsonb_build_object('from', repeat(chr(128512), 400),
                             'to', (SELECT jsonb_agg(repeat(chr(128512), 399) || g) FROM generate_series(1, 1000) g),
                             'cc', (SELECT jsonb_agg(repeat(chr(128512), 399) || g) FROM generate_series(1, 10) g));
@@ -98,9 +98,17 @@ BEGIN
 
   -- body sizes at a part boundary (budget 60000 bytes for these small answers): 1 part, then 2 parts
   FOR sweep IN SELECT * FROM (VALUES ('s_a1', 'a', 60000), ('s_a2', 'a', 60001), ('s_q1', '"', 30000), ('s_q2', '"', 30001),
-                                     ('s_e1', chr(128512), 15000), ('s_e2', chr(128512), 15001), ('s_c1', chr(1), 10000), ('s_c2', chr(1), 10001)) x(k, ch, n) LOOP
+                                     ('s_e1', chr(128512), 15000), ('s_e2', chr(128512), 15001), ('s_t1', chr(9), 30000), ('s_t2', chr(9), 30001)) x(k, ch, n) LOOP
     PERFORM pg_temp.msgs('A', 'IA', 'dSw', jsonb_build_array(pg_temp.mrow(sweep.k, 'email', NULL, repeat(sweep.ch, sweep.n), NULL, '2026-03-01T10:00:00.000Z', NULL, NULL, false, 't')));
   END LOOP;
+
+  -- a body with invisible characters (tag characters U+E0041..U+E005A and U+202E), and a message whose 'from' is an
+  -- array of three addresses
+  PERFORM pg_temp.msgs('A', 'IA', 'dSw', jsonb_build_array(
+    pg_temp.mrow('m_inv', 'email', 'Invisible', 'Visible start ' || (SELECT string_agg(chr(c), '' ORDER BY c) FROM generate_series(917569, 917594) c) || chr(8238) || ' visible end',
+                 NULL, '2026-03-02T10:00:00.000Z', NULL, NULL, false, 't'),
+    pg_temp.mrow('m_from', 'email', 'Many senders', 'x', '{"from":["a@example.test","b@example.test","c@example.test"],"to":["d@example.test"],"cc":["e@example.test"]}',
+                 '2026-03-03T10:00:00.000Z', NULL, NULL, false, 't')));
 
   -- MCP: switched on, the fixture portal secret, connections K1 (A, approval page 1), K2 (A, page 2), KB2 (B, page 2)
   UPDATE public.mcp_settings SET portal_secret_prev_sha256 = sha256(convert_to(pg_temp.secret(), 'UTF8')), enabled = true WHERE id;

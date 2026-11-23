@@ -100,7 +100,7 @@ describe('BACKLOG-4263 P9 migration file', () => {
     expect(SQL.startsWith('DO $pre4263t$')).toBe(true);
     const pre = SQL.slice(0, SQL.indexOf('$pre4263t$;'));
     for (const t of ["'active_install_id'", "'one_computer', 'messages_upload'", "'link_state'", "'hidden_from_export'", "'cloud_message_id'",
-      "'''switches'''", "'''active_install_id'''", "'''messages_upload'''", "'''entitled'''", "%''refused''%", "extname = 'pg_cron'",
+      "'public._mcp_strip(text)'", "'''switches'''", "'''active_install_id'''", "'''messages_upload'''", "'''entitled'''", "%''refused''%", "extname = 'pg_cron'",
       'RAISE EXCEPTION']) {
       expect(`${t} ${pre.includes(t)}`).toBe(`${t} true`);
     }
@@ -190,7 +190,8 @@ describe('BACKLOG-4263 P9 migration file', () => {
     for (const r of READERS) {
       const b = fn(r).body;
       for (const t of ["(v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)", "(v_st -> 'switches' -> 'messages_upload') IS DISTINCT FROM to_jsonb(true)",
-        "(v_st -> 'switches' -> 'one_computer') = to_jsonb(true) AND jsonb_typeof(v_st -> 'active_install_id') = 'string'",
+        "v_hide := (v_st -> 'switches' -> 'one_computer') = to_jsonb(true);",
+        "v_active := CASE WHEN v_hide AND jsonb_typeof(v_st -> 'active_install_id') = 'string' THEN (v_st ->> 'active_install_id')::uuid END;",
         "x.link_state IN ('linked', 'needs_review')", 'x.removed_at IS NULL', 'd.is_confirmed', 'd.removed_at IS NULL',
         'y.removed_at IS NULL', 'y.cloud_message_id = m.id AND y.cloud_deal_id = m.cloud_deal_id']) {
         expect(`${r}: ${t} ${b.includes(t)}`).toBe(`${r}: ${t} true`);
@@ -212,16 +213,21 @@ describe('BACKLOG-4263 P9 migration file', () => {
       expect(b).toContain('FILTER (WHERE f.n <= 20)');
       expect(b).toContain('greatest(count(*) - 20, 0)');
     }
-    expect(p.match(/s\.n <= 20\)/g)).toHaveLength(3);
-    expect(p).toContain("public._mcp_txt(left(s.x #>> '{}', 2000), 320)");
-    expect(p).toContain("'more', greatest((SELECT count(*) FROM s) - 20, 0)");
+    expect(p).toContain("WHERE s.n <= 20 /*CAP:people*/ AND (s.r IN ('from', 'to') OR (s.r = 'cc' AND p_with_cc IS TRUE))");
+    expect(p).toContain("public._mcp_txt(left(v.x #>> '{}', 2000), 320)");
+    expect(p).toContain("'more', (SELECT count(*) FROM s) - (SELECT count(*) FROM v))");
+    expect(p).toContain("CASE WHEN f.k = 1 THEN 'from' ELSE 'from_more' END");
     expect(l).toContain("'thread_key', public._mcp_txt(left(m.thread_key, 2000), 200),");
     expect(l).toContain('s.rk <= p_limit /*BOUND:rows*/ AND (s.cum <= 80000 OR s.rk = 1) /*BOUND:bytes*/');
     expect(g).toContain('v_budget := least(60000, 86000 - octet_length(v_frame::text));');
     expect(g).toContain('v_w := octet_length(to_jsonb(v_b)::text) - 2;');
-    expect(g).toContain("regexp_matches(m.body_text, '.{1,250}', 'g')");
-    expect(g).toContain("IF array_to_string(v_blocks, '') IS DISTINCT FROM m.body_text THEN");
-    expect(g).not.toMatch(/_mcp_(clean|txt|strip|mask)\(m\.body_text/);
+    expect(g).toContain('v_text := public._mcp_strip(m.body_text);');
+    expect(g.indexOf('v_text := public._mcp_strip(m.body_text);')).toBeLessThan(g.indexOf('v_frame := jsonb_build_object('));
+    expect(g).toContain("regexp_matches(v_text, '.{1,250}', 'g')");
+    expect(g).toContain("IF array_to_string(v_blocks, '') IS DISTINCT FROM v_text THEN");
+    expect(g).toContain("'{message,body_text}', CASE WHEN v_text IS NULL THEN 'null'::jsonb ELSE to_jsonb(v_body) END");
+    expect(code(g).match(/m\.body_text/g)).toHaveLength(1);
+    expect(g).not.toContain('_mcp_mask(');
   });
 
   it('the read log table: ids and times only, no foreign key but to auth.users, RLS on, no client privilege', () => {
@@ -249,6 +255,8 @@ describe('BACKLOG-4263 P9 migration file', () => {
 
   it('retention: the prune deletes rows older than one year, daily, and no API role can call it', () => {
     expect(fn('_mcp_prune_message_reads').body).toContain("x.read_at < now() - interval '1 year'");
+    expect(fn('_mcp_prune_message_reads').body).toContain("EXIT WHEN v_b < 100000 OR v_i >= 50 OR clock_timestamp() - v_t0 > interval '5 minutes';");
+    expect(depth(fn('_mcp_prune_message_reads').body, fn('_mcp_prune_message_reads').body.indexOf('DELETE FROM'))).toBe(1);
     expect(SQL).toContain("PERFORM cron.schedule('mcp-message-reads-prune', '41 3 * * *', 'SELECT public._mcp_prune_message_reads()');");
     expect(SQL).not.toMatch(/GRANT EXECUTE ON FUNCTION public\._mcp_prune_message_reads/);
   });

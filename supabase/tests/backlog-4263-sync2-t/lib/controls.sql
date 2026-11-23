@@ -61,20 +61,20 @@ BEGIN
   p := pg_temp.lst('K2', pg_temp.s('dBig'), NULL, NULL, 50, NULL);
   row1 := p -> 'result' -> 'messages' -> 0;
   RETURN pg_temp.pass(NOT w ? 'error' AND pg_temp.sorted(w -> 'ids') = pg_temp.ids('m_big1', 'm_big2') AND (w ->> 'pages')::int = 2
-                      AND (w ->> 'max_bytes')::int <= 90000 AND (row1 ->> 'participants_more')::int = 981
+                      AND (w ->> 'max_bytes')::int <= 90000 AND (row1 ->> 'participants_more')::int = 991 AND NOT row1 ? 'cc'
                       AND (row1 ->> 'files_more')::int = 480 AND char_length(row1 ->> 'subject') <= 300
                       AND char_length(row1 ->> 'thread_key') <= 200,
     jsonb_build_object('walk', w, 'row1', left(row1::text, 300))::text);
 END $c$;
 
--- C-9b: body sizes at a part boundary, for 1-, 2-, 4- and 6-byte encoded characters (budget 60000)
+-- C-9b: body sizes at a part boundary, for 1-, 2- (quote, tab) and 4-byte encoded characters (budget 60000)
 CREATE FUNCTION pg_temp.c_c9b_sweep() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE x record; r jsonb; bad jsonb := '[]';
 BEGIN
-  FOR x IN SELECT * FROM (VALUES ('s_a1', 1), ('s_a2', 2), ('s_q1', 1), ('s_q2', 2), ('s_e1', 1), ('s_e2', 2), ('s_c1', 1), ('s_c2', 2)) v(k, want) LOOP
+  FOR x IN SELECT * FROM (VALUES ('s_a1', 1), ('s_a2', 2), ('s_q1', 1), ('s_q2', 2), ('s_e1', 1), ('s_e2', 2), ('s_t1', 1), ('s_t2', 2)) v(k, want) LOOP
     r := pg_temp.all_parts('K2', pg_temp.s(x.k));
     IF r ? 'error' OR (r ->> 'parts')::int IS DISTINCT FROM x.want OR r -> 'over_cap' <> '[]' OR (r ->> 'max_bytes')::int > 90000
-       OR r ->> 'body_md5' IS DISTINCT FROM (SELECT md5(body_text) FROM public.cloud_deal_messages WHERE id = pg_temp.f(x.k))
+       OR r ->> 'body_md5' IS DISTINCT FROM (SELECT md5(public._mcp_strip(body_text)) FROM public.cloud_deal_messages WHERE id = pg_temp.f(x.k))
        OR r -> 'after_last' <> '{"ok":false,"error":"not_found"}' THEN
       bad := bad || jsonb_build_object(x.k, r - 'after_last');
     END IF;
@@ -209,6 +209,13 @@ BEGIN
                                'a_get', pg_temp.getm('K2', pg_temp.s('m_lin'), 1) = nf,
                                'b_list', (SELECT jsonb_agg(e -> 'message_id') FROM jsonb_array_elements(pg_temp.lst('K2', pg_temp.s('dB'), NULL, NULL, 20, NULL) -> 'result' -> 'messages') e) = pg_temp.ids('m_inact'),
                                'b_get_now', pg_temp.getm('K2', pg_temp.s('m_inact'), 1) ->> 'ok' = 'true');
+  -- no active computer while the switch is on (state after a restore of removed deals on an account the S1 backfill
+  -- left without one; set directly): nothing is shown
+  UPDATE public.cloud_autosave_settings SET active_install_id = NULL, active_since = NULL WHERE user_id = pg_temp.f('A');
+  l := pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL);
+  v := v || jsonb_build_object('none_list', l -> 'result' -> 'messages' = '[]' AND l -> 'result' -> 'messages_hidden' = 'true',
+                               'none_get', pg_temp.getm('K2', pg_temp.s('m_lin'), 1) = nf,
+                               'none_get_b', pg_temp.getm('K2', pg_temp.s('m_inact'), 1) = nf);
   UPDATE public.cloud_release_switches SET one_computer = false WHERE id;
   v := v || jsonb_build_object('off_a', jsonb_array_length(pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL) -> 'result' -> 'messages') = 5,
                                'off_b', pg_temp.getm('K2', pg_temp.s('m_inact'), 1) ->> 'ok' = 'true');
@@ -345,4 +352,43 @@ BEGIN
                   = (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(ARRAY['get_status', 'list_deals', 'get_deal', 'get_deal_checklists', 'list_all_deals',
                        'update_todo', 'add_todo', 'remove_todo', 'restore_todo', 'find_people', 'list_todos', 'list_deal_messages', 'get_message']) x));
   RETURN pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_each(v) e WHERE e.value <> 'true'), v::text);
+END $c$;
+
+-- Body: invisible characters are removed before the body is returned and split (M1)
+CREATE FUNCTION pg_temp.c_strip() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE r jsonb; b text; stored text;
+BEGIN
+  r := pg_temp.getm('K2', pg_temp.s('m_inv'), 1);
+  b := r -> 'result' -> 'message' ->> 'body_text';
+  stored := (SELECT body_text FROM public.cloud_deal_messages WHERE id = pg_temp.f('m_inv'));
+  RETURN pg_temp.pass(r ->> 'ok' = 'true' AND strpos(stored, chr(917569)) > 0 AND strpos(stored, chr(8238)) > 0
+                      AND b = public._mcp_strip(stored) AND strpos(b, chr(917569)) = 0 AND strpos(b, chr(917594)) = 0
+                      AND strpos(b, chr(8238)) = 0 AND b = 'Visible start  visible end',
+    jsonb_build_object('ok', r ->> 'ok', 'returned_chars', char_length(b), 'stored_chars', char_length(stored))::text);
+END $c$;
+
+-- Participants: a 'from' array shows its first value and counts the others; list leaves cc out and counts it
+CREATE FUNCTION pg_temp.c_people() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE g jsonb; l jsonb; row jsonb;
+BEGIN
+  g := pg_temp.getm('K2', pg_temp.s('m_from'), 1) -> 'result' -> 'message';
+  l := pg_temp.lst('K2', pg_temp.s('dSw'), NULL, NULL, 50, NULL);
+  row := (SELECT e FROM jsonb_array_elements(l -> 'result' -> 'messages') e WHERE e ->> 'message_id' = pg_temp.s('m_from'));
+  RETURN pg_temp.pass(g ->> 'from' = 'a@example.test' AND g -> 'to' = '["d@example.test"]' AND g -> 'cc' = '["e@example.test"]'
+                      AND (g ->> 'participants_more')::int = 2
+                      AND row ->> 'from' = 'a@example.test' AND row -> 'to' = '["d@example.test"]' AND NOT row ? 'cc'
+                      AND (row ->> 'participants_more')::int = 3,
+    jsonb_build_object('get', g - 'body_text', 'list', row)::text);
+END $c$;
+
+-- Retention: more than one batch of old rows is deleted in one run (rows written directly with their read time)
+CREATE FUNCTION pg_temp.c_prune_loop() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE n int; tag text := 'Fixture prune ' || pg_temp.s('RUN');
+BEGIN
+  INSERT INTO public.mcp_message_reads (user_id, provider, client_name, tool, cloud_deal_id, cloud_message_id, channel, read_at)
+  SELECT pg_temp.f('A'), 'anthropic', tag, 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now() - interval '400 days'
+    FROM generate_series(1, 100001);
+  n := public._mcp_prune_message_reads();
+  RETURN pg_temp.pass(n >= 100001 AND NOT EXISTS (SELECT 1 FROM public.mcp_message_reads WHERE client_name = tag),
+    jsonb_build_object('deleted', n, 'left', (SELECT count(*) FROM public.mcp_message_reads WHERE client_name = tag))::text);
 END $c$;
