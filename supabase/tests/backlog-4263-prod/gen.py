@@ -471,6 +471,11 @@ PREDICTED_CHECKDEF = {
     'cloud_computer_move_notices.cloud_computer_move_notices_status_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_status_check'],
     'cloud_computer_move_notices.cloud_computer_move_notices_attempts_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_attempts_check'],
     'cloud_computer_move_notices.cloud_computer_move_notices_last_error_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_last_error_check'],
+    # 20261123140000 (T-S): the provider CHECK's measured text with the column and literals changed; the part CHECK is
+    # written in the same form as the measured last_error CHECK (report only, NOT measured)
+    'mcp_message_reads.mcp_message_reads_tool_check': "CHECK ((tool = ANY (ARRAY['list_deal_messages'::text, 'get_message'::text])))",
+    'mcp_message_reads.mcp_message_reads_channel_check': "CHECK ((channel = ANY (ARRAY['email'::text, 'text'::text])))",
+    'mcp_message_reads.mcp_message_reads_part_check': 'CHECK (((part IS NULL) OR (part >= 1)))',
 }
 PREDICTED_PREDICATE = {
     'cloud_computer_move_notices_due_idx': MEASURED_PREDICATE['ai_app_connect_notices_due_idx'],
