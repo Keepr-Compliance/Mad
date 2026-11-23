@@ -18,6 +18,7 @@ import type { Communication } from "../../types";
 import { isReactionRow } from "../../utils/reactionUtils";
 import { cleanText } from "../cloudSync/projection";
 import {
+  ELIGIBLE_DEAL_WHERE,
   ADOPT_MESSAGE_STATE_SQL,
   DELETE_SWITCH_MARKER_SQL,
   MARK_ALL_ELIGIBLE_FOR_USER_SQL,
@@ -228,6 +229,22 @@ export function messageReconcileDue(marker: ReconcileMarker | null, now: Date): 
   if (marker.status === "ok") return age >= MESSAGE_RECONCILE_INTERVAL_MS;
   const wait = Math.min(MESSAGE_RECONCILE_BACKOFF_MS * 2 ** Math.max(0, Math.min(marker.failures, 20) - 1), MESSAGE_RECONCILE_INTERVAL_MS);
   return age >= wait;
+}
+
+/**
+ * Eligible deals of the user still waiting for their first upload (a mark that is not parked, and no deal record with
+ * an online id). Their online rows cannot be mapped yet, so the reconcile waits for them (it stays due).
+ */
+export const COUNT_DEALS_AWAITING_RECORD_SQL = `SELECT COUNT(*) AS n FROM transactions t
+  JOIN cloud_sync_dirty d ON d.transaction_id = t.id
+ WHERE t.user_id = ? AND ${ELIGIBLE_DEAL_WHERE}
+   AND NOT (d.next_attempt_at IS NOT NULL AND d.next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
+            AND d.next_attempt_at = '9999-12-31T00:00:00.000Z#' || d.generation)
+   AND NOT EXISTS (SELECT 1 FROM cloud_sync_state s WHERE s.project_ref = ? AND s.owner_user_id = ?
+                    AND s.entity = 'deal' AND s.local_id = t.id AND s.cloud_id IS NOT NULL)`;
+
+export function dealsAwaitingRecord(db: SqlDb, projectRef: string, userId: string): number {
+  return (db.prepare(COUNT_DEALS_AWAITING_RECORD_SQL).get(userId, projectRef, userId) as { n: number }).n;
 }
 
 export function sameMarker(a: ReconcileMarker | null, b: ReconcileMarker | null): boolean {

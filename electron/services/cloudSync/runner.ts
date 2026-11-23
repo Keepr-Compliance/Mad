@@ -624,6 +624,9 @@ export class CloudSyncRunner {
         if (r === "done") done++;
         else if (r === "failed") failed++;
       }
+      // BACKLOG-4263 P5 (plan DM-1): a deal upload in this pass that un-removed a deal online made the email and text
+      // reconcile due; it runs now (a no-op when not due), so its marks are in place for the next pass.
+      await this.reconcileMessages(db, pinned, installId);
       // BACKLOG-4263 PR-4c (Q8): Delete for good still owed, after the deals (their removals went first).
       await this.finishOwedPurges(db, pinned, installId);
       // BACKLOG-4263 PR-4a: todo changes, after the deals (an op names its deal by cloud id).
@@ -1117,6 +1120,9 @@ export class CloudSyncRunner {
     const { projectRef } = this.deps;
     const before = messagesDb.readReconcileMarker(db, projectRef, pinned.userId);
     if (!messagesDb.messageReconcileDue(before, this.now())) return false;
+    // Deals still to be uploaded have no online id yet: their rows could not be mapped. Wait (still due); the call
+    // after the deal loop, or a later pass, runs it once they have one.
+    if (messagesDb.dealsAwaitingRecord(db, projectRef, pinned.userId) > 0) return false;
     type Online = { cloudId: string; cloudDealId: string; hash: string | null; removed: boolean };
     const online = new Map<string, Online>();
     const dealByCloud = new Map<string, string>();
