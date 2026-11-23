@@ -27,6 +27,12 @@ const CASES = [
     version: '20261123110000',
     name: 'backlog_4263_cloud_blob_erase',
   },
+  {
+    migration: 'supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql',
+    apply: 'supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql',
+    version: '20261123140000',
+    name: 'backlog_4263_mcp_message_tools',
+  },
 ];
 
 describe.each(CASES)('apply file $apply', ({ migration, apply, version, name }) => {
