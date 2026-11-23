@@ -207,7 +207,7 @@ def drop_product_defs(text):
 def check_file(path, helpers, data):
     raw = open(path, encoding='utf-8').read()
     text = drop_product_defs(strip_comments(raw))
-    findings, unchecked, checked = [], [], 0
+    findings, unchecked, checked, untraced = [], [], 0, []
     units = re.split(r'(?=CREATE FUNCTION pg_temp\.|\bDO \$)', text)
     for unit in units:
         assigns = []   # (pos, var, prods, own)
@@ -234,7 +234,7 @@ def check_file(path, helpers, data):
         for m in re.finditer(r'jsonb_array_elements\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?:AS\s+)?([a-z_][a-z0-9_]*)', unit, re.I):
             aliases[m.group(2)] = sources_of(m.group(1), helpers, lambda n, p=m.start(): var_at(n, p))
 
-        def judge(pos, base, keys, vals, expr):
+        def judge(pos, base, keys, vals, expr, ci=False):
             nonlocal checked
             if base.startswith('pg_temp.'):
                 pr, ow = sources_of(base, helpers, lambda n: var_at(n, pos))
@@ -249,8 +249,9 @@ def check_file(path, helpers, data):
             for k in keys:
                 if k not in em:
                     findings.append((path, expr, k, names))
+            eml = {e.lower() for e in em} if ci else em
             for v in vals:
-                if v in em or v in ('true', 'false', 'null', '') or re.fullmatch(r'-?\d+(\.\d+)?', v):
+                if (v.lower() if ci else v) in eml or v in ('true', 'false', 'null', '') or re.fullmatch(r'-?\d+(\.\d+)?', v):
                     continue
                 if v in data:
                     continue
@@ -265,9 +266,20 @@ def check_file(path, helpers, data):
             if base.lower() in ('and', 'or', 'not', 'then', 'when', 'else', 'select', 'where', 'if', 'case', 'is', 'end'):
                 continue
             if not base.startswith('pg_temp.') and not var_at(base, m.start())[0] and not var_at(base, m.start())[1]:
+                untraced.append((path, m.group(0).strip()[:140] + '   [key read on a value not traced to a product function]'))
                 continue
             seen_reads.add(m.start())
             judge(m.start(), base, literals(m.group(2)), [], m.group(0).strip()[:140])
+        BASE = r"((?:pg_temp\.\w+\s*\((?:[^()]|\([^()]*\))*\))|\b[a-z_][a-z0-9_]*)"
+        for m in re.finditer(BASE + r"(" + PATH + r")?\s*#>>?\s*'\{([^}']*)\}'(?:\s*(" + OPS + r")\s*'((?:[^']|'')*)')?", unit, re.I):
+            keys = literals(m.group(2) or '') + [k.strip().strip('"') for k in m.group(3).split(',') if k.strip() and not k.strip().isdigit()]
+            vals = [m.group(5).replace("''", "'")] if m.group(5) is not None and '#>>' in m.group(0) else []
+            judge(m.start(), m.group(1), keys, vals, m.group(0).strip()[:140])
+        for m in re.finditer(BASE + r"(" + PATH + r")\s+(?:NOT\s+)?IN\s*\(\s*('(?:[^']|'')*'(?:\s*,\s*'(?:[^']|'')*')*)\s*\)", unit, re.I):
+            vals = literals(m.group(3)) if '->>' in m.group(2) else []
+            judge(m.start(), m.group(1), literals(m.group(2)), vals, m.group(0).strip()[:140])
+        for m in re.finditer(r"\b(?:lower|upper|btrim|trim)\s*\(\s*" + BASE + r"(" + PATH + r")\s*\)\s*(" + OPS + r")\s*'((?:[^']|'')*)'", unit, re.I):
+            judge(m.start(), m.group(1), literals(m.group(2)), [m.group(4).replace("''", "'")], m.group(0).strip()[:140], ci=True)
         for m in re.finditer(r"([a-z_][a-z0-9_]*)(" + PATH + r")?\s*\?\s*'((?:[^']|'')*)'", unit):
             judge(m.start(), m.group(1), literals(m.group(2) or '') + [m.group(3)], [], m.group(0).strip()[:140])
         for m in re.finditer(r"((?:pg_temp\.\w+\s*\((?:[^()]|\([^()]*\))*\))|\b[a-z_][a-z0-9_]*)(" + PATH + r")?\s*(" + OPS + r")\s*('(?:[^']|'')*'|[a-z_][a-z0-9_]*\b)", unit, re.I):
@@ -278,9 +290,16 @@ def check_file(path, helpers, data):
             if not path_ and (rhs_lit is None or not json_parts(rhs_lit)):
                 continue
             jp = json_parts(rhs_lit) if rhs_lit is not None else set()
-            vals = jp if jp else ({rhs_lit} if rhs_lit is not None and '->>' in path_ else set())
+            last_arrow = re.findall(r'->>?', path_)[-1] if path_ else ''
+            if not jp and rhs_lit is not None and last_arrow == '->' and rhs_lit.strip().startswith('"'):
+                try:
+                    sv = json.loads(rhs_lit)
+                    jp = {sv} if isinstance(sv, str) else set()
+                except ValueError:
+                    pass
+            vals = jp if jp else ({rhs_lit} if rhs_lit is not None and last_arrow == '->>' else set())
             judge(m.start(), base, literals(path_), vals, m.group(0).strip()[:140])
-    return findings, unchecked, checked
+    return findings, unchecked + sorted(set(untraced)), checked
 
 
 def check_folder(folder):
