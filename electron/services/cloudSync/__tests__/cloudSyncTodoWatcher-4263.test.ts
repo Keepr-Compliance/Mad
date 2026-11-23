@@ -235,6 +235,7 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(h.activeWatchTimers()).toBe(1);
       h.e.session.userId = null;
       h.e.emit("cleared", null);
+      expect(h.activeWatchTimers()).toBe(0); // cleared by the sign-out itself
       h.e.service.refreshSchedule(); // what main does on every session event (cloudSyncHandlers.ts onSessionChanged)
       expect(h.e.watchTimers.every((w) => w.cleared)).toBe(true);
       expect(h.activeWatchTimers()).toBe(0);
@@ -486,6 +487,38 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       for (const sql of u.prepared) expect(sql.trimStart().slice(0, 6).toUpperCase()).toBe("SELECT");
     });
 
+    it("signed out: the look reads nothing and does not kick", () => {
+      const u = unit({ record: true });
+      u.w.passStarting();
+      u.w.passEnded({ outcome: "done", done: 0, failed: 0 });
+      u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
+      u.clock.t += GAP_MS;
+      u.user.id = null;
+      const n = u.prepared.length;
+      u.w.tick();
+      expect(u.prepared.length).toBe(n);
+      expect(u.kicks.n).toBe(0);
+      u.user.id = USER_A;
+      u.w.tick();
+      expect(u.kicks.n).toBe(1);
+    });
+
+    it("a row stamped before the wall clock stepped back does not hide a new edit (edit_seq still rises)", async () => {
+      const h = await setup();
+      h.e.server.override = (fn, args) =>
+        fn === "cloud_todo_push"
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((op) => ({ op_id: op.op_id, entity: "item", status: "not_found" })) }, error: null, status: 200 }
+          : undefined;
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("kept", I1);
+      // The state a backward step leaves: the kept row carries a time the clock now reads as the future.
+      h.db.prepare("UPDATE cloud_sync_todo_outbox SET edited_at = '2099-01-01T00:00:00.000Z'").run();
+      await h.advanceTo(h.t0 + 30_000);
+      expect(h.watchKicks()).toEqual([h.t0 + 10_000]);
+      h.db.prepare(RENAME_PRIVATE_ITEM_SQL).run("After the step", I2, h.deal, MY_ITEMS_TEMPLATE_ID);
+      await h.advanceTo(h.t0 + 35_000);
+      expect(h.watchKicks()).toEqual([h.t0 + 10_000, h.t0 + 35_000]);
+    });
+
     it("database not ready: the look reads nothing and does not kick", () => {
       const u = unit({ record: true });
       u.w.passStarting();
@@ -631,12 +664,13 @@ function unit(opts: { record?: boolean } = {}) {
   const clock = { t: Date.parse("2026-11-14T12:00:00.000Z") };
   const kicks = { n: 0 };
   const ready = { v: true };
+  const user = { id: USER_A as string | null };
   const w = new TodoOutboxWatcher({
     db: () => watched,
     dbReady: () => ready.v,
     projectRef: PROJECT,
     isOnline: () => true,
-    getAuthUserId: () => USER_A,
+    getAuthUserId: () => user.id,
     passRunning: () => false,
     kick: () => {
       kicks.n++;
@@ -645,5 +679,5 @@ function unit(opts: { record?: boolean } = {}) {
     clearInterval: () => undefined,
     now: () => new Date(clock.t),
   });
-  return { db, w, clock, kicks, ready, prepared };
+  return { db, w, clock, kicks, ready, user, prepared };
 }
