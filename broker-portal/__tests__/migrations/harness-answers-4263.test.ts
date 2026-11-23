@@ -45,6 +45,34 @@ describe('BACKLOG-4263 T-S harness answers', () => {
     expect(s2).toContain("out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);");
   });
 
+  it('every generated call sets statement_timeout 240s, below the transport limit, and lock_timeout 3s', () => {
+    for (const f of ['harness-t.sql', 'harness-t-controls.sql', 'harness-t-mutants.sql', 'harness-t-fixtures.sql']) {
+      const t = read(`${DIR}/${f}`);
+      expect(`${f} ${t.match(/^SET LOCAL statement_timeout = '(\d+)s';$/gm)}`).toBe(`${f} SET LOCAL statement_timeout = '240s';`);
+      expect(t).toContain("SET LOCAL lock_timeout = '3s';");
+    }
+  });
+
+  it('the split calls: controls-only has no mutant, mutants-only has no plain controls pass, both have the fixtures and the rollback step', () => {
+    const full = read(`${DIR}/harness-t.sql`);
+    const c = read(`${DIR}/harness-t-controls.sql`);
+    const m = read(`${DIR}/harness-t-mutants.sql`);
+    const nMut = full.match(/pg_temp\.rec\('mutant:/g)!.length;
+    expect(nMut).toBe(57);
+    expect(m.match(/pg_temp\.rec\('mutant:/g)!.length).toBe(nMut);
+    expect(c).not.toContain("pg_temp.rec('mutant:");
+    expect(m).not.toContain("pg_temp.rec('controls', base)");
+    expect(c).toContain("pg_temp.rec('controls', base)");
+    for (const [t, mode] of [[full, 'full'], [c, 'controls'], [m, 'mutants']] as const) {
+      expect(t).toContain(`pg_temp.rec('mode', to_jsonb('${mode}'::text))`);
+      expect(t).toContain(read(`${DIR}/lib/fixtures.sql`));
+      expect(t).toContain(`$rbq$\n${read(`${DIR}/rollback-20261123140000.sql`)}\n$rbq$`);
+    }
+    // the 100,001-row loop: full 2 (plain pass + mutant prune_single_batch), controls 1, mutants 1, fixtures 0
+    const loops = (t: string): number => (t.match(/res := pg_temp\.c_prune_loop\(\);/g) ?? []).length;
+    expect([loops(full), loops(c), loops(m), loops(read(`${DIR}/harness-t-fixtures.sql`))]).toEqual([2, 1, 1, 0]);
+  });
+
   it('the fixtures-only call: guard, timeouts, applied check, helpers and fixtures as in the full call, then RAISE; nothing else', () => {
     const f = read(`${DIR}/harness-t-fixtures.sql`);
     const full = read(`${DIR}/harness-t.sql`);
@@ -59,5 +87,6 @@ describe('BACKLOG-4263 T-S harness answers', () => {
     expect(f).not.toContain('generate_series(1, 100001)');
     expect(f.trimEnd().endsWith("FROM public.cloud_release_switches w WHERE w.id));\nEND\n$fxend4263t$;")).toBe(true);
     expect(f).toContain("RAISE EXCEPTION 'T4263_FIXTURES_OK %'");
+    for (const k of ['fixture_ms', 'strip_big1_ms', 'getm_big1_ms', 'big1_parts', 'big1_frame_bytes']) expect(f).toContain(`'${k}'`);
   });
 });

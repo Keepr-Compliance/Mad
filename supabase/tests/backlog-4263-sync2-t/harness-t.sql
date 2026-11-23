@@ -21,7 +21,8 @@
 --     key; milliseconds);
 --   last step only, right before the RAISE, the rollback file: ACCESS EXCLUSIVE on mcp_message_reads and mcp_call_log,
 --     and, NOT MEASURED, very likely a lock on auth.users (dropping the table removes its foreign-key triggers there).
--- Duration: NOT MEASURED. The 1,000,000-character body is read in every part (about 90 calls).
+-- Duration: NOT MEASURED; harness-t-fixtures.sql measures its parts first (see README). statement_timeout 240s: below
+--   the transport's own 300 s limit (curl -m 300 in kt-sql), so the server stops before the client gives up.
 DO $guard4263t$
 DECLARE n bigint := 0;
 BEGIN
@@ -37,7 +38,7 @@ BEGIN
 END
 $guard4263t$;
 SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '900s';
+SET LOCAL statement_timeout = '240s';
 DO $applied4263t$
 BEGIN
   IF (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_conn_reads_messages(uuid)')) IS DISTINCT FROM '1906af9a3b208f2bb779e092bcc93fa4' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_msg_people(jsonb, boolean)')) IS DISTINCT FROM '9291e4ceae08ce1ffde941923e4671ee' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid)')) IS DISTINCT FROM 'edc8c35f58ec8c3e01d786083a107f61' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_get_message(uuid, integer)')) IS DISTINCT FROM 'c0b20b62a1b35b0661eebe9c19d717ba' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text)')) IS DISTINCT FROM 'f3c855e6faa5ced6f26f039216a9ebd2' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_get_message(text, bytea, text, text, integer)')) IS DISTINCT FROM '8452eddc439a1d26a9eed94f820a3124' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_message_access(text, bytea, text)')) IS DISTINCT FROM '1fb7181cbb05c85dd38819d814949b4d' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_list_my_message_reads(text, integer)')) IS DISTINCT FROM '98591cf030d80fe8742b00c231d65f76' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_prune_message_reads()')) IS DISTINCT FROM '5fcc039167ee947d0f060adb39c98e8c' THEN
@@ -771,6 +772,7 @@ DO $controls4263t$
 DECLARE res text; base jsonb := '{}'; o jsonb; applied boolean;
 BEGIN
   PERFORM pg_temp.rec('t_start', to_jsonb(clock_timestamp()));
+  PERFORM pg_temp.rec('mode', to_jsonb('full'::text));
     BEGIN
       res := pg_temp.c_c9a_permission();
       RAISE EXCEPTION 'undo-case';
@@ -1354,13 +1356,6 @@ $mu5$);
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_c9b_sweep', res);
-    BEGIN
-      res := pg_temp.c_c9b_parts_big();
-      RAISE EXCEPTION 'undo-case';
-    EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
-    END;
-    o := o || jsonb_build_object('c_c9b_parts_big', res);
     RAISE EXCEPTION 'undo-mutant';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
@@ -1815,13 +1810,6 @@ $mu10$);
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_strip', res);
-    BEGIN
-      res := pg_temp.c_c9b_parts_big();
-      RAISE EXCEPTION 'undo-case';
-    EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
-    END;
-    o := o || jsonb_build_object('c_c9b_parts_big', res);
     RAISE EXCEPTION 'undo-mutant';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;

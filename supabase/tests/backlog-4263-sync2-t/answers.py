@@ -21,6 +21,11 @@ removed):
                every compare); a variable or call compared with a JSON object literal is checked key by key and value
                by value. A compare whose left side links to no product function is listed as not checkable.
 
+Limits (stated; the desk run covers them): a literal the harness also passes in as data is not checked; a literal is
+accepted when the function or a callee emits it anywhere, not only on the path taken; `@>`, `jsonb_path_*`, `?|`, `?&`,
+LIKE, `~`, ANY and compares wrapped in a cast or in a function other than lower/upper/trim/btrim are not parsed; reads on
+values that cannot be traced to a product function are listed as not checkable.
+
 `python3 answers.py <folder> [...]`  prints findings and not-checkable compares; exit 1 when there is a finding.
 """
 import json

@@ -4,12 +4,14 @@
 -- supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql applied (file md5 0ca12e1e52d34001fe6ef644f17828d0).
 -- ONE call (~/.claude/bin/kt-sql harness-t-fixtures.sql) that ends in RAISE, so nothing persists. Order: guard -> lock and
 -- statement timeouts -> applied check -> helpers and fixtures (the same text as harness-t.sql) -> RAISE
--- 'T4263_FIXTURES_OK <rows the fixtures made>'. No control, no mutant, no rollback step. Read the output with
--- `python3 gen.py report-fixtures <output>` (OK only when every count is as expected).
+-- 'T4263_FIXTURES_OK <rows the fixtures made, and timings>'. After the fixtures it times one _mcp_strip of the stored
+-- m_big1 body and one get_message of m_big1 part 1 (that call writes a read-log row and a call-log row, rolled back
+-- with everything else) and records the frame size and part count. No control, no mutant, no rollback step. Read the
+-- output with `python3 gen.py report-fixtures <output>` (OK only when every count is as expected; timings printed).
 -- Locks until the RAISE (lock_timeout 3s): the ONE row of cloud_release_switches and the ONE row of mcp_settings
 --   (UPDATEs; a switch flip, a portal-secret change and the erase job's scrub, which takes the switch row FOR SHARE at
---   minute 23 of the hour, wait until this call ends; plain reads are not blocked); KEY SHARE on the team row of
---   public.plans (foreign key of the fixture organization's plan); the rows it inserts. Duration NOT MEASURED.
+--   minute 23 of the hour, wait until this call ends; plain reads are not blocked); the rows it inserts (and the
+--   fixture users' own rows it locks, such as their settings rows). Duration: what it measures.
 DO $guard4263t$
 DECLARE n bigint := 0;
 BEGIN
@@ -25,7 +27,7 @@ BEGIN
 END
 $guard4263t$;
 SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '900s';
+SET LOCAL statement_timeout = '240s';
 DO $applied4263t$
 BEGIN
   IF (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_conn_reads_messages(uuid)')) IS DISTINCT FROM '1906af9a3b208f2bb779e092bcc93fa4' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_msg_people(jsonb, boolean)')) IS DISTINCT FROM '9291e4ceae08ce1ffde941923e4671ee' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid)')) IS DISTINCT FROM 'edc8c35f58ec8c3e01d786083a107f61' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_get_message(uuid, integer)')) IS DISTINCT FROM 'c0b20b62a1b35b0661eebe9c19d717ba' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text)')) IS DISTINCT FROM 'f3c855e6faa5ced6f26f039216a9ebd2' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_get_message(text, bytea, text, text, integer)')) IS DISTINCT FROM '8452eddc439a1d26a9eed94f820a3124' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_message_access(text, bytea, text)')) IS DISTINCT FROM '1fb7181cbb05c85dd38819d814949b4d' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.mcp_list_my_message_reads(text, integer)')) IS DISTINCT FROM '98591cf030d80fe8742b00c231d65f76' OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_prune_message_reads()')) IS DISTINCT FROM '5fcc039167ee947d0f060adb39c98e8c' THEN
@@ -227,6 +229,7 @@ CREATE FUNCTION pg_temp.sorted(a jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS 
   SELECT coalesce(jsonb_agg(e ORDER BY e #>> '{}'), '[]') FROM jsonb_array_elements(a) e
 $h$;
 
+DO $fxt0_4263t$ BEGIN PERFORM pg_temp.rec('t_fixture_start', to_jsonb(clock_timestamp())); END $fxt0_4263t$;
 -- BACKLOG-4263 P9 harness fixtures. Users A and B: licensed through one invented organization on the team plan, Keepr
 -- Cloud on (notice 1). Rows come from the real producers (cloud_upsert_deal, cloud_upsert_messages, cloud_upsert_files,
 -- cloud_tombstone, cloud_delete_deal, cloud_claim_install, set_my_cloud_autosave). Set directly, each named here:
@@ -360,9 +363,29 @@ BEGIN
 END
 $fx4263t$;
 
+DO $fxtime4263t$
+DECLARE t0 timestamptz; v_body text; v_n bigint; g jsonb;
+BEGIN
+  PERFORM pg_temp.rec('fixture_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - (SELECT (v #>> '{}')::timestamptz FROM pg_temp.t_out WHERE k = 't_fixture_start')) * 1000)));
+  SELECT m.body_text INTO v_body FROM public.cloud_deal_messages m WHERE m.id = pg_temp.f('m_big1');
+  t0 := clock_timestamp();
+  v_n := char_length(public._mcp_strip(v_body));
+  PERFORM pg_temp.rec('strip_big1_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - t0) * 1000)));
+  PERFORM pg_temp.rec('strip_big1_chars', to_jsonb(v_n));
+  t0 := clock_timestamp();
+  g := pg_temp.getm('K2', pg_temp.s('m_big1'), 1);
+  PERFORM pg_temp.rec('getm_big1_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - t0) * 1000)));
+  PERFORM pg_temp.rec('getm_big1_ok', to_jsonb(g ->> 'ok' = 'true'));
+  PERFORM pg_temp.rec('big1_parts', coalesce(g -> 'result' -> 'message' -> 'parts', 'null'));
+  PERFORM pg_temp.rec('big1_frame_bytes', to_jsonb(octet_length(jsonb_set(g -> 'result', '{message,body_text}', '""')::text)));
+  PERFORM pg_temp.rec('big1_part1_bytes', to_jsonb(octet_length((g -> 'result')::text)));
+END
+$fxtime4263t$;
 DO $fxend4263t$
 BEGIN
   RAISE EXCEPTION 'T4263_FIXTURES_OK %', jsonb_build_object(
+    'timings', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out WHERE k IN ('fixture_ms', 'strip_big1_ms', 'strip_big1_chars', 'getm_big1_ms',
+                                                                           'getm_big1_ok', 'big1_parts', 'big1_frame_bytes', 'big1_part1_bytes')),
     'A_deals', (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = pg_temp.f('A')),
     'B_deals', (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = pg_temp.f('B')),
     'A_messages', (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = pg_temp.f('A')),
