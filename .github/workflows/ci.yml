@@ -402,7 +402,7 @@ jobs:
       - name: Check shard result
         if: success() || failure()
         shell: bash
-        run: node scripts/ci/jest-shard-guard.mjs shard --json "$RUNNER_TEMP/jest-shard.json" --shard ${{ matrix.shard }}/4 --out "$RUNNER_TEMP/jest-summary/macos-latest-shard-${{ matrix.shard }}.json"
+        run: node scripts/ci/jest-shard-guard.mjs shard --json "$RUNNER_TEMP/jest-shard.json" --shard ${{ matrix.shard }}/4 --out "$RUNNER_TEMP/jest-summary/macos-latest-shard-${{ matrix.shard }}.json"; grep -o 'C-5d cascade deletes mark the deal[^"]*' "$RUNNER_TEMP/jest-shard.json" || true
 
       - name: Upload shard summary
         if: success() || failure()

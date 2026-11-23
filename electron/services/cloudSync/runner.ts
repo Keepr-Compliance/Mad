@@ -1120,9 +1120,16 @@ export class CloudSyncRunner {
     const { projectRef } = this.deps;
     const before = messagesDb.readReconcileMarker(db, projectRef, pinned.userId);
     if (!messagesDb.messageReconcileDue(before, this.now())) return false;
-    // Deals still to be uploaded have no online id yet: their rows could not be mapped. Wait (still due); the call
-    // after the deal loop, or a later pass, runs it once they have one.
-    if (messagesDb.dealsAwaitingRecord(db, projectRef, pinned.userId) > 0) return false;
+    // Deals still to be uploaded (never failed yet) have no online id: their rows could not be mapped. Wait (still due),
+    // at most RECONCILE_HOLD_MAX_MS from the first wait; the call after the deal loop, or a later pass, runs it.
+    if (messagesDb.dealsAwaitingRecord(db, projectRef, pinned.userId) > 0) {
+      const since = messagesDb.reconcileWaitingSince(db, projectRef, pinned.userId);
+      if (since === null) {
+        messagesDb.recordReconcileWaiting(db, projectRef, pinned.userId, this.now());
+        return false;
+      }
+      if (this.now().getTime() - since < messagesDb.RECONCILE_HOLD_MAX_MS) return false;
+    }
     type Online = { cloudId: string; cloudDealId: string; hash: string | null; removed: boolean };
     const online = new Map<string, Online>();
     const dealByCloud = new Map<string, string>();

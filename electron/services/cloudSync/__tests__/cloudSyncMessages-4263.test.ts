@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { DRIVER, type TestDb } from "./helpers/sqlite";
-import { dealId, enableUser, freshDb, insertDeal, PROJECT, USER_A } from "./helpers/fixtures";
+import { dealId, enableUser, freshDb, insertDeal, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
 import { FakeServer } from "./helpers/fakeServer";
 import {
@@ -46,6 +46,10 @@ function setup(opts: { upload?: boolean; deals?: number } = {}) {
 }
 
 const upserts = (e: Engine) => e.server.callsTo("cloud_upsert_messages");
+const msgCalls = (e: Engine) =>
+  e.server.calls.filter(
+    (c) => c.fn === "cloud_upsert_messages" || (c.fn === "cloud_tombstone" && c.args.p_kind === "message") || (c.fn === "cloud_list_install_rows" && c.args.p_kind === "message"),
+  );
 const msgTombstones = (e: Engine) => e.server.callsTo("cloud_tombstone").filter((c) => c.args.p_kind === "message");
 const liveOnline = (e: Engine) => e.server.messages.filter((m) => !m.removed);
 const records = (db: TestDb) =>
@@ -150,6 +154,46 @@ describe(`Keepr Cloud emails and texts up [${DRIVER}]`, () => {
       expect(sel.map((m) => m.wireId).sort()).toEqual(["g2"]);
     });
 
+    it("selection keeps to the deal owner's own texts and emails (per-message, email and thread arms)", async () => {
+      const { db, e, deal } = setup();
+      addText(db, fz(3, 1), { user: USER_B, externalId: "guid-b", threadId: null, body: "B text" });
+      linkText(db, fz(2, 1), deal, fz(3, 1));
+      addEmail(db, fz(1, 1), { user: USER_B });
+      linkEmail(db, fz(2, 2), deal, fz(1, 1));
+      // a link row written under the other user on this user's deal, naming that user's thread
+      addText(db, fz(3, 2), { user: USER_B, externalId: "guid-b2", threadId: "macos-chat-b" });
+      linkThread(db, fz(2, 3), deal, "macos-chat-b", USER_B);
+      addText(db, fz(3, 3), { externalId: "guid-a", threadId: null, body: "A text" });
+      linkText(db, fz(2, 4), deal, fz(3, 3));
+      await startAndPass(e);
+      expect(liveOnline(e).map((m) => m.localId)).toEqual(["guid-a"]);
+    });
+
+    it("the sent row carries exactly the listed fields; participants are exactly from, to, cc; no HTML, bcc, metadata or extra participant keys", async () => {
+      const { db, e, deal } = setup();
+      addEmail(db, fz(1, 1), { bodyHtml: "<p>HTML_MARK</p>", cc: "cc@example.test" });
+      db.prepare("UPDATE emails SET bcc = 'bcc-hidden@example.test', labels = 'LABEL_MARK', references_header = 'REF_MARK' WHERE id = ?").run(fz(1, 1));
+      linkEmail(db, fz(2, 1), deal, fz(1, 1));
+      addText(db, fz(3, 1), { threadId: null, participants: JSON.stringify({ from: "+15555550100", to: ["me"], chat_members: ["member@example.test"] }) });
+      linkText(db, fz(2, 2), deal, fz(3, 1));
+      await startAndPass(e);
+      const rows = upserts(e).flatMap((c) => c.args.p_rows as Array<Record<string, unknown>>);
+      expect(rows).toHaveLength(2);
+      const FIELDS = [
+        "body_text", "channel", "channel_kind", "content_hash", "direction", "hidden_from_export", "link_confidence", "link_origin",
+        "link_source", "linked_at", "local_id", "local_link_id", "match_reason", "participants", "received_at", "sent_at",
+        "source_updated_at", "subject", "thread_key",
+      ];
+      for (const r of rows) {
+        expect(Object.keys(r).sort()).toEqual(FIELDS);
+        expect(Object.keys(r.participants as object).sort()).toEqual(["cc", "from", "to"]);
+      }
+      const all = JSON.stringify(rows);
+      for (const mark of ["HTML_MARK", "<p>", "bcc-hidden", "LABEL_MARK", "REF_MARK", "member@example.test", "macos_messages", "15555550100,", "storage_path", "attachment"]) {
+        expect([mark, all.includes(mark)]).toEqual([mark, false]);
+      }
+    });
+
     it("P-o1: the same rows inserted in two physical orders give the same keys and hashes (raw scan order differs)", () => {
       const build = (reverse: boolean) => {
         const db = freshDb();
@@ -164,6 +208,8 @@ describe(`Keepr Cloud emails and texts up [${DRIVER}]`, () => {
         for (const [id, g, ch] of order) addText(db, id, { externalId: g, channel: ch, body: "dup", sentAt: "2026-10-01T10:00:00.000Z" });
         const links = [() => linkThread(db, fz(2, 1), deal, "macos-chat-1"), () => linkText(db, fz(2, 2), deal, fz(3, 1))];
         for (const l of reverse ? [...links].reverse() : links) l();
+        // linked_at is the database clock at link time and is in the hash: bound here so the two builds compare equal
+        db.prepare("UPDATE communications SET linked_at = '2026-10-01 09:00:00'").run();
         const rawIds = (db.prepare(
           "SELECT m.id FROM communications c JOIN messages m ON (c.message_id = m.id OR (c.message_id IS NULL AND c.thread_id = m.thread_id)) WHERE c.transaction_id = ? ORDER BY m.sent_at DESC",
         ).all(deal) as Array<{ id: string }>).map((r) => r.id);
@@ -487,7 +533,8 @@ describe(`Keepr Cloud emails and texts up [${DRIVER}]`, () => {
       let calls = 0;
       e.server.override = (fn) => (fn === "cloud_upsert_messages" && ++calls === 2 ? { data: { ok: false, error: "feature_off" }, error: null } : undefined);
       const synced = e.server.callsTo("cloud_mark_deal_synced").length;
-      await pass(e);
+      const s = await pass(e);
+      expect(s.budgetExhausted).toBe(false);
       expect(calls).toBe(2);
       expect(msgTombstones(e).length).toBeGreaterThan(0);
       expect(e.server.callsTo("cloud_mark_deal_synced").length).toBe(synced);
@@ -534,14 +581,21 @@ describe(`Keepr Cloud emails and texts up [${DRIVER}]`, () => {
       }
     });
 
-    it("P-x1: a refused computer (another computer active) makes no message call of any kind, the listing included", async () => {
+    it("P-x1: a refused computer whose email and text reconcile is due makes no message call of any kind, an unlink included", async () => {
       const { db, e, deal } = setup();
       addEmail(db, fz(1, 1));
       linkEmail(db, fz(2, 1), deal, fz(1, 1));
+      await startAndPass(e);
+      expect(liveOnline(e)).toHaveLength(1);
+      messagesDb.deleteReconcileMarker(db, PROJECT, USER_A);
+      expect(messagesDb.messageReconcileDue(marker(db), e.clock.now)).toBe(true);
       e.server.oneComputer = true;
       e.server.activeInstall = fz(9, 1);
-      await startAndPass(e);
-      expect(e.server.calls.filter((c) => c.fn === "cloud_upsert_messages" || (c.fn === "cloud_list_install_rows" && c.args.p_kind === "message"))).toEqual([]);
+      unlink(db, fz(2, 1));
+      const before = msgCalls(e).length;
+      await pass(e);
+      expect(msgCalls(e).length - before).toBe(0);
+      expect(liveOnline(e)).toHaveLength(1);
     });
   });
 
@@ -663,6 +717,65 @@ describe(`Keepr Cloud emails and texts up [${DRIVER}]`, () => {
         expect(messagesDb.messageReconcileDue(marker(db), now)).toBe(true);
       }
       expect(messagesDb.messageReconcileDue({ status: "ok", failures: 0, at: now.toISOString() }, now)).toBe(false);
+    });
+
+    it("a deal whose first upload keeps failing does not hold the reconcile; the unlinked row is tombstoned", async () => {
+      const { db, e } = await uploaded();
+      const stuck = dealId();
+      insertDeal(db, stuck);
+      e.server.override = (fn, args) => (fn === "cloud_upsert_deal" && JSON.stringify(args).includes(stuck) ? new Error("network down") : undefined);
+      unlink(db, fz(2, 2));
+      applyMoveHere(db, PROJECT, USER_A, e.clock.now);
+      for (let i = 0; i < 3; i++) {
+        advance(e, 5 * 60_000);
+        await pass(e);
+      }
+      expect(liveOnline(e).map((m) => m.localId)).toEqual([fz(1, 1)]);
+      expect((db.prepare("SELECT attempts FROM cloud_sync_dirty WHERE transaction_id = ?").get(stuck) as { attempts: number }).attempts).toBeGreaterThan(0);
+    });
+
+    it("the reconcile waits for a deal still to be uploaded at most one hour from its first wait", async () => {
+      const { db, e } = await uploaded();
+      const waiting = dealId();
+      insertDeal(db, waiting);
+      // A mark not yet tried and not due in these passes: it holds the reconcile until the hour is up.
+      db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = '2099-01-01T00:00:00.000Z', attempts = 0 WHERE transaction_id = ?").run(waiting);
+      unlink(db, fz(2, 2));
+      applyMoveHere(db, PROJECT, USER_A, e.clock.now);
+      const lists = () => msgCalls(e).filter((c) => c.fn === "cloud_list_install_rows").length;
+      const n = lists();
+      for (let i = 0; i < 11; i++) {
+        advance(e, 5 * 60_000);
+        await pass(e);
+      }
+      expect(lists()).toBe(n);
+      for (let i = 0; i < 3; i++) {
+        advance(e, 5 * 60_000);
+        await pass(e);
+      }
+      expect(lists()).toBe(n + 1);
+      expect(liveOnline(e).map((m) => m.localId)).toEqual([fz(1, 1)]);
+    });
+
+    it("a parked deal does not hold the reconcile", () => {
+      const { db, deals } = setup({ deals: 2 });
+      db.prepare("DELETE FROM cloud_sync_dirty").run();
+      db.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at, next_attempt_at) VALUES (?, 3, CURRENT_TIMESTAMP, '9999-12-31T00:00:00.000Z#3')").run(deals[0]);
+      expect(messagesDb.dealsAwaitingRecord(db, PROJECT, USER_A)).toBe(0);
+      db.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at) VALUES (?, 1, CURRENT_TIMESTAMP)").run(deals[1]);
+      expect(messagesDb.dealsAwaitingRecord(db, PROJECT, USER_A)).toBe(1);
+    });
+
+    it("the reconcile's marks bump the generation, so a parked deal with an adopted unselected row is retried at once", async () => {
+      const { db, e, deal } = await uploaded();
+      unlink(db, fz(2, 2));
+      db.prepare("DELETE FROM cloud_sync_state WHERE entity = 'message'").run();
+      db.prepare("DELETE FROM cloud_sync_dirty").run();
+      db.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at, next_attempt_at) VALUES (?, 3, CURRENT_TIMESTAMP, '9999-12-31T00:00:00.000Z#3')").run(deal);
+      messagesDb.deleteReconcileMarker(db, PROJECT, USER_A);
+      await pass(e);
+      await pass(e);
+      expect(liveOnline(e).map((m) => m.localId)).toEqual([fz(1, 1)]);
     });
 
     it("P-m6 (DM-1): an archive-restored deal whose online copy was soft-removed: an email deleted meanwhile is tombstoned after the restore", async () => {

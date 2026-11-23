@@ -38,6 +38,8 @@ function engineFacts(): { header: string | null; got: string; mc: string | null;
 }
 
 const facts = engineFacts();
+// One line naming the engine, written to stdout (not the console, so --silent keeps it).
+process.stdout.write(`C-5d engine: ${DRIVER}; sqlite ${facts.got}; header ${facts.header}; sqlite3mc ${facts.mc}\n`);
 const dirtyOf = (db: ReturnType<typeof freshDb>) =>
   (db.prepare("SELECT transaction_id FROM cloud_sync_dirty ORDER BY transaction_id").all() as Array<{ transaction_id: string }>).map((r) => r.transaction_id);
 

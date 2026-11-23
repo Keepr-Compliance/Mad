@@ -1,7 +1,8 @@
 /**
  * Keepr Cloud: what goes up of a deal's emails and texts, and the local records of it — BACKLOG-4263 P5.
  *
- * THE SELECTION RULE lives here and nowhere else: every `communications` row of the deal, whatever its
+ * THE SELECTION RULE lives here and nowhere else: every `communications` row of the deal written under the deal's
+ * owner, naming that owner's own text or email (each arm keeps to the link's user), whatever its
  * `link_source` (Needs review included), through the two arms the Texts tab and the export read
  * (`getCommunicationsWithMessages`, communicationDbService.ts): a per-message link, or a whole-thread link
  * restricted to the linking user's copy of the thread; and the email arm. No date window. The review queue table
@@ -69,13 +70,14 @@ export const SELECT_DEAL_MESSAGES_SQL = `
                     OR (h.message_external_id IS NOT NULL AND h.message_external_id = m.external_id))
     ) AS hidden_from_export
   FROM communications c
+  JOIN transactions t ON t.id = c.transaction_id AND t.user_id = c.user_id
   LEFT JOIN messages m ON (
-    (c.message_id IS NOT NULL AND c.message_id = m.id)
+    (c.message_id IS NOT NULL AND c.message_id = m.id AND +m.user_id = c.user_id)
     OR
     (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id
      AND +m.user_id = c.user_id)
   )
-  LEFT JOIN emails e ON (c.email_id IS NOT NULL AND c.email_id = e.id)
+  LEFT JOIN emails e ON (c.email_id IS NOT NULL AND c.email_id = e.id AND e.user_id = c.user_id)
   WHERE c.transaction_id = ?
     AND (m.id IS NOT NULL OR e.id IS NOT NULL)
   ORDER BY COALESCE(m.sent_at, e.sent_at) DESC, COALESCE(m.id, e.id) DESC, c.id DESC
@@ -232,12 +234,15 @@ export function messageReconcileDue(marker: ReconcileMarker | null, now: Date): 
 }
 
 /**
- * Eligible deals of the user still waiting for their first upload (a mark that is not parked, and no deal record with
- * an online id). Their online rows cannot be mapped yet, so the reconcile waits for them (it stays due).
+ * Eligible deals of the user still waiting for their first upload that has not failed yet (a mark with no attempt, not
+ * parked, and no deal record with an online id). Their online rows cannot be mapped yet, so the reconcile waits for
+ * them, at most RECONCILE_HOLD_MAX_MS after it first waited (the 'waiting' marker below). A deal whose upload fails
+ * stops holding it at once. Running without such a deal's id skips that deal's online rows; nothing is written for them.
  */
 export const COUNT_DEALS_AWAITING_RECORD_SQL = `SELECT COUNT(*) AS n FROM transactions t
   JOIN cloud_sync_dirty d ON d.transaction_id = t.id
  WHERE t.user_id = ? AND ${ELIGIBLE_DEAL_WHERE}
+   AND d.attempts = 0
    AND NOT (d.next_attempt_at IS NOT NULL AND d.next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
             AND d.next_attempt_at = '9999-12-31T00:00:00.000Z#' || d.generation)
    AND NOT EXISTS (SELECT 1 FROM cloud_sync_state s WHERE s.project_ref = ? AND s.owner_user_id = ?
@@ -245,6 +250,22 @@ export const COUNT_DEALS_AWAITING_RECORD_SQL = `SELECT COUNT(*) AS n FROM transa
 
 export function dealsAwaitingRecord(db: SqlDb, projectRef: string, userId: string): number {
   return (db.prepare(COUNT_DEALS_AWAITING_RECORD_SQL).get(userId, projectRef, userId) as { n: number }).n;
+}
+
+/** At most this long the reconcile waits for deals still to be uploaded, counted from its first wait. */
+export const RECONCILE_HOLD_MAX_MS = 60 * 60 * 1000;
+
+/** When the reconcile first waited (a 'waiting' marker), or null. */
+export function reconcileWaitingSince(db: SqlDb, projectRef: string, userId: string): number | null {
+  const r = db.prepare(SELECT_SWITCH_VALUE_SQL).get(projectRef, userId, MESSAGE_RECONCILE_ID) as { last_status: unknown; updated_at: unknown } | undefined;
+  if (!r || r.last_status !== "waiting" || typeof r.updated_at !== "string") return null;
+  const t = Date.parse(r.updated_at);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** Records the first wait (a 'waiting' marker reads as due, like an absent one). */
+export function recordReconcileWaiting(db: SqlDb, projectRef: string, userId: string, now: Date): void {
+  db.prepare(UPSERT_SWITCH_VALUE_SQL).run(projectRef, userId, MESSAGE_RECONCILE_ID, "waiting", 0, now.toISOString());
 }
 
 export function sameMarker(a: ReconcileMarker | null, b: ReconcileMarker | null): boolean {
@@ -298,8 +319,9 @@ export function applyMessageReconcile(
     for (const k of w.nullHashes) nul.run(projectRef, userId, k);
     const gone = db.prepare(MARK_MESSAGE_GONE_SQL);
     for (const k of w.gone) gone.run(iso, projectRef, userId, k);
+    // A new generation, so a parked mark of that deal is due again at once.
     const mark = db.prepare(
-      "INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at) VALUES (?, 1, CURRENT_TIMESTAMP) ON CONFLICT (transaction_id) DO NOTHING",
+      "INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at) VALUES (?, 1, CURRENT_TIMESTAMP) ON CONFLICT (transaction_id) DO UPDATE SET generation = generation + 1, marked_at = excluded.marked_at",
     );
     for (const id of w.markDeals) mark.run(id);
     writeReconcileMarker(db, projectRef, userId, { status: "ok", failures: 0, at: iso });
