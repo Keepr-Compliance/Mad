@@ -646,15 +646,13 @@ MODES = {'full': 'harness-t.sql', 'controls': 'harness-t-controls.sql', 'mutants
 def transport(raw, marker):
     """(problem or None, the JSON text after the marker). The shape every harness call must have: exactly one line
     'kt-sql: HTTP 400'; the API's message is 'Failed to run sql query: ERROR:  P0001: <marker> {...}' with exactly one
-    'ERROR:' in it; the JSON closes right before '\\nCONTEXT:'."""
+    'ERROR:' outside the JSON (a result value may contain the word); the JSON closes right before '\\nCONTEXT:'."""
     lines = raw.replace('\r\n', '\n').split('\n')
     http = [l.strip() for l in lines if l.startswith('kt-sql: HTTP')]
     if http != ['kt-sql: HTTP 400']:
         note = ' (HTTP 200 with rows: the transaction COMMITTED, an incident)' if 'kt-sql: HTTP 200' in http else ''
         return f'transport: expected exactly one "kt-sql: HTTP 400" line, got {http or "none"}{note}', None
     msg = unwrap(raw)
-    if msg.count('ERROR:') != 1:
-        return f"transport: expected exactly one 'ERROR:' in the message, got {msg.count('ERROR:')}", None
     m = re.match(r'^(?:Failed to run sql query: )?ERROR:  ([0-9A-Z]{5}): ', msg)
     if not m:
         return 'transport: the message does not start with an ERROR and its SQLSTATE: ' + msg[:200].replace('\n', ' '), None
@@ -671,6 +669,9 @@ def transport(raw, marker):
         _, end = json.JSONDecoder().raw_decode(body)
     except ValueError as e:
         return f'transport: {marker} is not complete JSON ({e})', None
+    extra = msg[:m.start()].count('ERROR:') + body[end:].count('ERROR:')
+    if extra:
+        return f"transport: expected exactly one 'ERROR:' outside the result JSON, got {extra + 1}", None
     if not body[end:].startswith('\nCONTEXT:'):
         return f'transport: the JSON does not close right before CONTEXT: {body[end:end + 60]!r}', None
     return None, body
@@ -855,6 +856,7 @@ def selftest(green_ok=False):
              ('HTTP 200 (committed)', wrap(full(), http='kt-sql: HTTP 200'), False, 'COMMITTED'),
              ('no HTTP status line', wrap(full(), http=None), False, 'HTTP 400'),
              ('two HTTP status lines', wrap(full()) + 'kt-sql: HTTP 400\n', False, 'HTTP 400'),
+             ('ERROR: inside a result value', wrap(full((neg, {'error': NOT_APPLIED_ERROR, 'applied': False, 'want': 'not_applied', 'note': 'ERROR:  x'}))), True),
              ('two ERROR lines', wrap(full()).replace('\\nCONTEXT:', '\\nERROR:  P0001: again\\nCONTEXT:', 1), False, "exactly one 'ERROR:'"),
              ('SQLSTATE 57014 (statement timeout)', wrap('canceling statement due to statement timeout', code='57014'), False, 'SQLSTATE 57014'),
              ('SQLSTATE 55P03 (lock timeout)', wrap('canceling statement due to lock timeout', code='55P03'), False, 'SQLSTATE 55P03'),

@@ -290,7 +290,10 @@ def erase_harness_text():
     r = subprocess.run([sys.executable, os.path.join(REPO, 'supabase/tests/backlog-4263-sync2-erase/harness.py'), 'run', '--print',
                         '--controls', '--mutants'], capture_output=True, text=True, cwd=REPO)
     lines = [l for l in r.stdout.splitlines() if not l.startswith('MUTATION APPLIED') and not l.startswith(('  - ', '  + '))]
-    return '\n'.join(lines)
+    text = '\n'.join(lines)
+    # a wrong flag or a failed compose would read as "0 statements": require the composed call itself
+    assert r.returncode == 0 and len(text) > 100000 and text.count('DO $') >= 5, ('erase harness did not compose', r.returncode, len(text))
+    return text
 
 
 def check(files, extra=None, texts=None):
