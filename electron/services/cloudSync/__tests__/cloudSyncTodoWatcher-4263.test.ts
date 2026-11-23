@@ -5,7 +5,7 @@
  * capture triggers: does it queue a `cloud_sync_todo_outbox` row, and with which time columns.
  */
 import { DRIVER, type TestDb } from "./helpers/sqlite";
-import { dealId, freshDb, insertDeal, PROJECT, USER_A } from "./helpers/fixtures";
+import { dealId, freshDb, insertDeal, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { makeEngine, startAndPass, pass, type Engine } from "./helpers/engine";
 import { FakeServer } from "./helpers/fakeServer";
 import { TodoOutboxWatcher } from "../todoOutboxWatcher";
@@ -274,6 +274,39 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(h.watchKicks()).toEqual([h.t0 + 40_000]);
     });
 
+    it("a different user signing in gets no watcher kick before their own first pass ends done (sign-out forgets the last outcome and mark)", async () => {
+      const h = await setup();
+      // User B on this computer with Keepr Cloud on and one My item of their own.
+      const dealB = dealId();
+      insertDeal(h.db, dealB, USER_B);
+      h.db.prepare(INSERT_PRIVATE_CHECKLIST_SQL).run(fid(3, 7), dealB, MY_ITEMS_TEMPLATE_ID, "My items", 0);
+      h.db.prepare(INSERT_CHECKLIST_ITEM_SQL).run(fid(4, 7), fid(3, 7), "B's item", null, 1, null, 0);
+      enableForUser(h.db, PROJECT, USER_B, { noticeVersion: 1, acceptedAt: "2026-11-01T00:00:00.000Z" }, new Date());
+      h.db.prepare("DELETE FROM cloud_sync_todo_outbox WHERE owner_user_id = ?").run(USER_B);
+      // A's pass ended done (setup). A signs out, B signs in.
+      h.e.session.userId = null;
+      h.e.authUser.id = null;
+      h.e.emit("cleared", null);
+      h.e.service.refreshSchedule();
+      h.e.session.userId = USER_B;
+      h.e.authUser.id = USER_B;
+      h.e.server.tokenUser = USER_B;
+      h.e.emit("saved", USER_B);
+      h.e.service.refreshSchedule();
+      expect(h.activeWatchTimers()).toBe(1);
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("B's note", fid(4, 7));
+      expect(outbox(h.db).length).toBeGreaterThan(0);
+      await h.advanceTo(h.t0 + 60_000);
+      expect(h.watchKicks()).toEqual([]);
+      // Positive twin: B's own pass (the 60 s timer) ends done; B's next edit is kicked by the watcher.
+      h.fireTimer();
+      await h.settle();
+      expect(h.e.service.runner!.lastSummary!.outcome).toBe("done");
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("B's second note", fid(4, 7));
+      await h.advanceTo(h.t0 + 75_000);
+      expect(h.watchKicks()).toEqual([h.t0 + 70_000]);
+    });
+
     it("stop() clears the 5 s timer", async () => {
       const h = await setup();
       h.e.service.stop();
@@ -295,7 +328,9 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(h.activeWatchTimers()).toBe(0);
     });
 
-    it("a turn-off owed (made offline): no kick", async () => {
+    // Green today because a turn-off empties this user's outbox and the triggers queue nothing while enabled = 0;
+    // the turn-off-owed check itself is not observed (dropping it stays green). Its control comes with the next PR.
+    it("a turn-off owed (push of the turn-off failed): no kick, because the outbox is empty after a turn-off", async () => {
       const h = await setup();
       h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("before off", I1);
       h.e.server.override = (fn) => (fn === "set_my_cloud_autosave" ? new Error("network") : undefined);
@@ -544,6 +579,21 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       h.db.prepare(RENAME_PRIVATE_ITEM_SQL).run("After the step", I2, h.deal, MY_ITEMS_TEMPLATE_ID);
       await h.advanceTo(h.t0 + 35_000);
       expect(h.watchKicks()).toEqual([h.t0 + 10_000, h.t0 + 35_000]);
+    });
+
+    it("a thrown pass counts as a failed pass for the back-off: thrown, then done with a failure -> 20 s, not 10 s", () => {
+      const u = unit();
+      u.w.passStarting();
+      u.w.passEnded(null);
+      u.w.passStarting();
+      u.w.passEnded({ outcome: "done", done: 0, failed: 1 });
+      u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after a throw", I1);
+      u.clock.t += 10_000;
+      u.w.tick();
+      expect(u.kicks.n).toBe(0);
+      u.clock.t += 10_000;
+      u.w.tick();
+      expect(u.kicks.n).toBe(1);
     });
 
     it("database not ready: the look reads nothing and does not kick", () => {

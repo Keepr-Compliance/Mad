@@ -120,6 +120,7 @@ export class CloudSyncService {
     deps.identity.onCleared(() => {
       this.signedOutAtEpoch = deps.identity.epoch;
       this.todoWatcher?.stop();
+      this.todoWatcher?.forgetLastPass();
     });
   }
 

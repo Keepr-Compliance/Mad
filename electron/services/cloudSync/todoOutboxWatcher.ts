@@ -85,6 +85,14 @@ export class TodoOutboxWatcher {
     this.handle = null;
   }
 
+  /** Sign-out: forget the last pass and the mark, so the next user gets no kick until their own pass ends done. */
+  forgetLastPass(): void {
+    this.lastOutcome = null;
+    this.failures = 0;
+    this.lastPassStartMs = null;
+    this.mark = null;
+  }
+
   /** Called by the service right before a pass starts (never for a kick that only queues one). */
   passStarting(): void {
     this.lastPassStartMs = this.deps.now().getTime();
@@ -122,6 +130,9 @@ export class TodoOutboxWatcher {
       if (gap === null) return;
       if (this.lastPassStartMs !== null && deps.now().getTime() - this.lastPassStartMs < gap) return;
       if (!this.mark || !isNewer(this.readTop(), this.mark)) return;
+      // Not observed by any test today: a turn-off sets enabled = 0 and empties this user's outbox, and the capture
+      // triggers queue nothing while enabled = 0, so no outbox change can reach these two checks. They become live
+      // when a refused computer stays enabled locally (the next PR adds that state and its control).
       const settings = store.getSettings(deps.db(), deps.projectRef, userId);
       if (!settings || settings.enabled !== 1 || settings.turn_off_owed_at) return;
       deps.kick();
