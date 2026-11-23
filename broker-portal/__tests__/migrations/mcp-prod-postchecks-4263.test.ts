@@ -216,7 +216,9 @@ describe('BACKLOG-4263 production post-checks', () => {
     const pc = read(FILE(v));
     const defined = bodies(MIG.get(v)!);
     const pins = pinned(pc);
-    expect(defined.size).toBeGreaterThan(0);
+    // a schedule-only migration defines no function; its post-check pins the cron job instead
+    if (defined.size === 0) expect(cte(pc, 'job(name, want)').length).toBeGreaterThan(0);
+    else expect(defined.size).toBeGreaterThan(0);
     expect([...pins.keys()].sort()).toEqual([...defined.keys()].sort());
     for (const [name, body] of defined) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
     expect(absent(pc).sort()).toEqual(dropped(MIG.get(v)!).filter((s) => !created(MIG.get(v)!).includes(s)).sort());
@@ -332,7 +334,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     const isReport = (kind: string): boolean => report.includes(kind);
     const fx = cte(pc, 'fx(sig, role, want, kind)');
     const rx = cte(pc, 'rx(name, src, role, want, kind)');
-    expect(fx.length + rx.length).toBeGreaterThan(0);
+    expect(fx.length + rx.length + cte(pc, 'job(name, want)').length).toBeGreaterThan(0);
     for (const [sig, role, , kind] of fx) {
       if (API.includes(role)) expect(`${sig} ${role} ${isReport(kind)}`).toBe(`${sig} ${role} false`);
     }

@@ -44,6 +44,14 @@
     "20261123100000": {
       "file": "supabase/migrations/20261123100000_backlog_4263_one_computer.sql",
       "file_md5": "2d518f0ef92a29b30faab48f648fc702"
+    },
+    "20261123110000": {
+      "file": "supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql",
+      "file_md5": "8d76ccc42e978eddd88b1f02a40a74a2"
+    },
+    "20261123120000": {
+      "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",
+      "file_md5": "5cd6dfc36798f747a7ed620eab3417d2"
     }
   },
   "labels": {
@@ -294,6 +302,44 @@
       "mcp_restore_todo(text,bytea,text,text,text)",
       "mcp_update_todo(text,bytea,text,text,jsonb,text)",
       "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123110000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123120000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
     ]
   },
   "authenticated_callable_mcp_by_stage": {
@@ -386,6 +432,22 @@
       "mcp_list_my_connections()"
     ],
     "20261123100000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()"
+    ],
+    "20261123110000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()"
+    ],
+    "20261123120000": [
       "mcp_authorize_approve(text,bytea,text,bytea)",
       "mcp_authorize_deny(text,bytea,text)",
       "mcp_authorize_view(text,bytea)",
@@ -16796,20 +16858,756 @@
         }
       }
     },
+    "20261123110000": {
+      "file": "postcheck-20261123110000.sql",
+      "counts": {
+        "functions": 6,
+        "functions_absent": 0,
+        "tables_or_sequences": 2,
+        "pre_lane_tables": 0,
+        "columns_added": 0,
+        "constraints": 2,
+        "indexes": 1,
+        "cron_jobs": 0,
+        "ledger_rows": 1,
+        "must_hold": 127,
+        "report_only": 8
+      },
+      "pins": {
+        "function cloud_blob_erase_secret() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "5e1fc753469874c31f5a86a4f80655e6"
+        },
+        "function cloud_blob_erase_secret() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_secret() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function cloud_blob_erase_secret() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_secret() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_secret() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "text"
+        },
+        "function cloud_blob_erase_secret() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_secret() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "3eac70008dafbee6985acb8f5a9e9ba8"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "f4423f812a90172c431f0083805598be"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "2145d36a0cbb3ecffdf6df394d44af42"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "8ef3f7c2277b9c2e1be3e640ba45f676"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_invoke() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_invoke() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "72fe4c0add8be193bab3eb384a40e5b4"
+        },
+        "function cloud_blob_erase_invoke() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_invoke() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_invoke() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_invoke() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_invoke() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "bigint"
+        },
+        "function cloud_blob_erase_invoke() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_invoke() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation cloud_blob_erase_runs owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation cloud_blob_erase_runs grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation cloud_blob_erase_runs force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation cloud_blob_erase_runs triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "id uuid not null, started_at timestamp with time zone not null, ended_at timestamp with time zone, mode text not null, outcome text not null, counts jsonb not null"
+        },
+        "relation cloud_blob_erase_leases kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation cloud_blob_erase_leases owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation cloud_blob_erase_leases grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation cloud_blob_erase_leases force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation cloud_blob_erase_leases triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "blob_id uuid not null, run_id uuid not null, leased_until timestamp with time zone not null"
+        },
+        "constraint cloud_blob_erase_runs.cloud_blob_erase_runs_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (id)"
+        },
+        "constraint cloud_blob_erase_leases.cloud_blob_erase_leases_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (blob_id)"
+        },
+        "index cloud_blob_erase_runs_started_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "cloud_blob_erase_runs unique=false (started_at) partial=false"
+        },
+        "ledger row 20261123110000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "anon-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "anon-callable list",
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+        },
+        "authenticated-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "authenticated-callable list",
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections()"
+        },
+        "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
+          "label": "MUST HOLD",
+          "kind": "internal-prefix sweep",
+          "want": ""
+        }
+      }
+    },
+    "20261123120000": {
+      "file": "postcheck-20261123120000.sql",
+      "counts": {
+        "functions": 0,
+        "functions_absent": 0,
+        "tables_or_sequences": 0,
+        "pre_lane_tables": 0,
+        "columns_added": 0,
+        "constraints": 0,
+        "indexes": 0,
+        "cron_jobs": 1,
+        "ledger_rows": 1,
+        "must_hold": 5,
+        "report_only": 0
+      },
+      "pins": {
+        "cron job cloud-blob-erase": {
+          "label": "MUST HOLD",
+          "kind": "cron job",
+          "want": "23 * * * * | SELECT public.cloud_blob_erase_invoke() | postgres | active | this database"
+        },
+        "ledger row 20261123120000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "anon-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "anon-callable list",
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+        },
+        "authenticated-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "authenticated-callable list",
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections()"
+        },
+        "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
+          "label": "MUST HOLD",
+          "kind": "internal-prefix sweep",
+          "want": ""
+        }
+      }
+    },
     "final-249": {
       "file": "postcheck-final-249.sql",
       "counts": {
-        "functions": 72,
+        "functions": 78,
         "functions_absent": 5,
-        "tables_or_sequences": 10,
+        "tables_or_sequences": 12,
         "pre_lane_tables": 7,
         "columns_added": 50,
-        "constraints": 39,
-        "indexes": 12,
-        "cron_jobs": 2,
-        "ledger_rows": 11,
-        "must_hold": 1418,
-        "report_only": 119
+        "constraints": 41,
+        "indexes": 13,
+        "cron_jobs": 3,
+        "ledger_rows": 13,
+        "must_hold": 1544,
+        "report_only": 127
       },
       "pins": {
         "function _mcp_r_list_all_deals(text,date,date,uuid) exists": {
@@ -22932,6 +23730,516 @@
           "kind": "grants to other roles",
           "want": ""
         },
+        "function cloud_blob_erase_secret() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "5e1fc753469874c31f5a86a4f80655e6"
+        },
+        "function cloud_blob_erase_secret() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_secret() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function cloud_blob_erase_secret() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_secret() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_secret() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "text"
+        },
+        "function cloud_blob_erase_secret() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_secret() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_secret() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_secret() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "3eac70008dafbee6985acb8f5a9e9ba8"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_claim(boolean,integer,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "f4423f812a90172c431f0083805598be"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_finish(uuid,uuid[],jsonb,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "2145d36a0cbb3ecffdf6df394d44af42"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_note(uuid,jsonb,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "8ef3f7c2277b9c2e1be3e640ba45f676"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_scrub(uuid,uuid,boolean,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function cloud_blob_erase_invoke() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function cloud_blob_erase_invoke() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "72fe4c0add8be193bab3eb384a40e5b4"
+        },
+        "function cloud_blob_erase_invoke() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function cloud_blob_erase_invoke() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function cloud_blob_erase_invoke() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function cloud_blob_erase_invoke() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function cloud_blob_erase_invoke() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "bigint"
+        },
+        "function cloud_blob_erase_invoke() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function cloud_blob_erase_invoke() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function cloud_blob_erase_invoke() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
         "function set_my_cloud_autosave(uuid,boolean,integer) exists": {
           "label": "MUST HOLD",
           "kind": "function exists",
@@ -23586,6 +24894,136 @@
           "label": "MUST HOLD",
           "kind": "relation columns",
           "want": "id uuid not null, user_id uuid not null, move_id uuid not null, moved_at timestamp with time zone not null, status text not null, attempts smallint not null, lease_until timestamp with time zone, sent_at timestamp with time zone, last_error text"
+        },
+        "relation cloud_blob_erase_runs kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation cloud_blob_erase_runs owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation cloud_blob_erase_runs grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation cloud_blob_erase_runs force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation cloud_blob_erase_runs triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation cloud_blob_erase_runs columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "id uuid not null, started_at timestamp with time zone not null, ended_at timestamp with time zone, mode text not null, outcome text not null, counts jsonb not null"
+        },
+        "relation cloud_blob_erase_leases kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation cloud_blob_erase_leases owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation cloud_blob_erase_leases grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation cloud_blob_erase_leases force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation cloud_blob_erase_leases triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation cloud_blob_erase_leases columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "blob_id uuid not null, run_id uuid not null, leased_until timestamp with time zone not null"
         },
         "table mcp_call_log grants PUBLIC": {
           "label": "MUST HOLD",
@@ -24342,6 +25780,16 @@
           "kind": "check definition text",
           "want": "CHECK (((last_error IS NULL) OR (char_length(last_error) <= 40)))"
         },
+        "constraint cloud_blob_erase_runs.cloud_blob_erase_runs_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (id)"
+        },
+        "constraint cloud_blob_erase_leases.cloud_blob_erase_leases_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (blob_id)"
+        },
         "index cloud_deals_change_seq_uq": {
           "label": "MUST HOLD",
           "kind": "index",
@@ -24417,6 +25865,11 @@
           "kind": "index",
           "want": "cloud_computer_move_notices unique=false (move_id) partial=false"
         },
+        "index cloud_blob_erase_runs_started_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "cloud_blob_erase_runs unique=false (started_at) partial=false"
+        },
         "cron job cloud-todo-purge": {
           "label": "MUST HOLD",
           "kind": "cron job",
@@ -24426,6 +25879,11 @@
           "label": "MUST HOLD",
           "kind": "cron job",
           "want": "53 3 * * * | SELECT public._mcp_prune_unused_clients() | postgres | active | this database"
+        },
+        "cron job cloud-blob-erase": {
+          "label": "MUST HOLD",
+          "kind": "cron job",
+          "want": "23 * * * * | SELECT public.cloud_blob_erase_invoke() | postgres | active | this database"
         },
         "ledger row 20261118100000": {
           "label": "MUST HOLD",
@@ -24478,6 +25936,16 @@
           "want": "true"
         },
         "ledger row 20261123100000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "ledger row 20261123110000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "ledger row 20261123120000": {
           "label": "MUST HOLD",
           "kind": "ledger row",
           "want": "true"
@@ -24544,6 +26012,16 @@
         "anon-callable mcp_ functions"
       ],
       "20261123100000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
         "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
@@ -24631,6 +26109,38 @@
         "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
         "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
+        "function cloud_upsert_deal(uuid,jsonb) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function set_my_cloud_autosave(uuid,boolean,integer) exists",
+        "function cloud_upsert_parties(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_mark_deal_synced(uuid,uuid,uuid) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
+        "function cloud_upsert_deal(uuid,jsonb) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function set_my_cloud_autosave(uuid,boolean,integer) exists",
+        "function cloud_upsert_parties(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_mark_deal_synced(uuid,uuid,uuid) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118120000": {
@@ -24656,6 +26166,14 @@
         "anon-callable mcp_ functions"
       ],
       "20261123100000": [
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
         "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
         "anon-callable mcp_ functions"
       ]
@@ -24693,6 +26211,20 @@
         "function mcp_authorize_view(text,bytea) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118140000": {
@@ -24713,6 +26245,12 @@
       ],
       "20261123100000": [
         "anon-callable mcp_ functions"
+      ],
+      "20261123110000": [
+        "anon-callable mcp_ functions"
+      ],
+      "20261123120000": [
+        "anon-callable mcp_ functions"
       ]
     },
     "20261118150000": {},
@@ -24720,7 +26258,9 @@
     "20261118170000": {},
     "20261118180000": {},
     "20261118190000": {},
-    "20261123100000": {}
+    "20261123100000": {},
+    "20261123110000": {},
+    "20261123120000": {}
   },
   "expected_at_final_state": {
     "20261118100000": [
@@ -24797,7 +26337,9 @@
     "20261118170000": "ok",
     "20261118180000": "ok",
     "20261118190000": "ok",
-    "20261123100000": "ok"
+    "20261123100000": "ok",
+    "20261123110000": "ok",
+    "20261123120000": "ok"
   },
   "report_only_expected_on_keepr_test": {
     "final": [
@@ -24835,6 +26377,8 @@
     "20261123100000": [
       "table cloud_autosave_settings grants service_role"
     ],
+    "20261123110000": [],
+    "20261123120000": [],
     "final-249": [
       "table cloud_autosave_settings grants service_role",
       "table cloud_deal_checklist_items grants service_role",
