@@ -51,6 +51,7 @@ function makeDeps(opts: {
   scrub?: (owner: string, call: number) => unknown;
   scrubStatusFor?: string;
   clockStep?: number;
+  secret?: () => Response;
 } = {}) {
   const calls: Call[] = [];
   const logs: string[] = [];
@@ -67,7 +68,7 @@ function makeDeps(opts: {
     const body = typeof init?.body === 'string' ? init.body : '';
     calls.push({ url, method: init?.method ?? 'GET', body });
     const ok = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
-    if (url.endsWith('/rpc/cloud_blob_erase_secret')) return ok(SECRET);
+    if (url.endsWith('/rpc/cloud_blob_erase_secret')) return opts.secret ? opts.secret() : ok(SECRET);
     if (url.endsWith('/rpc/cloud_blob_erase_claim')) {
       if (opts.claimStatus) return ok({ message: `BODYMARKER ${blob(1).path}` }, opts.claimStatus);
       return ok(opts.claim ?? CLAIM);
@@ -130,6 +131,23 @@ describe('authentication', () => {
       const res = await handleRequest(post({}, secret), deps);
       expect(res.status).toBe(401);
       expect(calls.some((c) => c.url.includes('cloud_blob_erase_claim'))).toBe(false);
+    }
+  });
+  it('refuses (401, no claim) when the secret cannot be loaded: lookup error, null, empty or under 32 characters', async () => {
+    const cases: Array<[string, () => Response]> = [
+      ['lookup 500', () => new Response(JSON.stringify({ message: 'x' }), { status: 500 })],
+      ['null', () => new Response('null', { status: 200 })],
+      ['empty', () => new Response(JSON.stringify(''), { status: 200 })],
+      ['31 characters', () => new Response(JSON.stringify('e'.repeat(31)), { status: 200 })],
+    ];
+    for (const [label, secret] of cases) {
+      for (const presented of [SECRET, 'e'.repeat(31), 'anything']) {
+        resetWebhookSecretCache();
+        const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, secret });
+        const res = await handleRequest(post({}, presented), deps);
+        expect(`${label} ${presented.length}: ${res.status}`).toBe(`${label} ${presented.length}: 401`);
+        expect(calls.some((c) => c.url.includes('cloud_blob_erase_claim'))).toBe(false);
+      }
     }
   });
   it('rejects non-POST', async () => {
