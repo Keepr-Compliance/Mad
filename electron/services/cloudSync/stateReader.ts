@@ -23,6 +23,16 @@ export interface ServerState {
   reasonClass: ReasonClass;
   acceptedAt: string | null;
   currentNoticeVersion: number | null;
+  /**
+   * BACKLOG-4263 P2: the account's active computer (migration 20261123100000, marker STATE:active, :682), or null.
+   */
+  activeInstallId: string | null;
+  /**
+   * BACKLOG-4263 P2: the release switches (marker STATE:switches, :683-685). Null when the answer has no `switches`
+   * key: a server without migration 20261123100000, which has no one-computer rule (S1's state function always
+   * sends the key). The desktop then claims nothing and turns off with the 3-argument call.
+   */
+  switches: { oneComputer: boolean; messagesUpload: boolean } | null;
 }
 
 export type StateRead = { kind: "state"; state: ServerState } | { kind: "unknown"; code: string };
@@ -35,6 +45,15 @@ export function classifyReason(entitled: boolean, reason: string | null): Reason
   return "unknown_reason";
 }
 
+/**
+ * BACKLOG-4263 P2: another computer is the account's active one and the rule is on, so this computer sends nothing.
+ * A null active computer is not "another" here: the desktop claims it first (runner), and the server refuses every
+ * write until it does.
+ */
+export function otherComputerActive(state: ServerState, installId: string | null): boolean {
+  return state.switches?.oneComputer === true && state.activeInstallId !== null && state.activeInstallId !== installId;
+}
+
 export function parseState(result: CallResult): StateRead {
   if (result.kind !== "ok") return { kind: "unknown", code: result.code };
   const b = result.body;
@@ -42,6 +61,7 @@ export function parseState(result: CallResult): StateRead {
   const entitled = b.entitled === true;
   const reason = typeof b.reason === "string" ? b.reason : null;
   const settings = (b.settings && typeof b.settings === "object" ? b.settings : {}) as Record<string, unknown>;
+  const sw = b.switches && typeof b.switches === "object" && !Array.isArray(b.switches) ? (b.switches as Record<string, unknown>) : null;
   return {
     kind: "state",
     state: {
@@ -52,6 +72,8 @@ export function parseState(result: CallResult): StateRead {
       reasonClass: classifyReason(entitled, reason),
       acceptedAt: typeof settings.accepted_at === "string" ? settings.accepted_at : null,
       currentNoticeVersion: typeof b.current_notice_version === "number" ? b.current_notice_version : null,
+      activeInstallId: typeof b.active_install_id === "string" ? b.active_install_id : null,
+      switches: sw ? { oneComputer: sw.one_computer === true, messagesUpload: sw.messages_upload === true } : null,
     },
   };
 }

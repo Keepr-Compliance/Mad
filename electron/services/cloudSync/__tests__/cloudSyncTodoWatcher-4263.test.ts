@@ -388,6 +388,54 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(h.watchKicks()).toEqual([]);
     });
 
+    it("W-4b refused on this computer (another computer is the account's active one): no kick right after the refusal, and the computer stays enabled here", async () => {
+      const h = await setup();
+      h.e.server.oneComputer = true;
+      h.e.server.activeInstall = fid(98, 1); // another computer
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("refused", I1);
+      h.fireTimer();
+      await h.settle();
+      expect(h.e.service.runner!.lastSummary!.outcome).toBe("other_computer");
+      expect(h.db.prepare("SELECT enabled FROM cloud_sync_settings WHERE user_id = ?").get(USER_A)).toEqual({ enabled: 1 });
+      expect(h.activeWatchTimers()).toBe(1);
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("refused again", I1);
+      await h.advanceTo(h.t0 + 120_000);
+      expect(h.watchKicks()).toEqual([]);
+      expect(outbox(h.db).length).toBeGreaterThan(0);
+    });
+
+    it("W-4b after an app restart on a refused computer: the first pass is refused and no edit is kicked", async () => {
+      const h = await setup();
+      h.e.server.oneComputer = true;
+      h.e.server.activeInstall = fid(98, 1);
+      h.e.service.stop();
+      // A new service over the same database and server: what the app builds at its next start.
+      const e2 = makeEngine(h.db, { server: h.e.server });
+      const clock = { t: h.t0 + 300_000 };
+      Object.defineProperty(e2.clock, "now", { get: () => new Date(clock.t), set: () => undefined, configurable: true });
+      const kicks: number[] = [];
+      const realKick = e2.service.kick.bind(e2.service);
+      let watching = false;
+      e2.service.kick = () => {
+        if (watching) kicks.push(clock.t);
+        return realKick();
+      };
+      await startAndPass(e2);
+      await flush();
+      expect(e2.service.runner!.lastSummary!.outcome).toBe("other_computer");
+      expect(e2.watchTimers.filter((w) => !w.cleared)).toHaveLength(1);
+      h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("after restart", I1);
+      for (let i = 1; i <= 24; i++) {
+        clock.t += LOOK_MS;
+        watching = true;
+        for (const w of e2.watchTimers) if (!w.cleared) w.fn();
+        watching = false;
+        await e2.service.runner!.whenIdle();
+        await flush();
+      }
+      expect(kicks).toEqual([]);
+    });
+
     it("W-4 sweep: of every pass outcome that exists today, only done lets the watcher kick (a thrown pass does not)", () => {
       const expected: Record<PassOutcome, number> = {
         done: 1,
@@ -405,6 +453,8 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
         unknown_state: 0,
         stopped: 0,
         install_removed: 0,
+        // BACKLOG-4263 P2: a computer that is not the account's active one.
+        other_computer: 0,
       };
       const got: Record<string, number> = {};
       for (const outcome of [...Object.keys(expected), "threw"] as Array<PassOutcome | "threw">) {
@@ -559,7 +609,8 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
       u.w.tick();
       expect(u.kicks.n).toBe(1);
-      expect(u.prepared.length).toBeGreaterThanOrEqual(4);
+      // BACKLOG-4263 P2 removed the look's settings read (see todoOutboxWatcher.ts): pass start, two outbox reads.
+      expect(u.prepared.length).toBeGreaterThanOrEqual(3);
       for (const sql of u.prepared) expect(sql.trimStart().slice(0, 6).toUpperCase()).toBe("SELECT");
     });
 

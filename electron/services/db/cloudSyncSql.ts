@@ -396,3 +396,48 @@ ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO NOTHING`;
 
 /** R1: a row that needs the dirty-mark triggers (Keepr Cloud on, or a turn-off still owed). */
 export const CLOUD_SYNC_ACTIVE_SQL = `SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 OR turn_off_owed_at IS NOT NULL LIMIT 1`;
+
+// ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
+//
+// One local marker row in cloud_sync_state (no local migration: `entity` has no CHECK and `transaction_id` no
+// foreign key, schema.sql CREATE TABLE cloud_sync_state). It uses entity 'switch' and transaction_id '', which no
+// deal, party or todo reader matches (they filter on entity 'deal' / 'party' or on a real transaction id), and it
+// lives only while Keepr Cloud is on here (a turn-off's DELETE_STATE_FOR_USER_SQL removes it).
+//   'switch' / 'move_pending'      written before cloud_claim_install(p_replace = true); deleted by the move's local
+//                                  transaction, or when the server names another computer (plan §13.1).
+//                                  last_status 'reclaim': this computer's online copy had been removed ("Delete
+//                                  them" on the active computer), so the move forgets every record (reclaim path).
+
+export const SWITCH_ENTITY = "switch";
+export const MOVE_PENDING_ID = "move_pending";
+
+/** Writes one marker row of this user (or refreshes it): project_ref, owner, local_id, last_status, updated_at. */
+export const UPSERT_SWITCH_MARKER_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, last_status, updated_at)
+VALUES (?, ?, '${SWITCH_ENTITY}', ?, '', ?, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
+  last_status = excluded.last_status, updated_at = excluded.updated_at`;
+
+export const SELECT_SWITCH_MARKER_SQL = `SELECT last_status FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = '${SWITCH_ENTITY}' AND local_id = ?`;
+
+export const DELETE_SWITCH_MARKER_SQL = `DELETE FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ? AND entity = '${SWITCH_ENTITY}' AND local_id = ?`;
+
+/**
+ * BACKLOG-4263 P2 (SR MF-2): the notice was re-accepted on this computer while another computer was active (the
+ * claim refused, so nothing was enabled). The acceptance was made here, so this computer records it; otherwise the
+ * first pass after a later move reads the new server value as "turned off and on elsewhere" and resets everything.
+ * Only for a computer that is on here.
+ */
+export const RECORD_ACCEPTED_AT_SQL = `UPDATE cloud_sync_settings SET accepted_at = ?
+ WHERE project_ref = ? AND user_id = ? AND enabled = 1`;
+
+/**
+ * Plan §14 D1: after a move, only the records of what was saved online that the erase job may have scrubbed (emails,
+ * texts and files) go, plus the move marker. Deal and party records and the messages_upload sentinel are kept, so
+ * todo changes keep their deal's online id and the History and Removed screens keep working.
+ */
+export const DELETE_STATE_AFTER_MOVE_SQL = `DELETE FROM cloud_sync_state
+ WHERE project_ref = ? AND owner_user_id = ?
+   AND (entity IN ('message', 'file') OR (entity = '${SWITCH_ENTITY}' AND local_id = '${MOVE_PENDING_ID}'))`;

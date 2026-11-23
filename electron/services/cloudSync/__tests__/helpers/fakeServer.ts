@@ -90,6 +90,30 @@
  *                                unchanged when the hash is equal, restored:true, children renumbered (Q4, Q4b).
  *   cloud_todo_restore of a deal (another side's restore): status restored; the next pull carries the deal row
  *                                (removed_at null, local_id = the desktop's) and its live children renumbered (Q5, Q5b).
+ *
+ * BACKLOG-4263 P2 — one computer per account, transcribed from the merged (not yet applied anywhere) migration
+ * supabase/migrations/20261123100000_backlog_4263_one_computer.sql:
+ *   get_my_cloud_autosave_state :672-686  adds `active_install_id` (:682, STATE:active) and `switches`
+ *                                {one_computer, messages_upload} (:683-685, STATE:switches; both false when the
+ *                                switch row is absent). `s1 = false` here gives the answer of a server WITHOUT the
+ *                                migration (no such keys, cloud_claim_install missing), for the version-skew controls.
+ *   _cloud_install_inactive :146-152      true when one_computer AND active_install_id IS DISTINCT FROM the install
+ *                                (a NULL active computer refuses too).
+ *   writers' gate GATE:active             right after each install_removed gate: {ok:false, error:'computer_not_active'}
+ *                                push :170-172, deal :234, parties :302, mark_synced :570, tombstone :604-606 (the
+ *                                fake has no message, file or blob functions; P5/P6 add them).
+ *   set_my_cloud_autosave :691-758        4 arguments (p_source_install_id DEFAULT NULL); off branch, while the switch is
+ *                                on, a computer is active and the caller is licensed: no install -> {success:false,
+ *                                error:'install_required'} (:721-723), another install -> {success:false, error:
+ *                                'computer_not_active'} (:724-727); a turn-off clears the active computer (:732).
+ *   cloud_claim_install :827-869          not_entitled (:838-840); same -> {ok, active} (:841-843); NULL ->
+ *                                {ok, active} (:844-848); switch on and not replace -> {ok:false, error:
+ *                                'computer_not_active', active_since} (:850-852); switch on and a move in the last
+ *                                minute -> {ok:false, error:'busy'} (:853-856); else the move: active = caller, the
+ *                                caller's removed-install row deleted when replace (:859-862), a move row only while
+ *                                the switch is on (:863-867) -> {ok, active, replaced:<old id>} (:868).
+ *   The fake stores no message, file or blob rows, so the erase job's scrub of a non-active computer's emails, texts
+ *   and files (P3 condition 6) is not modelled; P5/P6 add those rows.
  */
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
@@ -309,6 +333,21 @@ export class FakeServer {
   /** PR-4b: the owner's feed head (cloud_todo_feed_head: last_seq, forgotten_through_seq, forgotten_at). */
   feed = new Map<string, { last: number; forgotThrough: number; forgotAt: number }>();
   events: FakeEvent[] = [];
+  /** BACKLOG-4263 P2: the server carries migration 20261123100000 (state keys, claim, 4-argument turn-off). */
+  s1 = true;
+  /** cloud_release_switches.one_computer / messages_upload. */
+  oneComputer = false;
+  messagesUpload = false;
+  /** cloud_autosave_settings.active_install_id / active_since (ISO). */
+  activeInstall: string | null = null;
+  activeSince: string | null = null;
+  /** cloud_computer_moves rows (only while the switch is on). */
+  moves: Array<{ from: string | null; to: string; at: number }> = [];
+
+  /** _cloud_install_inactive (:146-152). */
+  installInactive(install: unknown): boolean {
+    return this.s1 && this.oneComputer && this.activeInstall !== install;
+  }
 
   /** _cloud_todo_take_seq: the owner's next number. */
   nextSeq(owner: string): number {
@@ -342,6 +381,11 @@ export class FakeServer {
     // Dropped by migration 20261118120000 (BACKLOG-4263 PR-4a). PostgREST's answer for a function that does
     // not exist: HTTP 404, code PGRST202 (UNOBSERVED on the test database; PostgREST error reference).
     if (DROPPED_FUNCTIONS.includes(fn)) return { data: null, error: { code: "PGRST202", status: 404 }, status: 404 };
+    // BACKLOG-4263 P2: a server without migration 20261123100000 has no claim and no 4-argument turn-off (the
+    // same PostgREST answer as above, UNOBSERVED).
+    if (!this.s1 && (fn === "cloud_claim_install" || (fn === "set_my_cloud_autosave" && "p_source_install_id" in args))) {
+      return { data: null, error: { code: "PGRST202", status: 404 }, status: 404 };
+    }
     return { data: this.handle(fn, args), error: null, status: 200 };
   };
 
@@ -370,6 +414,9 @@ export class FakeServer {
         reason,
         settings: { enabled: this.enabled, notice_version: this.noticeVersion, accepted_at: this.acceptedAt },
         current_notice_version: this.currentNoticeVersion,
+        ...(this.s1
+          ? { active_install_id: this.activeInstall, switches: { one_computer: this.oneComputer, messages_upload: this.messagesUpload } }
+          : {}),
         storage: { used_bytes: 0, quota_bytes: null },
       };
     }
@@ -386,6 +433,13 @@ export class FakeServer {
           this.acceptedAt = "2026-11-14T10:00:00.000Z";
           return { success: true, enabled: true };
         }
+        // P2 (:716-728): only the active computer turns off while the switch is on and the caller is licensed.
+        if (this.s1 && this.oneComputer && this.activeInstall !== null && this.licensed) {
+          if (a.p_source_install_id === undefined || a.p_source_install_id === null) return { success: false, error: "install_required" };
+          if (a.p_source_install_id !== this.activeInstall) return { success: false, error: "computer_not_active" };
+        }
+        this.activeInstall = null;
+        this.activeSince = null;
         this.enabled = false;
         this.todos = this.todos.filter((t) => t.owner !== uid);
         for (const k of [...this.todoLedger.keys()]) if (k.startsWith(`${uid}|`)) this.todoLedger.delete(k);
@@ -398,10 +452,32 @@ export class FakeServer {
         this.children = this.children.filter((c) => c.owner !== uid);
         return { success: true, enabled: false, deleted: { deals: n }, blobs_fenced: 0, ai_apps_disconnected: null };
       }
+      case "cloud_claim_install": {
+        // :832-868
+        if (!a.p_source_install_id || typeof a.p_replace !== "boolean") return { ok: false, error: "invalid_input" };
+        if (!this.entitled()) return { ok: false, error: "not_entitled" };
+        const me = a.p_source_install_id as string;
+        const iso = new Date(this.serverNow()).toISOString();
+        if (this.activeInstall === me) return { ok: true, active: true };
+        if (this.activeInstall === null) {
+          this.activeInstall = me;
+          this.activeSince = iso;
+          return { ok: true, active: true };
+        }
+        if (this.oneComputer && !a.p_replace) return { ok: false, error: "computer_not_active", active_since: this.activeSince };
+        if (this.oneComputer && this.moves.some((m) => m.at > this.serverNow() - 60_000)) return { ok: false, error: "busy" };
+        const old = this.activeInstall;
+        this.activeInstall = me;
+        this.activeSince = iso;
+        if (a.p_replace) this.removedInstalls.delete(`${uid}|${me}`);
+        if (this.oneComputer) this.moves.push({ from: old, to: me, at: this.serverNow() });
+        return { ok: true, active: true, replaced: old };
+      }
       case "cloud_upsert_deal": {
         if (!this.entitled()) return { ok: false, error: "not_entitled" };
         const p = a.p_deal as Record<string, JsonValue>;
         if (this.removedInstalls.has(`${uid}|${p.source_install_id}`)) return { ok: false, error: "install_removed" };
+        if (this.installInactive(p.source_install_id)) return { ok: false, error: "computer_not_active" };
         const key = (d: FakeDeal) => d.owner === uid && d.install === p.source_install_id && d.localId === p.local_id;
         let d = this.deals.find(key);
         let status = "applied";
@@ -453,6 +529,7 @@ export class FakeServer {
       }
       case "cloud_mark_deal_synced": {
         if (!this.entitled()) return { ok: false, error: "not_entitled" };
+        if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" };
         const d = this.deals.find((x) => x.id === a.p_cloud_deal_id && x.owner === uid && x.install === a.p_source_install_id);
         if (!d) return { ok: false, error: "not_found" };
         d.fullSyncAt = "2026-11-14T10:00:01.000Z";
@@ -464,6 +541,7 @@ export class FakeServer {
       case "cloud_upsert_checklists":
       case "cloud_upsert_checklist_items": {
         if (!this.entitled()) return { ok: false, error: "not_entitled" };
+        if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" };
         const kind: FakeKind = fn === "cloud_upsert_parties" ? "party" : fn === "cloud_upsert_checklists" ? "checklist" : "checklist_item";
         const deal = this.deals.find((d) => d.id === a.p_cloud_deal_id && d.owner === uid && d.install === a.p_source_install_id);
         if (!deal) return { ok: false, error: "not_found" };
@@ -502,6 +580,7 @@ export class FakeServer {
         return { ok: true, results: out };
       }
       case "cloud_tombstone": {
+        if (this.installInactive(a.p_source_install_id)) return { ok: false, error: "computer_not_active" };
         const out: JsonValue[] = [];
         for (const id of a.p_cloud_ids as string[]) {
           const c = this.children.find((x) => x.id === id && x.owner === uid && x.kind === a.p_kind);
@@ -699,6 +778,7 @@ export class FakeServer {
     const install = a.p_source_install_id as string;
     if (!install) return { ok: false, error: "invalid_input" };
     if (this.removedInstalls.has(`${uid}|${install}`)) return { ok: false, error: "install_removed" };
+    if (this.installInactive(install)) return { ok: false, error: "computer_not_active" };
     const ops = a.p_ops as Array<Record<string, JsonValue>>;
     if (!Array.isArray(ops)) return { ok: false, error: "invalid_input" };
     if (ops.length > 200 || JSON.stringify(ops).length > 1048576) return { ok: false, error: "batch_too_large" };

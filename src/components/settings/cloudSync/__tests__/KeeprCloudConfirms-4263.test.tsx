@@ -1,6 +1,6 @@
 /**
- * BACKLOG-4263 — the five Settings › Keepr Cloud confirms (Turn on, Turn off, Delete these online deals in its two
- * branches, Forget, Delete for good) rendered through the REAL SettingsLayer. Only Settings itself is a stub: it
+ * BACKLOG-4263 — the Settings › Keepr Cloud confirms (Turn on, Turn off, Delete these online deals in its two
+ * branches, Forget, Use this computer instead (P2), Delete for good) rendered through the REAL SettingsLayer. Only Settings itself is a stub: it
  * renders the real KeeprCloudSettings section with a fake `cloud`, so the Settings layer's Escape handler and its
  * nested-overlay lookup are the shipped ones.
  *
@@ -93,6 +93,7 @@ function fakeCloud(view: CloudSyncView, busy = false): UseKeeprCloudSettings {
     deleteOnlineNotHere: jest.fn().mockResolvedValue(true),
     deleteOldInstalls: jest.fn().mockResolvedValue(true),
     reclaimInstall: jest.fn().mockResolvedValue(true),
+    useThisComputer: jest.fn().mockResolvedValue(true),
   };
 }
 
@@ -113,7 +114,7 @@ function fakeApp(closeSettings: jest.Mock): AppStateMachine {
 
 type Handler = keyof Pick<
   UseKeeprCloudSettings,
-  "turnOn" | "turnOff" | "deleteOnlineNotHere" | "deleteOldInstalls" | "forgetOtherProject"
+  "turnOn" | "turnOff" | "deleteOnlineNotHere" | "deleteOldInstalls" | "forgetOtherProject" | "useThisComputer"
 >;
 
 interface Case {
@@ -180,6 +181,16 @@ const CASES: Case[] = [
     args: [],
   },
   {
+    // BACKLOG-4263 P2: a computer that is not the account's active one.
+    name: "Use this computer instead",
+    view: { ...ON, status: "other_computer" },
+    open: () => fireEvent.click(within(screen.getByTestId("cloud-other-computer")).getByRole("button", { name: C.useThisComputer })),
+    title: C.moveConfirmTitle,
+    confirmLabel: C.moveConfirmButton,
+    handler: "useThisComputer",
+    args: [],
+  },
+  {
     name: "Delete for good",
     view: ON,
     open: () => fireEvent.click(within(screen.getByTestId("cloud-removed-deal-1")).getByRole("button", { name: C.deleteForGood })),
@@ -191,7 +202,7 @@ const CASES: Case[] = [
   },
 ];
 
-const ALL_HANDLERS: Handler[] = ["turnOn", "turnOff", "deleteOnlineNotHere", "deleteOldInstalls", "forgetOtherProject"];
+const ALL_HANDLERS: Handler[] = ["turnOn", "turnOff", "deleteOnlineNotHere", "deleteOldInstalls", "forgetOtherProject", "useThisComputer"];
 
 async function renderCase(c: Case) {
   svc.listRemovedDeals.mockResolvedValue(c.removedHere ? [HERE] : []);

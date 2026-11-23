@@ -47,6 +47,7 @@ export const CLOUD_SYNC_CHANNELS = [
   "cloud-sync:delete-online-not-here",
   "cloud-sync:delete-old-installs",
   "cloud-sync:reclaim-install",
+  "cloud-sync:use-this-computer",
   "cloud-sync:list-removed-deals",
   "cloud-sync:restore-deal",
   "cloud-sync:delete-deal-for-good",
@@ -125,6 +126,7 @@ export function registerCloudSyncHandlers(service: CloudSyncService): void {
   ipcMain.handle("cloud-sync:delete-online-not-here", () => service.deleteOnlineNotHere());
   ipcMain.handle("cloud-sync:delete-old-installs", () => service.deleteOldInstalls());
   ipcMain.handle("cloud-sync:reclaim-install", () => service.reclaimInstall());
+  ipcMain.handle("cloud-sync:use-this-computer", () => service.useThisComputer());
   // BACKLOG-4263 PR-4c: deals deleted on this computer, restorable 30 days (Settings › Keepr Cloud › Removed, PR-6).
   ipcMain.handle("cloud-sync:list-removed-deals", () => service.listRemovedDeals());
   ipcMain.handle("cloud-sync:restore-deal", (_event, args: unknown) => {
