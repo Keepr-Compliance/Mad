@@ -348,13 +348,6 @@ export function scanTodosAllEnabled(db: SqlDb, now: Date): number {
 
 // ---------------------------------------------------------------- turn-on, the one-time step (N1a), a lost deal
 
-/**
- * A fresh start for this user's todos, in the caller's transaction: clear every per-user todo row and the
- * old one-way records of checklists and items (N3), seed this computer's counter (N1b) and record that a full
- * pull is owed (D6). PR-4b order (PR-4a review C): no scan here. The pass pushes what is waiting, runs the full
- * pull (which records what the cloud already holds in the shadow), raises the counter, and only then scans
- * (cloudSyncTodoPullDb.applyTodoPage, last page). Returns 0 (no op is written here).
- */
 /** A removal op waiting in the outbox (BACKLOG-4263 P2, SR N1). */
 export interface PendingTodoRemoval {
   entity: string;
@@ -391,6 +384,13 @@ export function requeueTodoRemovals(db: SqlDb, projectRef: string, userId: strin
   for (const r of removals) removal.run(projectRef, userId, r.entity, r.local_id, r.transaction_id, r.edited_at ?? now.toISOString());
 }
 
+/**
+ * A fresh start for this user's todos, in the caller's transaction: clear every per-user todo row and the
+ * old one-way records of checklists and items (N3), seed this computer's counter (N1b) and record that a full
+ * pull is owed (D6). PR-4b order (PR-4a review C): no scan here. The pass pushes what is waiting, runs the full
+ * pull (which records what the cloud already holds in the shadow), raises the counter, and only then scans
+ * (cloudSyncTodoPullDb.applyTodoPage, last page). Returns 0 (no op is written here).
+ */
 export function startTodoTracking(db: SqlDb, projectRef: string, userId: string, now: Date): number {
   if (!hasTable(db, "cloud_sync_todo_outbox")) return 0;
   return db.transaction(() => {
