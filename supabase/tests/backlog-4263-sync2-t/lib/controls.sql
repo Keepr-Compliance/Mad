@@ -332,17 +332,17 @@ DECLARE v jsonb := '{}';
                        'public.mcp_message_access(text,bytea,text)', 'public.mcp_list_my_message_reads(text,integer)', 'public._mcp_prune_message_reads()'];
 BEGIN
   v := v || jsonb_build_object(
-    'anon', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('anon', s, 'EXECUTE'))
+    'anon', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('anon', pg_catalog.to_regprocedure(s), 'EXECUTE'))
             = ARRAY['public.mcp_get_message(text,bytea,text,text,integer)', 'public.mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text)',
                     'public.mcp_message_access(text,bytea,text)'],
-    'authenticated', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('authenticated', s, 'EXECUTE'))
+    'authenticated', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('authenticated', pg_catalog.to_regprocedure(s), 'EXECUTE'))
             = ARRAY['public.mcp_list_my_message_reads(text,integer)'],
-    'service_role', NOT EXISTS (SELECT 1 FROM unnest(mine) s WHERE has_function_privilege('service_role', s, 'EXECUTE')),
+    'service_role', NOT EXISTS (SELECT 1 FROM unnest(mine) s WHERE has_function_privilege('service_role', pg_catalog.to_regprocedure(s), 'EXECUTE')),
     'public', NOT EXISTS (SELECT 1 FROM unnest(mine) s, pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
-                           WHERE p.oid = to_regprocedure(s) AND a.grantee = 0),
+                           WHERE p.oid = to_regprocedure(s) AND a.grantee = 0::oid),
     'readers', (SELECT bool_and(public._mcp_reader_ok(to_regprocedure(s))) FROM unnest(mine[3:4]) s),
     'table_privs', NOT EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r, unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES']) p
-                                WHERE has_table_privilege(r, 'public.mcp_message_reads', p)),
+                                WHERE has_table_privilege(r::name, 'public.mcp_message_reads'::regclass::oid, p)),
     'rls', (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.mcp_message_reads'::regclass),
     'no_policy', NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.mcp_message_reads'::regclass),
     'fk_only_users', (SELECT array_agg(confrelid::regclass::text) FROM pg_constraint WHERE conrelid = 'public.mcp_message_reads'::regclass AND contype = 'f') = ARRAY['auth.users'],

@@ -39,6 +39,9 @@ LIB = {n: rd(f'{REL}/lib/{n}.sql') for n in ('helpers', 'fixtures', 'controls')}
 _rspec = importlib.util.spec_from_file_location('roles4263t', os.path.join(HERE, 'roles.py'))
 roles = importlib.util.module_from_spec(_rspec)
 _rspec.loader.exec_module(roles)
+_cspec = importlib.util.spec_from_file_location('casts4263t', os.path.join(HERE, 'casts.py'))
+casts = importlib.util.module_from_spec(_cspec)
+_cspec.loader.exec_module(casts)
 _spec = importlib.util.spec_from_file_location('answers4263t', os.path.join(HERE, 'answers.py'))
 answers = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(answers)
@@ -314,17 +317,17 @@ DDL_MUTANTS = [
      'ALTER TABLE public.mcp_message_reads ADD CONSTRAINT t4263_m_conn_fk FOREIGN KEY (connection_id) REFERENCES public.mcp_connections (id) ON DELETE CASCADE NOT VALID',
      "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 't4263_m_conn_fk')", ['c_p9a_log_survives'], 'red', False),
     ('prune_granted_service_role', 'GRANT EXECUTE ON FUNCTION public._mcp_prune_message_reads() TO service_role',
-     "has_function_privilege('service_role', 'public._mcp_prune_message_reads()', 'EXECUTE')", ['c_catalogue'], 'red', False),
+     "has_function_privilege('service_role', pg_catalog.to_regprocedure('public._mcp_prune_message_reads()'), 'EXECUTE')", ['c_catalogue'], 'red', False),
     ('log_table_select_authenticated', 'GRANT SELECT ON TABLE public.mcp_message_reads TO authenticated',
-     "has_table_privilege('authenticated', 'public.mcp_message_reads', 'SELECT')", ['c_catalogue'], 'red', False),
+     "has_table_privilege('authenticated', 'public.mcp_message_reads'::regclass::oid, 'SELECT')", ['c_catalogue'], 'red', False),
     ('reader_granted_anon', 'GRANT EXECUTE ON FUNCTION public._mcp_r_get_message(uuid, integer) TO anon',
-     "has_function_privilege('anon', 'public._mcp_r_get_message(uuid,integer)', 'EXECUTE')", ['c_catalogue'], 'red', True),
+     "has_function_privilege('anon', pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)'), 'EXECUTE')", ['c_catalogue'], 'red', True),
     ('reader_volatile', 'ALTER FUNCTION public._mcp_r_get_message(uuid, integer) VOLATILE',
-     "(SELECT provolatile FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_get_message(uuid,integer)')) = 'v'", ['c_catalogue'], 'red', True),
+     "(SELECT p.provolatile::text FROM pg_catalog.pg_proc p WHERE p.oid = pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)')) = 'v'", ['c_catalogue'], 'red', True),
 ]
 # database-side negative control: a no-op "mutant" checked with reader_granted_anon's proof; it must record
 # applied = false with error 'MUTATION NOT APPLIED IN DB' (the proof can say "not applied"), and the report requires that
-NEG_MUTANTS = [('noop_probe', 'SELECT 1', "has_function_privilege('anon', 'public._mcp_r_get_message(uuid,integer)', 'EXECUTE')")]
+NEG_MUTANTS = [('noop_probe', 'SELECT 1', "has_function_privilege('anon', pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)'), 'EXECUTE')")]
 NEG_IDS = [m[0] for m in NEG_MUTANTS]
 NOT_APPLIED_ERROR = 'MUTATION NOT APPLIED IN DB'
 WANT = {}
@@ -394,7 +397,8 @@ def run_controls(names, var):
 
 
 MUTS = mutants()
-mut_blocks = ''.join(f"""  -- {mid}
+def mut_block(mid, apply_, proof, prim):
+    return f"""  -- {mid}
   BEGIN
     o := '{{}}';
     applied := NULL;
@@ -408,17 +412,28 @@ mut_blocks = ''.join(f"""  -- {mid}
   IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{{}}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
     RAISE EXCEPTION 'MUTANT NOT RESTORED {mid}';
   END IF;
-""" for mid, apply_, proof, prim in MUTS)
+"""
+
+
+mut_blocks = ''.join(mut_block(*m) for m in MUTS)
 FINGERPRINT = f"""-- catalogue fingerprint of what the mutants change: the nine functions (body md5, ACL, volatility, security definer,
--- owner), the read log's ACL, and the constraint names of mcp_message_reads and mcp_call_log
+-- owner), the read log's ACL, and the constraint names of mcp_message_reads and mcp_call_log. Every operand is cast to
+-- text explicitly ("char", boolean, oid, name and aclitem are not text); ACL items are sorted, so their order in the
+-- catalogue array does not change the result; a NULL ACL (default privileges) reads 'acl:default'.
 CREATE FUNCTION pg_temp.fingerprint() RETURNS text LANGUAGE sql STABLE AS $h$
   SELECT md5(concat_ws('|',
-    (SELECT string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text, '') || ':' || p.provolatile
-                       || ':' || p.prosecdef || ':' || p.proowner::regrole::text, ';' ORDER BY p.oid::regprocedure::text)
-       FROM pg_catalog.pg_proc p WHERE p.oid IN (SELECT to_regprocedure(s) FROM unnest(ARRAY[{', '.join("'" + SIGS[f] + "'" for f in FUNCS)}]) s)),
-    (SELECT coalesce(c.relacl::text, '') FROM pg_catalog.pg_class c WHERE c.oid = 'public.mcp_message_reads'::regclass),
-    (SELECT string_agg(k.conname, ',' ORDER BY k.conname) FROM pg_catalog.pg_constraint k
-      WHERE k.conrelid IN ('public.mcp_message_reads'::regclass, 'public.mcp_call_log'::regclass))))
+    (SELECT string_agg(concat_ws(':', p.oid::regprocedure::text, md5(p.prosrc), pa.acl, p.provolatile::text, p.prosecdef::text,
+                                 pg_catalog.pg_get_userbyid(p.proowner)::text), ';' ORDER BY p.oid::regprocedure::text)
+       FROM pg_catalog.pg_proc p
+       CROSS JOIN LATERAL (SELECT CASE WHEN p.proacl IS NULL THEN 'acl:default'
+                                       ELSE coalesce(string_agg(x.item::text, ',' ORDER BY x.item::text), '') END AS acl
+                             FROM unnest(p.proacl) AS x(item)) pa
+      WHERE p.oid IN (SELECT pg_catalog.to_regprocedure(s.sig)::oid FROM unnest(ARRAY[{', '.join("'" + SIGS[f] + "'" for f in FUNCS)}]::text[]) AS s(sig))),
+    (SELECT CASE WHEN c.relacl IS NULL THEN 'acl:default'
+                 ELSE coalesce((SELECT string_agg(x.item::text, ',' ORDER BY x.item::text) FROM unnest(c.relacl) AS x(item)), '') END
+       FROM pg_catalog.pg_class c WHERE c.oid = 'public.mcp_message_reads'::regclass::oid),
+    (SELECT string_agg(k.conname::text, ',' ORDER BY k.conname::text) FROM pg_catalog.pg_constraint k
+      WHERE k.conrelid IN ('public.mcp_message_reads'::regclass::oid, 'public.mcp_call_log'::regclass::oid))))
 $h$;
 """
 
@@ -600,7 +615,62 @@ ANSWERS_REPORT = (f"# answers-report.txt (generated by {REL}/gen.py; do not hand
                   + ''.join(f"not_checkable {f}: {expr}\n" for f, expr in _ans['unchecked'])
                   + ''.join(f"input {md5(rd(x))} {x}\n" for x in _inputs))
 
+# the structure call: every statement the full call runs, except the plain controls pass and 55 of the 57 mutants; the
+# negative control, one function-body mutant (body_not_stripped: its primary control c_strip makes one get_message
+# call on a 40-character message) and one ACL mutant (reader_granted_anon: c_catalogue reads the catalogue only)
+STRUCTURE_MUTANTS = ['noop_probe', 'body_not_stripped', 'reader_granted_anon']
+_blocks = {m[0]: mut_block(*m) for m in MUTS if m[0] in STRUCTURE_MUTANTS}
+for _mid, _b in _blocks.items():
+    assert _b.count(f"pg_temp.rec('mutant:{_mid}'") == 1 and _b.count('MUTANT NOT RESTORED') == 1 and _b in HARNESS, _mid
+_pre = HARNESS[:HARNESS.index('DO $controls4263t$')]
+_pre_body = _pre[_pre.index('DO $guard4263t$'):]
+_fx_start = "DO $fxt0_4263t$ BEGIN PERFORM pg_temp.rec('t_fixture_start', to_jsonb(clock_timestamp())); END $fxt0_4263t$;\n"
+_rb = HARNESS[HARNESS.index('-- ================================================================ the rollback file, verbatim'):HARNESS.index('DO $end4263t$')]
+HARNESS_STRUCTURE = (f"""-- harness-t-structure.sql (generated by {REL}/gen.py; do not hand-edit)
+-- TEST DATABASE ONLY. This file ends in a rollback and must never be run on production.
+-- BACKLOG-4263 sync 2.49, P9: the structure call. Every statement in it is byte-identical to its counterpart in
+-- harness-t.sql (checked by gen.py check), so a pass proves those texts run: guard, timeouts, applied check, every helper
+-- and control definition, the fixture, the fingerprint twice, the negative control, ONE function-body mutant
+-- (body_not_stripped -> c_strip) and ONE ACL mutant (reader_granted_anon -> c_catalogue) end to end, the rollback step,
+-- then RAISE 'T4263_STRUCTURE_OK <json>'. Not in it: the plain controls pass, the other 55 mutants, the 100,001-row loop.
+-- Statement texts of harness-t.sql keep that file's name in their messages (byte-identical).
+-- Locks: the fixture's row locks (as harness-t.sql: the fixture users' rows, the ONE row of cloud_release_switches
+--   and of mcp_settings) until the RAISE; inside the undone mutant subtransactions the pg_proc row of
+--   _mcp_r_get_message and the pg_namespace row of public (GRANT CREATE to mcp_reader); last, the rollback step:
+--   ACCESS EXCLUSIVE on mcp_message_reads and mcp_call_log and, NOT MEASURED, a lock on auth.users.
+-- Duration: NOT MEASURED; estimate about the fixtures call (3.2 s measured) plus under 2 s. Do not start it between
+--   minute 15 and minute 30 of the hour. statement_timeout 240s.
+""" + _pre_body.replace(LIB['fixtures'], _fx_start + LIB['fixtures'], 1) + """DO $structure4263t$
+DECLARE res text; o jsonb; applied boolean; fp2 text;
+BEGIN
+  PERFORM pg_temp.rec('t_start', to_jsonb(clock_timestamp()));
+  PERFORM pg_temp.rec('baseline_fp', to_jsonb(pg_temp.fingerprint()));
+  PERFORM pg_temp.rec('mode', to_jsonb('structure'::text));
+  fp2 := pg_temp.fingerprint();
+  PERFORM pg_temp.rec('fingerprints', jsonb_build_object('first', (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp'), 'second', fp2,
+    'equal', fp2 IS NOT NULL AND fp2 = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp')));
+""" + ''.join(_blocks[m] for m in STRUCTURE_MUTANTS) + """  PERFORM pg_temp.rec('t_mutants_end', to_jsonb(clock_timestamp()));
+END
+$structure4263t$;
+""" + _rb + """DO $endstructure4263t$
+BEGIN
+  PERFORM pg_temp.rec('t_end', to_jsonb(clock_timestamp()));
+  RAISE EXCEPTION 'T4263_STRUCTURE_OK %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);
+END
+$endstructure4263t$;
+""")
+# byte-identity: every statement is a statement of harness-t.sql (or the fixtures call's start-time statement), except
+# the structure driver (its three header lines and every mutant block are taken from harness-t.sql) and the end RAISE
+_full_st = set(roles.split(HARNESS)) | set(roles.split(HARNESS_FIXTURES))
+STRUCTURE_OWN = [st for st in roles.split(HARNESS_STRUCTURE) if st not in _full_st]
+assert [st.split('$', 2)[1] for st in STRUCTURE_OWN] == ['structure4263t', 'endstructure4263t'], [st[:60] for st in STRUCTURE_OWN]
+for _l in ("  PERFORM pg_temp.rec('t_start', to_jsonb(clock_timestamp()));\n", "  PERFORM pg_temp.rec('baseline_fp', to_jsonb(pg_temp.fingerprint()));\n",
+           "  PERFORM pg_temp.rec('t_mutants_end', to_jsonb(clock_timestamp()));\nEND\n"):
+    assert _l in HARNESS and _l in HARNESS_STRUCTURE, _l
+assert HARNESS_STRUCTURE.count("pg_temp.rec('mutant:") == 3 and 'c_prune_loop();' not in HARNESS_STRUCTURE.split('DO $structure4263t$')[1]
+assert "rec('controls', base)" not in HARNESS_STRUCTURE and HARNESS_STRUCTURE.count(LIB['fixtures']) == 1 and HARNESS_STRUCTURE.count(LIB['controls']) == 1
 OUTS = {os.path.join(HERE, f'apply-{T_VERSION}.sql'): APPLY,
+        os.path.join(HERE, 'harness-t-structure.sql'): HARNESS_STRUCTURE,
         os.path.join(HERE, 'harness-t-controls.sql'): HARNESS_CONTROLS,
         os.path.join(HERE, 'harness-t-fixtures.sql'): HARNESS_FIXTURES,
         os.path.join(HERE, 'harness-t-mutants.sql'): HARNESS_MUTANTS,
@@ -812,6 +882,66 @@ def report_fixtures(raw):
     return 'OK: fixtures ran to the end; counts as expected\n' + tline + '\n' + eline, True
 
 
+def report_structure(raw):
+    """(lines, ok) for harness-t-structure.sql. ok only when: the transport shape holds (as for the other calls); the mode
+    is 'structure'; both fingerprints are present and equal; the negative control reads NOT_APPLIED; body_not_stripped and
+    reader_granted_anon are applied and caught (every primary control FAIL, none ERROR, no error); the rollback step is
+    ok; and nothing else ran (no controls pass, no other mutant)."""
+    prob, body = transport(raw, 'T4263_STRUCTURE_OK')
+    if prob:
+        return [prob if prob.startswith('NOT OK') else 'NOT OK: ' + prob], False
+    res, _ = json.JSONDecoder().raw_decode(body)
+    out, bad = [], []
+    if not isinstance(res, dict) or res.get('mode') != 'structure':
+        return ['NOT OK: the result is not from the structure call'], False
+    fp = res.get('fingerprints')
+    fp_ok = (isinstance(fp, dict) and fp.get('equal') is True and isinstance(fp.get('first'), str) and len(fp['first']) == 32
+             and fp.get('first') == fp.get('second') == res.get('baseline_fp'))
+    out.append(f"fingerprints: {'equal' if fp_ok else 'NOT EQUAL OR MISSING'} {json.dumps(fp)[:200]}")
+    if not fp_ok:
+        bad.append('fingerprints')
+    neg = res.get('mutant:noop_probe')
+    neg_ok = isinstance(neg, dict) and neg.get('applied') is False and neg.get('error') == NOT_APPLIED_ERROR
+    out.append(f"{'NEG_OK' if neg_ok else 'NEG_FAILED':14} noop_probe -> {json.dumps(neg)[:200]}")
+    if not neg_ok:
+        bad.append('noop_probe')
+    for mid in STRUCTURE_MUTANTS[1:]:
+        o = res.get('mutant:' + mid)
+        vals = [str(o.get(c, 'MISSING')) for c in PRIMARY[mid]] if isinstance(o, dict) else []
+        if not isinstance(o, dict):
+            tag = 'MISSING'
+        elif o.get('applied') is not True:
+            tag = 'NOT_APPLIED'
+        elif 'error' in o or any(v.startswith('ERROR') or v == 'MISSING' for v in vals):
+            tag = 'CRASH'
+        elif vals and all(v.startswith('FAIL') for v in vals):
+            tag = 'CAUGHT'
+        else:
+            tag = 'MISSED'
+        out.append(f'{tag:14} {mid} -> {json.dumps(o)[:300]}')
+        if tag != 'CAUGHT':
+            bad.append(mid)
+    extra = sorted(k for k in res if k == 'controls' or (k.startswith('mutant:') and k[7:] not in STRUCTURE_MUTANTS))
+    if extra:
+        out.append('NOT OK: the structure call ran more than it should: ' + ', '.join(extra[:5]))
+        bad.append('extra')
+    out.append(f"rollback: {res.get('rollback')}")
+    if res.get('rollback') != 'ok':
+        bad.append('rollback')
+    ts = {}
+    for k in ('t_fixture_start', 't_start', 't_mutants_end', 't_end'):
+        try:
+            from datetime import datetime
+            ts[k] = datetime.fromisoformat(str(res.get(k)).replace('Z', '+00:00'))
+        except ValueError:
+            ts[k] = None
+    d = lambda a, b: f'{(ts[b] - ts[a]).total_seconds():.3f} s' if ts[a] and ts[b] else 'unknown'
+    out.append(f"durations: fixture {d('t_fixture_start', 't_start')}, fingerprints and mutant blocks {d('t_start', 't_mutants_end')}, "
+               f"rollback step {d('t_mutants_end', 't_end')}")
+    out.append(f"structure: {'OK' if not bad else 'NOT OK (' + ', '.join(bad) + ')'}")
+    return out, not bad
+
+
 def selftest(green_ok=False):
     """report() on canned outputs in both transport shapes. With green_ok (the selftest's own control) a missed mutant
     is asserted to be ok, which must fail."""
@@ -945,6 +1075,48 @@ def selftest(green_ok=False):
         print(f"{'ok ' if right else 'BAD'} {name}: report-fixtures ok={got} decision={dec}, expected {want} {want_dec or ''}")
         bad += not right
     cases += fcases
+    def S(**over):
+        res = {'mode': 'structure', 'baseline_fp': 'a' * 32, 'fingerprints': {'first': 'a' * 32, 'second': 'a' * 32, 'equal': True},
+               'mutant:noop_probe': {'error': NOT_APPLIED_ERROR, 'applied': False, 'want': 'not_applied'},
+               'mutant:body_not_stripped': {'c_strip': 'FAIL: x', 'applied': True, 'want': 'red'},
+               'mutant:reader_granted_anon': {'c_catalogue': 'FAIL: x', 'applied': True, 'want': 'red'}, 'rollback': 'ok',
+               't_fixture_start': '2026-11-23T10:00:00.000+00:00', 't_start': '2026-11-23T10:00:03.200+00:00',
+               't_mutants_end': '2026-11-23T10:00:04.000+00:00', 't_end': '2026-11-23T10:00:05.000+00:00'}
+        for k, v in over.items():
+            k = k.replace('__', ':')
+            if v is None:
+                res.pop(k, None)
+            else:
+                res[k] = v
+        return 'T4263_STRUCTURE_OK ' + json.dumps(res)
+    scases = [('structure ok', wrap(S()), True, 'structure: OK'),
+              ('structure: fingerprints differ', wrap(S(fingerprints={'first': 'a' * 32, 'second': 'b' * 32, 'equal': False})), False, 'fingerprints'),
+              ('structure: equal true but values differ', wrap(S(fingerprints={'first': 'a' * 32, 'second': 'b' * 32, 'equal': True})), False, 'fingerprints'),
+              ('structure: fingerprints missing', wrap(S(fingerprints=None)), False, 'fingerprints'),
+              ('structure: negative control applied', wrap(S(mutant__noop_probe={'applied': True})), False, 'noop_probe'),
+              ('structure: negative control missing', wrap(S(mutant__noop_probe=None)), False, 'noop_probe'),
+              ('structure: body mutant not applied', wrap(S(mutant__body_not_stripped={'c_strip': 'FAIL: x', 'applied': False})), False, 'NOT_APPLIED'),
+              ('structure: body mutant control ERROR', wrap(S(mutant__body_not_stripped={'c_strip': 'ERROR 42883 x', 'applied': True})), False, 'CRASH'),
+              ('structure: body mutant error', wrap(S(mutant__body_not_stripped={'error': 'boom', 'applied': True})), False, 'CRASH'),
+              ('structure: body mutant missed', wrap(S(mutant__body_not_stripped={'c_strip': 'PASS', 'applied': True})), False, 'MISSED'),
+              ('structure: ACL mutant not applied', wrap(S(mutant__reader_granted_anon={'error': NOT_APPLIED_ERROR, 'applied': False})), False, 'NOT_APPLIED'),
+              ('structure: ACL mutant missing', wrap(S(mutant__reader_granted_anon=None)), False, 'MISSING'),
+              ('structure: rollback failed', wrap(S(rollback='ERROR 2BP01 x')), False, 'rollback'),
+              ('structure: a controls pass ran', wrap(S(controls={})), False, 'more than it should'),
+              ('structure: another mutant ran', wrap(S(mutant__prune_one_day={'applied': True})), False, 'more than it should'),
+              ('structure: wrong mode', wrap(S(mode='full')), False, 'not from the structure call'),
+              ('structure: the full call given', wrap(full()), False, 'not T4263_STRUCTURE_OK'),
+              ('structure: HTTP 200', wrap(S(), http='kt-sql: HTTP 200'), False, 'COMMITTED'),
+              ('structure: SQLSTATE 42725', wrap('operator is not unique: text || "char"', code='42725'), False, 'SQLSTATE 42725'),
+              ('structure: MUTANT NOT RESTORED', wrap('MUTANT NOT RESTORED body_not_stripped'), False, 'MUTANT NOT RESTORED body_not_stripped (the catalogue differed'),
+              ('structure: JSON not closed before CONTEXT', wrap(S() + ' x'), False, 'right before CONTEXT')]
+    for name, raw, want, need in scases:
+        lines, got = report_structure(raw)
+        text = '\n'.join(lines)
+        right = got == want and need in text
+        print(f"{'ok ' if right else 'BAD'} {name}: report-structure ok={got}, expected {want} for {need!r}")
+        bad += not right
+    cases += scases
     print(f'selftest: {len(cases)} cases, {bad} wrong')
     return 1 if bad else 0
 
@@ -963,6 +1135,10 @@ if __name__ == '__main__':
         line, ok = report_fixtures(open(a[1], encoding='utf-8').read())
         print(line)
         sys.exit(0 if ok else 1)
+    if a and a[0] == 'report-structure':
+        lines, ok = report_structure(open(a[1], encoding='utf-8').read())
+        print('\n'.join(lines))
+        sys.exit(0 if ok else 1)
     if a and a[0] == 'selftest':
         sys.exit(selftest(green_ok=len(a) > 1 and a[1] == '--control-green-ok'))
     if a and a[0] == 'check':
@@ -979,6 +1155,15 @@ if __name__ == '__main__':
               f"{len(_ans['unchecked'])} not checkable")
         if _ans['findings'] or _ans['checked'] == 0:
             sys.exit(1)
+        _cast = [(os.path.relpath(p_, REPO), x) for p_, v in OUTS.items() if p_.endswith('.sql') for x in casts.findings(v)]
+        _cast += [(f'{REL}/lib/{n}.sql', x) for n in ('helpers', 'fixtures', 'controls') for x in casts.findings(LIB[n])]
+        for f, x in _cast:
+            print(f'CAST {f}:{x[0]} {x[1]} ({x[2]}) {x[3]} without an explicit cast: {x[4]}')
+        print(f'cast check: {len([p_ for p_ in OUTS if p_.endswith(".sql")]) + 3} files, {len(_cast)} findings')
+        if _cast:
+            sys.exit(1)
+        print(f'structure call: {len(roles.split(HARNESS_STRUCTURE))} statements, all but {len(STRUCTURE_OWN)} byte-identical to harness-t.sql '
+              f'(the structure driver, whose header lines and {len(STRUCTURE_MUTANTS)} blocks are, and the end RAISE)')
         for f, o in _role_wrong:
             print(f'WRONG ROLE {f}:{o[1]} {o[3]} (owner {o[4]}, role {o[5]}): {o[2]}')
         print(f'statements on objects another role owns: {sum(len(v) for v in _role_per.values())} in {len(_role_per)} files, '

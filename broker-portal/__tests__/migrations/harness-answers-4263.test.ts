@@ -62,7 +62,7 @@ describe('BACKLOG-4263 T-S harness answers', () => {
     expect(nMut).toBe(58);
     expect(m.match(/pg_temp\.rec\('mutant:/g)!.length).toBe(nMut);
     expect(full).toContain("pg_temp.rec('mutant:noop_probe'");
-    expect(full).toMatch(/-- noop_probe\n  BEGIN\n    o := '\{\}';\n    applied := NULL;\n    EXECUTE \$neg0\$\nSELECT 1\n\$neg0\$;\n    applied := has_function_privilege\('anon', 'public\._mcp_r_get_message\(uuid,integer\)', 'EXECUTE'\);/);
+    expect(full).toMatch(/-- noop_probe\n  BEGIN\n    o := '\{\}';\n    applied := NULL;\n    EXECUTE \$neg0\$\nSELECT 1\n\$neg0\$;\n    applied := has_function_privilege\('anon', pg_catalog\.to_regprocedure\('public\._mcp_r_get_message\(uuid,integer\)'\), 'EXECUTE'\);/);
     // after every mutant block the catalogue fingerprint is compared with the one taken after the fixtures
     for (const t of [full, m]) {
       expect(t.match(/RAISE EXCEPTION 'MUTANT NOT RESTORED \w+';/g)!.length).toBe(nMut);
