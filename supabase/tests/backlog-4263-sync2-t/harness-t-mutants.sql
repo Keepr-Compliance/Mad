@@ -3,7 +3,7 @@
 -- BACKLOG-4263 sync 2.49, P9: run AFTER supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql is applied (file md5 0ca12e1e52d34001fe6ef644f17828d0), which needs 20261123100000 and
 -- 20261123130000 applied first.
 -- ONE call (~/.claude/bin/kt-sql harness-t-mutants.sql) that ends in RAISE, so nothing persists. Order: guard (refuses any
--- database that is not the test database) -> applied check -> helpers and fixtures (no plain controls pass: harness-t-controls.sql runs it) -> 57 mutants, each proven installed (md5 of the function body, or a catalogue
+-- database that is not the test database) -> applied check -> helpers and fixtures (no plain controls pass: harness-t-controls.sql runs it) -> 58 mutants, each proven installed (md5 of the function body, or a catalogue
 -- probe) before its primary controls run under it -> the rollback file and its post-check -> RAISE 'T4263_RESULT <json>'.
 -- Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()". Prints counts, ids of its own
 -- invented rows and verdicts only.
@@ -767,10 +767,22 @@ BEGIN
     jsonb_build_object('deleted', n, 'left', (SELECT count(*) FROM public.mcp_message_reads WHERE client_name = tag))::text);
 END $c$;
 
+-- catalogue fingerprint of what the mutants change: the nine functions (body md5, ACL, volatility, security definer,
+-- owner), the read log's ACL, and the constraint names of mcp_message_reads and mcp_call_log
+CREATE FUNCTION pg_temp.fingerprint() RETURNS text LANGUAGE sql STABLE AS $h$
+  SELECT md5(concat_ws('|',
+    (SELECT string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text, '') || ':' || p.provolatile
+                       || ':' || p.prosecdef || ':' || p.proowner::regrole::text, ';' ORDER BY p.oid::regprocedure::text)
+       FROM pg_catalog.pg_proc p WHERE p.oid IN (SELECT to_regprocedure(s) FROM unnest(ARRAY['public._mcp_conn_reads_messages(uuid)', 'public._mcp_msg_people(jsonb, boolean)', 'public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid)', 'public._mcp_r_get_message(uuid, integer)', 'public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text)', 'public.mcp_get_message(text, bytea, text, text, integer)', 'public.mcp_message_access(text, bytea, text)', 'public.mcp_list_my_message_reads(text, integer)', 'public._mcp_prune_message_reads()']) s)),
+    (SELECT coalesce(c.relacl::text, '') FROM pg_catalog.pg_class c WHERE c.oid = 'public.mcp_message_reads'::regclass),
+    (SELECT string_agg(k.conname, ',' ORDER BY k.conname) FROM pg_catalog.pg_constraint k
+      WHERE k.conrelid IN ('public.mcp_message_reads'::regclass, 'public.mcp_call_log'::regclass))))
+$h$;
 DO $controls4263t$
 DECLARE res text; base jsonb := '{}'; o jsonb; applied boolean;
 BEGIN
   PERFORM pg_temp.rec('t_start', to_jsonb(clock_timestamp()));
+  PERFORM pg_temp.rec('baseline_fp', to_jsonb(pg_temp.fingerprint()));
   PERFORM pg_temp.rec('mode', to_jsonb('mutants'::text));
   PERFORM pg_temp.rec('t_controls_end', to_jsonb(clock_timestamp()));
   -- perm_version_ignored
@@ -806,6 +818,9 @@ $mu0$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:perm_version_ignored', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED perm_version_ignored';
+  END IF;
   -- perm_gate_list_dropped
   BEGIN
     o := '{}';
@@ -903,6 +918,9 @@ $mu1$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:perm_gate_list_dropped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED perm_gate_list_dropped';
+  END IF;
   -- perm_gate_get_dropped
   BEGIN
     o := '{}';
@@ -987,6 +1005,9 @@ $mu2$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:perm_gate_get_dropped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED perm_gate_get_dropped';
+  END IF;
   -- access_permission_ignored
   BEGIN
     o := '{}';
@@ -1035,6 +1056,9 @@ $mu3$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:access_permission_ignored', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED access_permission_ignored';
+  END IF;
   -- access_switch_ignored
   BEGIN
     o := '{}';
@@ -1083,6 +1107,9 @@ $mu4$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:access_switch_ignored', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED access_switch_ignored';
+  END IF;
   -- part_cut_by_characters
   BEGIN
     o := '{}';
@@ -1219,6 +1246,9 @@ $mu5$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:part_cut_by_characters', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED part_cut_by_characters';
+  END IF;
   -- part_budget_ignores_header
   BEGIN
     o := '{}';
@@ -1355,6 +1385,9 @@ $mu6$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:part_budget_ignores_header', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED part_budget_ignores_header';
+  END IF;
   -- cap_people_to_uncapped
   BEGIN
     o := '{}';
@@ -1418,6 +1451,9 @@ $mu7$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:cap_people_to_uncapped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED cap_people_to_uncapped';
+  END IF;
   -- people_extra_from_not_counted
   BEGIN
     o := '{}';
@@ -1474,6 +1510,9 @@ $mu8$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:people_extra_from_not_counted', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED people_extra_from_not_counted';
+  END IF;
   -- people_cc_not_counted_in_list
   BEGIN
     o := '{}';
@@ -1537,6 +1576,9 @@ $mu9$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:people_cc_not_counted_in_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED people_cc_not_counted_in_list';
+  END IF;
   -- body_not_stripped
   BEGIN
     o := '{}';
@@ -1673,6 +1715,9 @@ $mu10$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:body_not_stripped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED body_not_stripped';
+  END IF;
   -- hide_needs_active_list
   BEGIN
     o := '{}';
@@ -1784,6 +1829,9 @@ $mu11$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:hide_needs_active_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED hide_needs_active_list';
+  END IF;
   -- hide_needs_active_get
   BEGIN
     o := '{}';
@@ -1920,6 +1968,9 @@ $mu12$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:hide_needs_active_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED hide_needs_active_get';
+  END IF;
   -- prune_single_batch
   BEGIN
     o := '{}';
@@ -1961,6 +2012,9 @@ $mu13$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:prune_single_batch', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED prune_single_batch';
+  END IF;
   -- cap_files_list_uncapped
   BEGIN
     o := '{}';
@@ -2072,6 +2126,9 @@ $mu14$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:cap_files_list_uncapped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED cap_files_list_uncapped';
+  END IF;
   -- cap_files_get_uncapped
   BEGIN
     o := '{}';
@@ -2208,6 +2265,9 @@ $mu15$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:cap_files_get_uncapped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED cap_files_get_uncapped';
+  END IF;
   -- cap_subject_list_uncapped
   BEGIN
     o := '{}';
@@ -2319,6 +2379,9 @@ $mu16$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:cap_subject_list_uncapped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED cap_subject_list_uncapped';
+  END IF;
   -- cap_subject_get_uncapped
   BEGIN
     o := '{}';
@@ -2455,6 +2518,9 @@ $mu17$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:cap_subject_get_uncapped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED cap_subject_get_uncapped';
+  END IF;
   -- list_byte_bound_dropped
   BEGIN
     o := '{}';
@@ -2566,6 +2632,9 @@ $mu18$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:list_byte_bound_dropped', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED list_byte_bound_dropped';
+  END IF;
   -- list_first_row_arm_dropped
   BEGIN
     o := '{}';
@@ -2677,6 +2746,9 @@ $mu19$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:list_first_row_arm_dropped', o || jsonb_build_object('applied', applied, 'want', 'green'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED list_first_row_arm_dropped';
+  END IF;
   -- keyset_on_sent_at_only
   BEGIN
     o := '{}';
@@ -2788,6 +2860,9 @@ $mu20$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:keyset_on_sent_at_only', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED keyset_on_sent_at_only';
+  END IF;
   -- log_inside_read_block_list
   BEGIN
     o := '{}';
@@ -2881,6 +2956,9 @@ $mu21$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_inside_read_block_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_inside_read_block_list';
+  END IF;
   -- log_dropped_get
   BEGIN
     o := '{}';
@@ -2956,6 +3034,9 @@ $mu22$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_dropped_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_dropped_get';
+  END IF;
   -- log_swallowed_get
   BEGIN
     o := '{}';
@@ -3043,6 +3124,9 @@ $mu23$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_swallowed_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_swallowed_get';
+  END IF;
   -- log_swallowed_list
   BEGIN
     o := '{}';
@@ -3143,6 +3227,9 @@ $mu24$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_swallowed_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_swallowed_list';
+  END IF;
   -- log_before_outcome_get
   BEGIN
     o := '{}';
@@ -3227,6 +3314,9 @@ $mu25$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_before_outcome_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_before_outcome_get';
+  END IF;
   -- log_before_outcome_list
   BEGIN
     o := '{}';
@@ -3324,6 +3414,9 @@ $mu26$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_before_outcome_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_before_outcome_list';
+  END IF;
   -- removed_messages_listed
   BEGIN
     o := '{}';
@@ -3434,6 +3527,9 @@ $mu27$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_messages_listed', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_messages_listed';
+  END IF;
   -- removed_message_by_id
   BEGIN
     o := '{}';
@@ -3569,6 +3665,9 @@ $mu28$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_message_by_id', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_message_by_id';
+  END IF;
   -- suggested_listed
   BEGIN
     o := '{}';
@@ -3679,6 +3778,9 @@ $mu29$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:suggested_listed', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED suggested_listed';
+  END IF;
   -- suggested_by_id
   BEGIN
     o := '{}';
@@ -3814,6 +3916,9 @@ $mu30$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:suggested_by_id', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED suggested_by_id';
+  END IF;
   -- unconfirmed_deal_list
   BEGIN
     o := '{}';
@@ -3925,6 +4030,9 @@ $mu31$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:unconfirmed_deal_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED unconfirmed_deal_list';
+  END IF;
   -- unconfirmed_deal_by_id
   BEGIN
     o := '{}';
@@ -4061,6 +4169,9 @@ $mu32$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:unconfirmed_deal_by_id', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED unconfirmed_deal_by_id';
+  END IF;
   -- removed_deal_list
   BEGIN
     o := '{}';
@@ -4172,6 +4283,9 @@ $mu33$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_deal_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_deal_list';
+  END IF;
   -- removed_deal_by_id
   BEGIN
     o := '{}';
@@ -4308,6 +4422,9 @@ $mu34$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_deal_by_id', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_deal_by_id';
+  END IF;
   -- removed_files_list
   BEGIN
     o := '{}';
@@ -4419,6 +4536,9 @@ $mu35$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_files_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_files_list';
+  END IF;
   -- removed_files_get
   BEGIN
     o := '{}';
@@ -4555,6 +4675,9 @@ $mu36$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:removed_files_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED removed_files_get';
+  END IF;
   -- files_not_through_message
   BEGIN
     o := '{}';
@@ -4666,6 +4789,9 @@ $mu37$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:files_not_through_message', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED files_not_through_message';
+  END IF;
   -- notice_ignored_list
   BEGIN
     o := '{}';
@@ -4776,6 +4902,9 @@ $mu38$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:notice_ignored_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED notice_ignored_list';
+  END IF;
   -- notice_ignored_get
   BEGIN
     o := '{}';
@@ -4911,6 +5040,9 @@ $mu39$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:notice_ignored_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED notice_ignored_get';
+  END IF;
   -- switch_ignored_list
   BEGIN
     o := '{}';
@@ -5021,6 +5153,9 @@ $mu40$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:switch_ignored_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED switch_ignored_list';
+  END IF;
   -- switch_ignored_get
   BEGIN
     o := '{}';
@@ -5156,6 +5291,9 @@ $mu41$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:switch_ignored_get', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED switch_ignored_get';
+  END IF;
   -- inactive_shown_list
   BEGIN
     o := '{}';
@@ -5267,6 +5405,9 @@ $mu42$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:inactive_shown_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED inactive_shown_list';
+  END IF;
   -- inactive_rows_list
   BEGIN
     o := '{}';
@@ -5377,6 +5518,9 @@ $mu43$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:inactive_rows_list', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED inactive_rows_list';
+  END IF;
   -- inactive_by_id
   BEGIN
     o := '{}';
@@ -5512,6 +5656,9 @@ $mu44$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:inactive_by_id', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED inactive_by_id';
+  END IF;
   -- log_view_support_allowed
   BEGIN
     o := '{}';
@@ -5592,6 +5739,9 @@ $mu45$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_view_support_allowed', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_view_support_allowed';
+  END IF;
   -- log_view_any_owner
   BEGIN
     o := '{}';
@@ -5672,6 +5822,9 @@ $mu46$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_view_any_owner', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_view_any_owner';
+  END IF;
   -- mark_review_constant
   BEGIN
     o := '{}';
@@ -5783,6 +5936,9 @@ $mu47$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:mark_review_constant', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED mark_review_constant';
+  END IF;
   -- mark_hidden_constant
   BEGIN
     o := '{}';
@@ -5894,6 +6050,9 @@ $mu48$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:mark_hidden_constant', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED mark_hidden_constant';
+  END IF;
   -- review_filter_ignored
   BEGIN
     o := '{}';
@@ -6004,6 +6163,9 @@ $mu49$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:review_filter_ignored', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED review_filter_ignored';
+  END IF;
   -- channel_filter_ignored
   BEGIN
     o := '{}';
@@ -6114,6 +6276,9 @@ $mu50$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:channel_filter_ignored', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED channel_filter_ignored';
+  END IF;
   -- prune_one_day
   BEGIN
     o := '{}';
@@ -6155,6 +6320,9 @@ $mu51$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:prune_one_day', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED prune_one_day';
+  END IF;
   -- log_cascades_with_connection
   BEGIN
     o := '{}';
@@ -6176,6 +6344,9 @@ $mu52$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_cascades_with_connection', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_cascades_with_connection';
+  END IF;
   -- prune_granted_service_role
   BEGIN
     o := '{}';
@@ -6197,6 +6368,9 @@ $mu53$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:prune_granted_service_role', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED prune_granted_service_role';
+  END IF;
   -- log_table_select_authenticated
   BEGIN
     o := '{}';
@@ -6218,6 +6392,9 @@ $mu54$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:log_table_select_authenticated', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED log_table_select_authenticated';
+  END IF;
   -- reader_granted_anon
   BEGIN
     o := '{}';
@@ -6239,6 +6416,9 @@ $mu55$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:reader_granted_anon', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED reader_granted_anon';
+  END IF;
   -- reader_volatile
   BEGIN
     o := '{}';
@@ -6260,6 +6440,26 @@ $mu56$);
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:reader_volatile', o || jsonb_build_object('applied', applied, 'want', 'red'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED reader_volatile';
+  END IF;
+  -- noop_probe
+  BEGIN
+    o := '{}';
+    applied := NULL;
+    EXECUTE $neg0$
+SELECT 1
+$neg0$;
+    applied := has_function_privilege('anon', 'public._mcp_r_get_message(uuid,integer)', 'EXECUTE');
+    IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
+    RAISE EXCEPTION 'undo-mutant';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+  END;
+  PERFORM pg_temp.rec('mutant:noop_probe', o || jsonb_build_object('applied', applied, 'want', 'not_applied'));
+  IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
+    RAISE EXCEPTION 'MUTANT NOT RESTORED noop_probe';
+  END IF;
   PERFORM pg_temp.rec('t_mutants_end', to_jsonb(clock_timestamp()));
 END
 $controls4263t$;
