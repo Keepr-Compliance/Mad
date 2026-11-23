@@ -1,7 +1,7 @@
 # BACKLOG-4263 sync 2.49, P1: test-project files for migration 20261123100000 (one computer per account)
 
-**TEST DATABASE ONLY. Never run any file here on production.** `gen.py` writes `rollback-20261123100000.sql`,
-`harness-s1.sql` and, in `concurrency/`, `guard.sql`, `drop-mutants.sql` and the four `mutant-*.sql` files. Everything
+**TEST DATABASE ONLY. Never run any file here on production.** `gen.py` writes `apply-20261123100000.sql`,
+`rollback-20261123100000.sql`, `harness-s1.sql` and, in `concurrency/`, `guard.sql`, `drop-mutants.sql` and the four `mutant-*.sql` files. Everything
 else in `concurrency/` is hand-written. `python3 gen.py check` fails when a generated file is stale; the jest test
 `broker-portal/__tests__/migrations/one-computer-4263.test.ts` also checks that the rollback restores the head bodies
 byte for byte, that the harness embeds this migration's text and the rollback verbatim, and that every two-session
@@ -17,7 +17,11 @@ Conditions (senior review of PR #3632):
   `SELECT count(*) FROM public.cloud_autosave_settings s WHERE s.enabled AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.owner_user_id = s.user_id AND d.removed_at IS NULL);`
 - No mutant runs on the shared database except through the own-name mechanism below (`run.sh … --mutant`).
 
-1. Apply `supabase/migrations/20261123100000_backlog_4263_one_computer.sql`, then run
+1. Apply by sending `apply-20261123100000.sql` as one call (not the bare migration): it holds the text of
+   `supabase/migrations/20261123100000_backlog_4263_one_computer.sql` unchanged, then the ledger row
+   (`INSERT INTO supabase_migrations.schema_migrations`, version `20261123100000`, name `backlog_4263_one_computer`),
+   in one transaction. Re-run: when the ledger row already exists, the INSERT fails (duplicate version) and the whole
+   call rolls back, so nothing changes (inferred, not run). Then run
    `../backlog-4263-prod/postcheck-20261123100000.sql`. Expected: `postcheck = ok`; `report_only` lists only
    `table cloud_autosave_settings grants service_role` (open finding F-12b) plus any CHECK / predicate text that differs
    from the predicted text (report only; see `../backlog-4263-prod/README.md`).
@@ -102,6 +106,7 @@ run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and a
 | File | What it is |
 |---|---|
 | `gen.py` | Generator, `check`, `report` |
+| `apply-20261123100000.sql` | The migration text unchanged + its ledger row, one transaction (checked by `broker-portal/__tests__/migrations/apply-wrappers-4263.test.ts`) |
 | `rollback-20261123100000.sql` | Undoes 20261123100000 (pre-check, bodies back, objects dropped, ledger row removed, post-check) |
 | `harness-s1.sql` | Single-session controls and their mutants; ends in a rollback |
 | `concurrency/run.sh` | Two-session controls R1–R6, `--mutant`, `cleanup` |
