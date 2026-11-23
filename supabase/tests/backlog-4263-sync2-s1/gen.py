@@ -379,7 +379,8 @@ CASES['c4_allowed'] = """
     'list_rows', pg_temp.call('cloud_list_install_rows', '%L::uuid, %L::uuid, %L::text, %L::uuid, %L::integer', pg_temp.s('A'), pg_temp.s('IB'), 'deal', NULL, '10'),
     'state', pg_temp.state());
   RETURN pg_temp.pass(v::text NOT LIKE '%computer_not_active%' AND v::text NOT LIKE '%ERR %'
-                      AND (v -> 'delete_deal' ->> 'ok') = 'true' AND (v -> 'delete_install' ->> 'ok') = 'true', v::text);"""
+                      AND (v -> 'delete_deal' ->> 'ok') = 'true' AND (v -> 'delete_install' ->> 'success') = 'true'
+                      AND (v -> 'reclaim' ->> 'ok') = 'true', v::text);"""
 CASES['c_notice_jobs'] = """
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.claim('IB', true);

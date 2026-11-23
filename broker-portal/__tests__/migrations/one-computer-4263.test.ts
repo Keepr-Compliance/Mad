@@ -360,6 +360,12 @@ describe('BACKLOG-4263 S1 one computer: acceptance conditions readable from the 
     expect(S1.indexOf('DO $backfill4263s1$')).toBeGreaterThan(alter);
   });
 
+  it('pre-check refuses when neither the earlier nor the new signature is present (no NULL pass-through)', () => {
+    const pre = S1.slice(S1.indexOf('DO $pre4263s1$'), S1.indexOf('$pre4263s1$;'));
+    expect(pre).toContain('    IF ((v = r.head AND w IS NULL) OR (v IS NULL AND w = r.mine)) IS NOT TRUE THEN\n');
+    expect(pre).toContain('    IF v IS NULL OR v NOT IN (r.head, r.mine) THEN\n');
+  });
+
   it('pre-check first, then lock_timeout 3s, before any change', () => {
     expect(S1.indexOf('DO $pre4263s1$')).toBeLessThan(S1.indexOf("SET LOCAL lock_timeout = '3s';"));
     expect(S1.indexOf("SET LOCAL lock_timeout = '3s';")).toBeLessThan(S1.indexOf('\nCREATE TABLE'));

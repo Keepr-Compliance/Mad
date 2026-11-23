@@ -3,10 +3,11 @@
 # Unlike harness-s1.sql these COMMIT fixture rows (one user with random ids per run, an organization, a membership, the
 # assignment, two deals, one blob) and remove them in the teardown (always, from the trap, then verified clean).
 #   R1  IA writes a new deal and holds its transaction 4 s; IB claims with replace.
-#       Expect: the claim waits for the write (waited_s >= 2.5), the write applied, IB active afterwards.
+#       Expect: the claim waits for the write (server clock: claim end >= write time + 3.5 s; session 1 sleeps 4 s after
+#       its write and commits after that), the write applied, IB active afterwards.
 #       Mutant (mutant-claim-nolock.sql): the claim without FOR UPDATE on the settings row -> no wait -> FAIL.
 #   R2  IA confirms its blob and holds 4 s; IB claims with replace.
-#       Expect: the claim waits (waited_s >= 2.5); confirm answered object_missing; IB active afterwards.
+#       Expect: the claim waits (claim end >= confirm time + 3.5 s); confirm answered object_missing; IB active afterwards.
 #       Mutant (mutant-confirm-nolock.sql): confirm without its settings FOR SHARE -> no wait -> FAIL.
 #   R3  (needs one_computer ON) no active computer; IA claims and holds 4 s; IB claims without replace.
 #       Expect: IA ok, IB computer_not_active, IA active (exactly one active).
@@ -24,7 +25,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in R1|R2|R3|R4|R5) ;; *) sed -n '2,25p' "$0"; exit 2 ;; esac
+case "${1:-}" in R1|R2|R3|R4|R5) ;; *) sed -n '2,27p' "$0"; exit 2 ;; esac
 CASE="$1"
 
 umask 077
@@ -92,7 +93,16 @@ echo "state:  $(cat "$tmp/state.out")"
 
 VERDICT="$(python3 - "$CASE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" "$IA" "$IB" <<'PY'
 import json, sys
+from datetime import datetime
 case, f1, f2, fs, ia, ib = sys.argv[1:7]
+def ts(x):
+    try:
+        return datetime.fromisoformat(str(x).replace('Z', '+00:00'))
+    except Exception:
+        return None
+def waited(a, b):
+    t0, t1 = ts(a.get('t_write')), ts(b.get('t_end'))
+    return t0 is not None and t1 is not None and (t1 - t0).total_seconds() >= 3.5
 def last_row(p):
     t = open(p).read()
     try:
@@ -106,9 +116,9 @@ raw = open(f1).read() + open(f2).read()
 ok = '40P01' not in raw
 if case == 'R1':
     ok = ok and (ra.get('results') or [{}])[0].get('status') == 'applied' and rb.get('ok') is True \
-        and float(b.get('waited_s') or 0) >= 2.5 and st.get('active') == ib and st.get('deal_r1') == 1
+        and waited(a, b) and st.get('active') == ib and st.get('deal_r1') == 1
 elif case == 'R2':
-    ok = ok and ra.get('error') == 'object_missing' and rb.get('ok') is True and float(b.get('waited_s') or 0) >= 2.5 \
+    ok = ok and ra.get('error') == 'object_missing' and rb.get('ok') is True and waited(a, b) \
         and st.get('active') == ib
 elif case == 'R3':
     ok = ok and ra.get('ok') is True and rb.get('error') == 'computer_not_active' and st.get('active') == ia and st.get('moves') == 0

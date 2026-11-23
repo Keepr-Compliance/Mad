@@ -86,7 +86,7 @@ BEGIN
       x(old_sig, head, new_sig, mine) LOOP
     SELECT md5(p.prosrc) INTO v FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure(r.old_sig);
     SELECT md5(p.prosrc) INTO w FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure(r.new_sig);
-    IF NOT ((v = r.head AND w IS NULL) OR (v IS NULL AND w = r.mine)) THEN
+    IF ((v = r.head AND w IS NULL) OR (v IS NULL AND w = r.mine)) IS NOT TRUE THEN
       RAISE EXCEPTION 'BACKLOG-4263 S1: % / % not at the expected bodies (md5 % / %)', r.old_sig, r.new_sig,
         coalesce(v, 'missing'), coalesce(w, 'missing');
     END IF;
