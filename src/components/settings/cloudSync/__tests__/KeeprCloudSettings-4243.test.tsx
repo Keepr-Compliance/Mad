@@ -41,6 +41,7 @@ function fakeCloud(view: CloudSyncView | null): UseKeeprCloudSettings {
     deleteOnlineNotHere: jest.fn().mockResolvedValue(true),
     deleteOldInstalls: jest.fn().mockResolvedValue(true),
     reclaimInstall: jest.fn().mockResolvedValue(true),
+    useThisComputer: jest.fn().mockResolvedValue(true),
   };
 }
 

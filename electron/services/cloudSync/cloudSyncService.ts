@@ -313,8 +313,9 @@ export class CloudSyncService {
 
   /**
    * BACKLOG-4263 P2 (plan §2.6, §2.7): while the one-computer rule is on and this computer is the active one, every
-   * other install counts (their deals stopped updating), not only those idle for 30 days. The active install itself
-   * is never listed (P1 review N5: "Delete them" with the active id would register the active computer as removed).
+   * other install counts (their deals stopped updating), not only those idle for 30 days. From a computer that is not
+   * the active one nothing is listed or deleted (P1 review N5: "Delete them" there would register the active computer
+   * as removed): getView lists only for status on / error, and deleteOldInstalls refuses first.
    */
   private async listOldInstalls(userId: string, state: ServerState): Promise<Array<{ installId: string; deals: number; lastSyncedAt: string }> | null> {
     const res = await this.deps.client.listInstalls();
@@ -325,7 +326,6 @@ export class CloudSyncService {
     const out: Array<{ installId: string; deals: number; lastSyncedAt: string }> = [];
     for (const i of Array.isArray(res.body.installs) ? (res.body.installs as Array<Record<string, unknown>>) : []) {
       if (!i || typeof i.source_install_id !== "string" || i.source_install_id === mine) continue;
-      if (i.source_install_id === state.activeInstallId) continue;
       const at = typeof i.last_synced_at === "string" ? Date.parse(i.last_synced_at) : NaN;
       const deals = typeof i.deals === "number" ? i.deals : 0;
       if (Number.isFinite(at) && (allOthers || at < cutoff)) out.push({ installId: i.source_install_id, deals, lastSyncedAt: new Date(at).toISOString() });

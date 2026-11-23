@@ -405,6 +405,8 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
         unknown_state: 0,
         stopped: 0,
         install_removed: 0,
+        // BACKLOG-4263 P2: a computer that is not the account's active one.
+        other_computer: 0,
       };
       const got: Record<string, number> = {};
       for (const outcome of [...Object.keys(expected), "threw"] as Array<PassOutcome | "threw">) {
