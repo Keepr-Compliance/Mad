@@ -372,3 +372,61 @@ describe('BACKLOG-4263 S1 one computer: acceptance conditions readable from the 
     expect(S1).not.toMatch(/@[a-z0-9-]+\.[a-z]/i);
   });
 });
+
+describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness agree with the migration', () => {
+  const DIR = join(REPO, 'supabase/tests/backlog-4263-sync2-s1');
+  const RB = read(join(DIR, 'rollback-20261123100000.sql'));
+  const HARNESS = read(join(DIR, 'harness-s1.sql'));
+  const HEADS: Array<[string, string]> = [
+    ...WRITERS.map((w) => [w[0], w[1]] as [string, string]),
+    ['get_my_cloud_autosave_state', M1], ['set_my_cloud_autosave', M2], ['cloud_register_blob', M1], ['cloud_confirm_blob', M1],
+  ];
+
+  it.each(HEADS)('rollback puts back %s exactly as its head migration wrote it', (name, text) => {
+    const st = statement(text, name);
+    expect(count(RB, st)).toBe(1);
+    expect(body(RB, name)).toBe(body(text, name));
+    // the REVOKE / GRANT lines that follow the statement in the head file follow it in the rollback too
+    const after = text.slice(text.indexOf(st) + st.length + 1).split('\n');
+    const grants = after.slice(0, after.findIndex((l) => !/^(REVOKE|GRANT) /.test(l)));
+    expect(grants.length).toBeGreaterThanOrEqual(1);
+    expect(RB).toContain(`${st}\n${grants.join('\n')}\n`);
+  });
+
+  it('rollback drops what S1 created and checks S1 is in place first', () => {
+    for (const d of [
+      'DROP FUNCTION IF EXISTS public.set_my_cloud_autosave(uuid, boolean, integer, uuid);',
+      'DROP FUNCTION IF EXISTS public.cloud_register_blob(uuid, uuid, text, bigint, text);',
+      'DROP FUNCTION IF EXISTS public.cloud_confirm_blob(uuid, uuid, uuid);',
+      'DROP FUNCTION IF EXISTS public.cloud_claim_install(uuid, uuid, boolean);',
+      'DROP FUNCTION IF EXISTS public._cloud_install_inactive(uuid, uuid);',
+      'DROP TABLE IF EXISTS public.cloud_computer_move_notices;',
+      'DROP TABLE IF EXISTS public.cloud_release_switches;',
+      'ALTER TABLE public.cloud_autosave_settings DROP COLUMN IF EXISTS active_install_id, DROP COLUMN IF EXISTS active_since;',
+      "DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261123100000';",
+    ]) expect(RB).toContain(d);
+    const pre = RB.slice(0, RB.indexOf('$prerb4263s1$;'));
+    for (const name of ['cloud_claim_install', 'cloud_upsert_deal', 'set_my_cloud_autosave', 'cloud_confirm_blob']) {
+      expect(pre).toContain(`'${md5(body(S1, name))}'`);
+    }
+    expect(RB.search(/^(CREATE|DROP|ALTER|DELETE)\b/m)).toBeGreaterThan(RB.indexOf('$prerb4263s1$;'));
+  });
+
+  it('harness: guard first, built from this migration text, the rollback verbatim, no other DDL on existing tables', () => {
+    const lines = HARNESS.split('\n');
+    expect(lines[1]).toContain('must never be run on production');
+    expect(HARNESS.replace(/^--[^\n]*\n/gm, '').startsWith('DO $guard4263s1$')).toBe(true);
+    expect(HARNESS).toContain(`(file md5 ${md5(S1)})`);
+    expect(HARNESS).toContain(RB);
+    const outside = HARNESS.replace(RB, '');
+    expect(outside).not.toMatch(/^\s*(ALTER TABLE|DROP TABLE|TRUNCATE|LOCK TABLE)\b/im);
+    expect(outside).toContain("RAISE EXCEPTION 'S1_RESULT %'");
+    expect(HARNESS).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{11}[1-9a-f]/i);
+  });
+
+  it.each(['cloud_claim_install', 'cloud_confirm_blob', 'set_my_cloud_autosave'])('two-session pristine file for %s is the S1 statement', (name) => {
+    const f = read(join(DIR, `concurrency/pristine-${name}.sql`));
+    expect(f).toContain(statement(S1, name));
+  });
+});
+
