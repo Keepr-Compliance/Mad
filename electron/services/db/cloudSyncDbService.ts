@@ -764,6 +764,18 @@ export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now
 }
 
 /**
+ * Settles the move marker in one step: `movedHere` runs the move's local transaction (applyMoveHere), otherwise only
+ * the marker goes (the claim was refused, or the server names another computer). Used after the claim's answer and
+ * by the next pass's heal.
+ */
+export function settleMovePending(db: SqlDb, projectRef: string, userId: string, movedHere: boolean, now: Date = new Date(), reclaim = false): void {
+  db.transaction(() => {
+    if (movedHere) applyMoveHere(db, projectRef, userId, now, reclaim);
+    else clearMovePending(db, projectRef, userId);
+  })();
+}
+
+/**
  * Plan §2.5: a turn-off made here while offline is dropped because another computer became active first. The owed
  * marker goes (this computer stays off; nothing online is deleted), with the trigger rule, in one transaction. Why it
  * was dropped is kept in memory only (CloudSyncRunner.turnOffDropped): a state row would outlive the turn-off and

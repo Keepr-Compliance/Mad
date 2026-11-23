@@ -333,15 +333,13 @@ export class CloudSyncRunner {
         this.guard(pinned);
         store.writeMovePending(db, this.deps.projectRef, userId, this.now(), reclaim);
         const res = await this.deps.client.claimInstall(userId, installId, true);
+        // Transport: the marker stays (whether the claim landed is unknown); the next pass settles it.
+        if (res.kind !== "transport") store.settleMovePending(db, this.deps.projectRef, userId, res.kind === "ok", this.now(), reclaim);
         if (res.kind === "ok") {
-          store.applyMoveHere(db, this.deps.projectRef, userId, this.now(), reclaim);
           this.installStatusChecked.delete(userId);
           return { ok: true, code: "" };
         }
-        if (res.kind === "refused") {
-          store.clearMovePending(db, this.deps.projectRef, userId);
-          if (res.code === "wrong_account") throw new StopPass("wrong_account");
-        }
+        if (res.kind === "refused" && res.code === "wrong_account") throw new StopPass("wrong_account");
         return { ok: false, code: res.code };
       } catch (error) {
         if (error instanceof StopPass) return { ok: false, code: error.outcome };
@@ -520,11 +518,7 @@ export class CloudSyncRunner {
 
     // BACKLOG-4263 P2 (plan §13.1): a move whose local transaction did not run (a crash after the claim, or the
     // claim's answer was lost). This computer is active now: run it. Anything else: the claim did not land.
-    const pendingMove = store.movePending(db, deps.projectRef, pinned.userId);
-    if (pendingMove) {
-      if (state.activeInstallId === installId) store.applyMoveHere(db, deps.projectRef, pinned.userId, this.now(), pendingMove.reclaim);
-      else store.clearMovePending(db, deps.projectRef, pinned.userId);
-    }
+    this.healMovePending(db, pinned.userId, state.activeInstallId === installId);
 
     // BACKLOG-4263 P2 (plan §2.5): another computer is active. Checked BEFORE the owed turn-off, which would
     // otherwise delete the active computer's online copy, and before any write or local preparation.
@@ -532,12 +526,12 @@ export class CloudSyncRunner {
 
     // A turn-off made offline is still owed (plan §8.8).
     if (fresh.turn_off_owed_at) {
-      if (otherActive) return this.dropOwedTurnOff(pinned.userId, state);
+      if (otherActive) return this.finishTurnOffDropped(pinned.userId, state);
       this.guard(pinned);
       const res = await this.settleOwedTurnOff(pinned.userId);
       if (res.kind === "refused" && res.code === "wrong_account") return this.wrongAccount(state);
       // The server's own check (a move committed after the state read): the newer choice wins here too.
-      if (res.kind === "refused" && res.code === "computer_not_active") return this.dropOwedTurnOff(pinned.userId, state);
+      if (res.kind === "refused" && res.code === "computer_not_active") return this.finishTurnOffDropped(pinned.userId, state);
       return this.finish({ outcome: "not_enabled", done: 0, failed: 0, state });
     }
 
@@ -649,12 +643,18 @@ export class CloudSyncRunner {
     return res;
   }
 
+  /** BACKLOG-4263 P2 (plan §13.1): settles a move marker left by a crash or a lost claim answer, if there is one. */
+  private healMovePending(db: SqlDb, userId: string, activeHere: boolean): void {
+    const pendingMove = store.movePending(db, this.deps.projectRef, userId);
+    if (pendingMove) store.settleMovePending(db, this.deps.projectRef, userId, activeHere, this.now(), pendingMove.reclaim);
+  }
+
   /**
    * BACKLOG-4263 P2 (plan §2.5): another computer became active before this computer's offline turn-off reached the
    * server. The newer choice (the move) wins: the owed turn-off is dropped here, nothing online is deleted, and
    * this computer stays off.
    */
-  private dropOwedTurnOff(userId: string, state: ServerState): PassSummary {
+  private finishTurnOffDropped(userId: string, state: ServerState): PassSummary {
     store.dropOwedTurnOff(this.deps.db(), this.deps.projectRef, userId);
     this.turnOffDropped.add(userId);
     this.log.warn("[CloudSync] Turn-off dropped: another computer is active", {});
