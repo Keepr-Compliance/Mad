@@ -41,9 +41,18 @@ rd = lambda p: open(os.path.join(REPO, p), encoding='utf-8').read()
 lit = lambda s: "'" + s.replace("'", "''") + "'"
 C = lambda xs: sorted(xs, key=lambda x: x.encode('utf-8'))  # COLLATE "C" order
 
-MIGS = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and FIRST <= f[:14] <= LAST)
+# The ten files FIRST .. LAST, then (as the jest tripwire selects them) every later migration that names an mcp_, _mcp_,
+# cloud_, _cloud_ or ai_app_ object. postcheck-final.sql stays the state after the ten (production runs it before the
+# later ones); postcheck-final-249.sql is the state after the last lane migration.
+LANE_OBJECT = re.compile(r'\b_?(mcp|cloud)_\w+|\bai_app_\w+')
+TEN = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and FIRST <= f[:14] <= LAST)
+LATER = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and f[:14] > LAST
+               and LANE_OBJECT.search(open(os.path.join(MIGDIR, f), encoding='utf-8').read()))
+MIGS = TEN + LATER
 VERSIONS = [f[:14] for f in MIGS]
-assert len(MIGS) == 10, MIGS
+TEN_VERSIONS = [f[:14] for f in TEN]
+assert len(TEN) == 10, TEN
+F249 = 'final-249'
 PRE_LANE = sorted(f for f in os.listdir(MIGDIR) if f.endswith('.sql') and f[:14] < FIRST)
 
 
@@ -455,6 +464,19 @@ MEASURED_PREDICATE = {
     'ai_app_connect_notices_due_idx': "(status = 'due'::text)",
     'cloud_deal_checklists_my_items_uq': "((template_id = 'keepr:my-items'::text) AND (removed_at IS NULL) AND (purged_at IS NULL))",
 }
+# Constraints and partial-index predicates first written by a migration after the ten: NOT measured. Each is the
+# measured text of an identical expression above (ai_app_connect_notices, mcp_write_settings) with the table name changed.
+PREDICTED_CHECKDEF = {
+    'cloud_release_switches.cloud_release_switches_id_check': MEASURED_CHECKDEF['mcp_write_settings.mcp_write_settings_id_check'],
+    'cloud_computer_move_notices.cloud_computer_move_notices_status_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_status_check'],
+    'cloud_computer_move_notices.cloud_computer_move_notices_attempts_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_attempts_check'],
+    'cloud_computer_move_notices.cloud_computer_move_notices_last_error_check': MEASURED_CHECKDEF['ai_app_connect_notices.ai_app_connect_notices_last_error_check'],
+}
+PREDICTED_PREDICATE = {
+    'cloud_computer_move_notices_due_idx': MEASURED_PREDICATE['ai_app_connect_notices_due_idx'],
+}
+CHECKDEF_TEXT = {**MEASURED_CHECKDEF, **PREDICTED_CHECKDEF}
+PREDICATE_TEXT = {**MEASURED_PREDICATE, **PREDICTED_PREDICATE}
 AUTH_FINAL_MEASURED = ['mcp_authorize_approve(text,bytea,text,bytea)', 'mcp_authorize_deny(text,bytea,text)', 'mcp_authorize_view(text,bytea)',
                        'mcp_disconnect(uuid)', 'mcp_disconnect_all_mine()', 'mcp_list_my_connections()']
 # report_only the final-state check returns on keepr-test (measured): service_role holds every privilege on the six
@@ -463,8 +485,8 @@ lits_ordered = lambda e: [m.group(1).replace("''", "'") for m in re.finditer(r"'
 
 
 def checkdef(st, k):
-    final = MEASURED_CHECKDEF[k]
-    if st['conexpr'][k] == FINAL['conexpr'][k]:
+    final = CHECKDEF_TEXT[k]
+    if k not in FINAL['conexpr'] or st['conexpr'][k] == FINAL['conexpr'][k]:
         return final
     arr = ', '.join("'" + x.replace("'", "''") + "'::text" for x in lits_ordered(st['conexpr'][k]))
     out, n = re.subn(r'ARRAY\[[^\]]*\]', 'ARRAY[' + arr + ']', final)
@@ -572,7 +594,7 @@ def facts(st, keys):
     for k in keys['idx']:
         out[f'index {k}'] = ('index', st['idx'][k])
         if st['idx'][k].endswith('partial=true'):
-            out[f'index {k} predicate'] = ('index predicate text', MEASURED_PREDICATE[k])
+            out[f'index {k} predicate'] = ('index predicate text', PREDICATE_TEXT[k])
     for k in keys['cron']:
         x = st['cron'][k]
         out[f'cron job {k}'] = ('cron job', f"{x['schedule']} | {x['command']} | {x['username']} | active | this database")
@@ -594,22 +616,35 @@ def keys_of(v):
 
 FINAL = per[LAST]['state']
 PRE_GRANTS = {t: pre_lane_table_grants(t) for v in VERSIONS for t in per[v]['pretables']}
-FINAL_KEYS = {k: [] for k in ('fn', 'dropped', 'tables', 'cols', 'cons', 'idx', 'cron', 'ledger', 'pretables')}
-for v in VERSIONS:
-    for k, xs in keys_of(v).items():
-        for x in xs:
-            if k == 'fn' and x not in FINAL['fn']:
-                k2 = 'dropped'
-            elif k == 'dropped' and x in FINAL['fn']:
-                k2 = 'fn'
-            else:
-                k2 = k
-            if x not in FINAL_KEYS[k2]:
-                FINAL_KEYS[k2].append(x)
-FINAL_KEYS['cons'] = [c for c in FINAL_KEYS['cons'] if c in FINAL['cons']]
+
+
+def final_keys(versions, st):
+    keys = {k: [] for k in ('fn', 'dropped', 'tables', 'cols', 'cons', 'idx', 'cron', 'ledger', 'pretables')}
+    for v in versions:
+        for k, xs in keys_of(v).items():
+            for x in xs:
+                if k == 'fn' and x not in st['fn']:
+                    k2 = 'dropped'
+                elif k == 'dropped' and x in st['fn']:
+                    k2 = 'fn'
+                else:
+                    k2 = k
+                if x not in keys[k2]:
+                    keys[k2].append(x)
+    keys['cons'] = [c for c in keys['cons'] if c in st['cons']]
+    return keys
+
+
+FINAL_KEYS = final_keys(TEN_VERSIONS, FINAL)
+FINALS = {'final': (FINAL, FINAL_KEYS)}
+if LATER:
+    FINALS[F249] = (per[VERSIONS[-1]]['state'], final_keys(VERSIONS, per[VERSIONS[-1]]['state']))
+stage_of = lambda k: FINALS[k][0] if k in FINALS else per[k]['state']
+keys_at = lambda k: FINALS[k][1] if k in FINALS else keys_of(k)
 
 WANT = {v: facts(per[v]['state'], keys_of(v)) for v in VERSIONS}
-WANT['final'] = facts(FINAL, FINAL_KEYS)
+for _k, (_st, _keys) in FINALS.items():
+    WANT[_k] = facts(_st, _keys)
 ALL_KINDS = sorted({kind for w in WANT.values() for kind, _ in w.values()})
 assert set(REPORT_ONLY) <= set(ALL_KINDS), set(REPORT_ONLY) - set(ALL_KINDS)
 
@@ -621,6 +656,10 @@ assert set(MEASURED_CHECKDEF) == {k for k in FINAL['cons'] if FINAL['cons'][k].s
     set(MEASURED_CHECKDEF) ^ {k for k in FINAL['cons'] if FINAL['cons'][k].startswith('c ')}
 for k, text in MEASURED_CHECKDEF.items():  # the measured text holds exactly the literal set the migration wrote
     assert C(set(lits_ordered(text))) == check_literals(FINAL['conexpr'][k]), k
+for k, text in PREDICTED_CHECKDEF.items():  # the predicted text holds exactly the literal set the later migration wrote
+    assert C(set(lits_ordered(text))) == check_literals(stage_of(VERSIONS[-1])['conexpr'][k]), k
+assert {k for k in stage_of(VERSIONS[-1])['cons'] if stage_of(VERSIONS[-1])['cons'][k].startswith('c ')
+        and k not in FINAL['cons']} == set(PREDICTED_CHECKDEF), 'a later CHECK without a predicted text'
 _apply100 = rd('supabase/tests/backlog-4263/apply-20261118100000.sql').replace("''", "'")
 assert checkdef(per[FIRST]['state'], 'mcp_call_log.mcp_call_log_tool_check') in _apply100, 'rebuilt 100000 tool CHECK text differs from the PR-1 apply file'
 known = {'_mcp_r_list_all_deals(text,date,date,uuid)': '6ea286c67274464080b19fa439b5d9ac',
@@ -637,8 +676,8 @@ for k, want in known.items():
 
 def predicted_diffs(k, j, must_only=True):
     """ids of postcheck k whose wanted value differs in the state right after migration j."""
-    st = per[j]['state'] if j != 'final' else FINAL
-    now = facts(st, keys_of(k) if k != 'final' else FINAL_KEYS)
+    st = stage_of(j)
+    now = facts(st, keys_at(k))
     gone = {i.rsplit(' ', 1)[0] for i in WANT[k] if i.endswith(' exists') and now.get(i, (0, ''))[1] == 'false' and WANT[k][i][1] == 'true'}
     bad = [i for i, (kind, w) in WANT[k].items() if (i not in now or now[i][1] != w) and (label(kind) == 'MUST HOLD') == must_only]
     return [i for i in bad if not (i.startswith('function ') and not i.endswith(' exists')
@@ -650,11 +689,15 @@ PRED = {k: {j: predicted_diffs(k, j) for j in VERSIONS if j > k} for k in VERSIO
 # what report_only returns on keepr-test where nothing else differs: the service_role grants on pre-lane tables
 # plus, for a file run after later migrations, the report-only pins those migrations changed (the tool CHECK text)
 TEST_REPORT = {k: sorted({i for i, (kind, _) in WANT[k].items() if kind == SERVICE_ROLE_EXCEPTION}
-                         | set(predicted_diffs(k, 'final', must_only=False) if k != 'final' else [])) for k in ['final'] + VERSIONS}
+                         | set(predicted_diffs(k, 'final', must_only=False) if k != 'final' else [])) for k in ['final'] + TEN_VERSIONS}
+LAST_FINAL = F249 if LATER else 'final'
+for k in [v for v in VERSIONS if v not in TEN_VERSIONS] + ([F249] if LATER else []):
+    TEST_REPORT[k] = sorted({i for i, (kind, _) in WANT[k].items() if kind == SERVICE_ROLE_EXCEPTION}
+                            | set(predicted_diffs(k, F249, must_only=False) if k != F249 else []))
 
 SUPERSEDED = {}
 for k in VERSIONS:
-    for i in predicted_diffs(k, 'final'):
+    for i in predicted_diffs(k, LAST_FINAL):
         if i.endswith(' md5'):
             sig = i[len('function '):-len(' md5')]
             later = [j for j in VERSIONS if j > k and sig in per[j]['fn']]
@@ -683,9 +726,9 @@ row = lambda *xs: '(' + ', '.join(lit(x) for x in xs) + ')'
 
 
 def render(k):
-    keys = keys_of(k) if k != 'final' else FINAL_KEYS
+    keys = keys_at(k)
     want = {i: w for i, (_, w) in WANT[k].items()}
-    st = per[k]['state'] if k != 'final' else FINAL
+    st = stage_of(k)
     fn_rows, fx_rows = [], []
     for sig in keys['fn']:
         fn_rows.append(row('public.' + sig, *[want[f'function {sig} {a}'] for a in FN_ATTRS]))
@@ -720,8 +763,9 @@ def render(k):
     n_rep = len(WANT[k]) - n_must
     head = f"""-- postcheck-{k}.sql  (generated by {REL}/gen.py; do not hand-edit)
 -- """ + (f"""State right after migration {per[k]['file']}
---   (migration file md5 {per[k]['file_md5']}). Run it right after that migration, before the next one.""" if k != 'final' else
-           """State after all ten migrations 20261118100000 .. 20261118190000 (each object at its latest definition).""") + f"""
+--   (migration file md5 {per[k]['file_md5']}). Run it right after that migration, before the next one.""" if k not in FINALS else
+           """State after all ten migrations 20261118100000 .. 20261118190000 (each object at its latest definition).""" if k == 'final' else
+           f"""State after every lane migration through {VERSIONS[-1]} (each object at its latest definition); the 2.49 final.""") + f"""
 -- Read-only: one SELECT over pg_catalog, cron.job and supabase_migrations.schema_migrations.
 -- Returns one row (postcheck, report_only). postcheck = 'ok' when every MUST HOLD assertion holds; report_only lists the
 -- differences of the REPORT ONLY assertions ('' when none). A MUST HOLD difference fails with:
@@ -890,7 +934,8 @@ FINAL_SELECT = """SELECT CASE WHEN f.must IS NULL THEN 'ok'
                  WHERE c.got IS DISTINCT FROM c.want) d) f;
 """
 
-RUN_ORDER = ['final'] + VERSIONS
+RUN_ORDER = ['final'] + VERSIONS + ([F249] if LATER else [])
+VERIFY_ORDER = ['final'] + TEN_VERSIONS  # the test-database harness below covers the ten (unchanged)
 FILES = {k: render(k) for k in RUN_ORDER}
 
 
@@ -922,7 +967,7 @@ BEGIN
   EXCEPTION WHEN others THEN
     r := r || jsonb_build_object({lit(k)}, jsonb_build_object('error', SQLERRM));
   END;
-""" for i, k in enumerate(RUN_ORDER)) + """  RAISE EXCEPTION 'POSTCHECK_RUN %', r;
+""" for i, k in enumerate(VERIFY_ORDER)) + """  RAISE EXCEPTION 'POSTCHECK_RUN %', r;
 END
 $verify4263prod$;
 """
@@ -1087,7 +1132,7 @@ verify_controls = f"""-- verify-controls.sql (generated by {REL}/gen.py) — {NE
 
 # ------------------------------------------------------------------------------------------------ expected.json, README
 def counts(k):
-    keys = keys_of(k) if k != 'final' else FINAL_KEYS
+    keys = keys_at(k)
     n_must = sum(1 for kind, _ in WANT[k].values() if label(kind) == 'MUST HOLD')
     return {'functions': len(keys['fn']), 'functions_absent': len(keys['dropped']), 'tables_or_sequences': len(keys['tables']),
             'pre_lane_tables': len(keys['pretables']), 'columns_added': len(keys['cols']), 'constraints': len(keys['cons']),
@@ -1095,7 +1140,7 @@ def counts(k):
             'must_hold': n_must, 'report_only': len(WANT[k]) - n_must}
 
 
-stage_st = lambda k: per[k]['state'] if k != 'final' else FINAL
+stage_st = stage_of
 expected = {
     'generated_by': f'{REL}/gen.py',
     'migrations': {v: {'file': per[v]['file'], 'file_md5': per[v]['file_md5']} for v in VERSIONS},
@@ -1107,7 +1152,8 @@ expected = {
     'postchecks': {k: {'file': f'postcheck-{k}.sql', 'counts': counts(k),
                        'pins': {i: {'label': label(kind), 'kind': kind, 'want': w} for i, (kind, w) in WANT[k].items()}} for k in RUN_ORDER},
     'fails_after': {k: {j: PRED[k][j] for j in PRED[k] if PRED[k][j]} for k in VERSIONS},
-    'expected_at_final_state': {k: ('ok' if not predicted_diffs(k, 'final') else predicted_diffs(k, 'final')) for k in VERSIONS},
+    'expected_at_final_state': {k: ('ok' if not predicted_diffs(k, 'final') else predicted_diffs(k, 'final')) for k in TEN_VERSIONS},
+    **({'expected_at_final_249_state': {k: ('ok' if not predicted_diffs(k, F249) else predicted_diffs(k, F249)) for k in VERSIONS}} if LATER else {}),
     'report_only_expected_on_keepr_test': TEST_REPORT,
     'controls': {c[0]: {'postcheck': c[1], 'expect': c[4], 'text': c[5]} for c in CONTROLS},
     'superseded_bodies_required_by_later_pre_checks': SUPERSEDED,
@@ -1115,6 +1161,7 @@ expected = {
     'pre_lane_table_grants_from_pre_lane_migrations': PRE_GRANTS,
 }
 assert not predicted_diffs('final', 'final')
+assert not LATER or not predicted_diffs(F249, F249)
 
 rows = []
 for k in VERSIONS:
@@ -1132,7 +1179,19 @@ OPERATOR = """> Run `postcheck-<version>.sql` right after migration `<version>`.
 >     authenticated lists, the sweep, or an EXECUTE or table grant to anon, authenticated, PUBLIC or service_role is
 >     never waived."""
 
-readme = f"""# Production post-checks for migrations {FIRST} .. {LAST} (BACKLOG-4263)
+LATER_NOTE = ("" if not LATER else f"""
+## After the ten: the 2.49 migrations
+
+Later lane migrations ({', '.join(f'`{f[:14]}`' for f in LATER)}) each have their own `postcheck-<version>.sql`, run
+right after that migration. `postcheck-final.sql` is unchanged and still describes the state after the ten: production
+runs it before the first later migration, and it fails after one (expected; see the table below).
+`postcheck-{F249}.sql` describes the state after the last lane migration (`{VERSIONS[-1]}`); it is run on production
+only, at the end of the 2.49 release run. On the test project it is expected to fail while any later migration is
+not yet applied there. The test-database harness in `../backlog-4263-prod-verify/` covers the ten only.
+CHECK texts and partial-index predicates first written after the ten are not measured: each is the measured text of an
+identical expression on an earlier table (`gen.py`, `PREDICTED_CHECKDEF`, `PREDICTED_PREDICATE`; report only).
+""")
+readme = f"""# Production post-checks for migrations {FIRST} .. {VERSIONS[-1]} (BACKLOG-4263)
 
 Generated by `gen.py`; do not hand-edit. `python3 gen.py check` fails when any file here is stale.
 
@@ -1234,14 +1293,15 @@ Expected; each cell lists the MUST HOLD ids that differ.
 | Post-check | Result after each later migration |
 |---|---|
 """ + '\n'.join(rows) + """
-
+""" + LATER_NOTE + """
 ## Files
 
 | File | What it is |
 |---|---|
 | `gen.py` | Generator and `check` / `report` modes |
-| `postcheck-<version>.sql` | Read-only post-check per migration (ten) |
-| `postcheck-final.sql` | Read-only post-check of the state after all ten |
+| `postcheck-<version>.sql` | Read-only post-check per migration |
+| `postcheck-final.sql` | Read-only post-check of the state after the ten (frozen: production runs it before the later ones) |""" + ("" if not LATER else f"""
+| `postcheck-{F249}.sql` | Read-only post-check of the state after the last lane migration (production, end of the 2.49 run) |""") + """
 | `expected.json` | Pinned facts with labels, callable lists per stage, predicted failures |
 
 Every `.sql` file in this folder is read-only. The test-database harness (`verify-run.sql`, `verify-controls.sql`) is
@@ -1311,7 +1371,7 @@ if len(sys.argv) > 2 and sys.argv[1] == 'report':
     if 'POSTCHECK_RUN ' in msg:
         res = json.loads(msg[msg.index('POSTCHECK_RUN ') + 14:].split('\nCONTEXT')[0])
         bad = 0
-        for k in RUN_ORDER:
+        for k in VERIFY_ORDER:
             got = res.get(k, {})
             pred = [] if k == 'final' else predicted_diffs(k, 'final')
             rep = TEST_REPORT[k]
