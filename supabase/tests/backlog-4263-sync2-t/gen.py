@@ -762,7 +762,8 @@ PARTS_RANGE = (55, 70)   # m_big1's part count as derived offline (about 60); ou
 
 def fixtures_decision(t):
     """(decision, estimates, why) from the fixtures call's timings. decision: FULL, SPLIT or STOP.
-    STOP when the probe failed, a value is missing or not a number, or the part count is outside PARTS_RANGE. Otherwise
+    STOP when the probe failed, a value is missing, not a finite number or not above 0 (big1_parts: not a whole number),
+    or the part count is outside PARTS_RANGE. Otherwise
     FULL if the full call's estimate is at most 45 s; else SPLIT if the controls and the mutants estimates are both at
     most 200 s; else STOP. Estimates (rule of thumb, not measured): the fixtures once, every get_message call on m_big1
     (all parts and the one after the last in c_c9b_parts_big, its first call, about 8 fast-failing mutant calls), plus a
@@ -850,20 +851,20 @@ def selftest(green_ok=False):
              ('mutants only, a missed mutant', wrap(full(missed, mode='mutants')), green_ok),
              ('no mode named', wrap(full().replace('"mode": "full", ', '')), False),
              # the shape SR's by-eye checks name: plain psql text has no HTTP status line, so it is not a harness result
-             ('plain psql text, no kt-sql status line', plain(full()), False),
-             ('HTTP 200 (committed)', wrap(full(), http='kt-sql: HTTP 200'), False),
-             ('no HTTP status line', wrap(full(), http=None), False),
-             ('two HTTP status lines', wrap(full()) + 'kt-sql: HTTP 400\n', False),
-             ('two ERROR lines', wrap(full()).replace('\\nCONTEXT:', '\\nERROR:  P0001: again\\nCONTEXT:', 1), False),
-             ('SQLSTATE 57014 (statement timeout)', wrap('canceling statement due to statement timeout', code='57014'), False),
-             ('SQLSTATE 55P03 (lock timeout)', wrap('canceling statement due to lock timeout', code='55P03'), False),
-             ('SQLSTATE P0002 with a result', wrap(full(), code='P0002'), False),
-             ('JSON not closed right before CONTEXT', wrap(full() + ' trailing'), False),
-             ('MUTANT NOT RESTORED', wrap('MUTANT NOT RESTORED reader_granted_anon'), False),
-             ('negative control missing', wrap(full().replace(f'"mutant:{neg}"', '"x_absent"')), False),
-             ('negative control applied', wrap(full((neg, {'applied': True, 'want': 'not_applied'}))), False),
-             ('negative control: another error', wrap(full((neg, {'applied': False, 'error': 'boom', 'want': 'not_applied'}))), False),
-             ('mutants only: negative control missing', wrap(full(mode='mutants').replace(f'"mutant:{neg}"', '"x_absent"')), False)]
+             ('plain psql text, no kt-sql status line', plain(full()), False, 'HTTP 400'),
+             ('HTTP 200 (committed)', wrap(full(), http='kt-sql: HTTP 200'), False, 'COMMITTED'),
+             ('no HTTP status line', wrap(full(), http=None), False, 'HTTP 400'),
+             ('two HTTP status lines', wrap(full()) + 'kt-sql: HTTP 400\n', False, 'HTTP 400'),
+             ('two ERROR lines', wrap(full()).replace('\\nCONTEXT:', '\\nERROR:  P0001: again\\nCONTEXT:', 1), False, "exactly one 'ERROR:'"),
+             ('SQLSTATE 57014 (statement timeout)', wrap('canceling statement due to statement timeout', code='57014'), False, 'SQLSTATE 57014'),
+             ('SQLSTATE 55P03 (lock timeout)', wrap('canceling statement due to lock timeout', code='55P03'), False, 'SQLSTATE 55P03'),
+             ('SQLSTATE P0002 with a result', wrap(full(), code='P0002'), False, 'SQLSTATE P0002'),
+             ('JSON not closed right before CONTEXT', wrap(full() + ' trailing'), False, 'right before CONTEXT'),
+             ('MUTANT NOT RESTORED', wrap('MUTANT NOT RESTORED reader_granted_anon'), False, 'MUTANT NOT RESTORED reader_granted_anon'),
+             ('negative control missing', wrap(full().replace(f'"mutant:{neg}"', '"x_absent"')), False, 'NEG_FAILED'),
+             ('negative control applied', wrap(full((neg, {'applied': True, 'want': 'not_applied'}))), False, 'NEG_FAILED'),
+             ('negative control: another error', wrap(full((neg, {'applied': False, 'error': 'boom', 'want': 'not_applied'}))), False, 'NEG_FAILED'),
+             ('mutants only: negative control missing', wrap(full(mode='mutants').replace(f'"mutant:{neg}"', '"x_absent"')), False, 'NEG_FAILED')]
     split_cases = [('split ok', wrap(full(mode='controls')), wrap(full(mode='mutants')), True),
                    ('split: controls part missing', wrap('something else'), wrap(full(mode='mutants')), False),
                    ('split: mutants part missing', wrap(full(mode='controls')), wrap(full())[:300], False),
@@ -874,11 +875,12 @@ def selftest(green_ok=False):
                    ('split: parts swapped', wrap(full(mode='mutants')), wrap(full(mode='controls')), False)]
     sample = '/Users/daniel/Developer/Mad/scratchpad/4263/sync2/window1/s1-run2-out.txt'
     bad = 0
-    for name, raw, want in cases:
+    for name, raw, want, *need in cases:
         lines, got = report(raw)
-        why = '' if got else ' (' + next((l for l in lines if l.startswith(('NOT OK', 'NEG_FAILED', 'MISSED', 'CRASH', 'FAIL', 'rollback: E', 'MISSING'))), lines[-1])[:110] + ')'
-        print(f"{'ok ' if got == want else 'BAD'} {name}: report ok={got}, expected {want}{why}")
-        bad += got != want
+        why = '' if got else ' (' + next((l for l in lines if l.startswith(('NOT OK', 'NEG_FAILED', 'MISSED', 'CRASH', 'FAIL', 'rollback: E', 'MISSING'))), lines[-1])[:220] + ')'
+        right = got == want and all(x in why for x in need)
+        print(f"{'ok ' if right else 'BAD'} {name}: report ok={got}, expected {want}{' for ' + repr(need[0]) if need else ''}{why}")
+        bad += not right
     if os.path.exists(sample):  # a real captured transport output (another harness): unwrap must find its RAISE text
         u = unwrap(open(sample, encoding='utf-8').read())
         found = 'S1_RESULT {' in u
@@ -915,29 +917,29 @@ def selftest(green_ok=False):
               ('FULL: parts 55', T(10000, 100, 55), True),
               ('FULL: parts 70', T(10000, 100, 70), True),
               ('STOP: parts 71', T(10000, 100, 71), False),
-              ('STOP: getm 0 ms', T(3000, 0, 60), False),
-              ('STOP: getm negative', T(3000, -500, 60), False),
-              ('STOP: fixture negative', T(-1000000, 400, 60), False),
-              ('STOP: getm -inf', T(3000, float('-inf'), 60), False),
-              ('STOP: getm +inf', T(3000, float('inf'), 60), False),
-              ('STOP: getm NaN', T(3000, float('nan'), 60), False),
-              ('STOP: parts NaN', T(3000, 400, float('nan')), False),
-              ('STOP: parts not whole', T(3000, 400, 60.5), False),
-              ('STOP: frame bytes 0', T(3000, 400, 60, big1_frame_bytes=0), False),
-              ('STOP: strip negative', T(3000, 400, 60, strip_big1_ms=-1), False),
-              ('STOP: getm ok key absent', T(3000, 400, 60, drop='getm_big1_ok'), False),
-              ('STOP: frame bytes absent', T(3000, 400, 60, drop='big1_frame_bytes'), False),
-              ('STOP: fixtures HTTP 200', wrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT), http='kt-sql: HTTP 200'), False),
-              ('STOP: fixtures SQLSTATE 57014', wrap('canceling statement due to statement timeout', code='57014'), False),
-              ('STOP: fixtures SQLSTATE 55P03', wrap('canceling statement due to lock timeout', code='55P03'), False),
-              ('STOP: fixtures two ERROR lines', T(3000, 400, 60).replace('\\nCONTEXT:', '\\nERROR:  P0001: again\\nCONTEXT:', 1), False),
-              ('STOP: fixtures JSON not closed before CONTEXT', wrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT) + ' x'), False)]
-    for name, raw, want in fcases:
+              ('STOP: getm 0 ms', T(3000, 0, 60), False, 'getm_big1_ms'),
+              ('STOP: getm negative', T(3000, -500, 60), False, 'getm_big1_ms'),
+              ('STOP: fixture negative', T(-1000000, 400, 60), False, 'fixture_ms'),
+              ('STOP: getm -inf', T(3000, float('-inf'), 60), False, 'getm_big1_ms'),
+              ('STOP: getm +inf', T(3000, float('inf'), 60), False, 'getm_big1_ms'),
+              ('STOP: getm NaN', T(3000, float('nan'), 60), False, 'getm_big1_ms'),
+              ('STOP: parts NaN', T(3000, 400, float('nan')), False, 'big1_parts'),
+              ('STOP: parts not whole', T(3000, 400, 60.5), False, 'big1_parts'),
+              ('STOP: frame bytes 0', T(3000, 400, 60, big1_frame_bytes=0), False, 'big1_frame_bytes'),
+              ('STOP: strip negative', T(3000, 400, 60, strip_big1_ms=-1), False, 'strip_big1_ms'),
+              ('STOP: getm ok key absent', T(3000, 400, 60, drop='getm_big1_ok'), False, 'did not answer ok'),
+              ('STOP: frame bytes absent', T(3000, 400, 60, drop='big1_frame_bytes'), False, 'big1_frame_bytes'),
+              ('STOP: fixtures HTTP 200', wrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT), http='kt-sql: HTTP 200'), False, 'COMMITTED'),
+              ('STOP: fixtures SQLSTATE 57014', wrap('canceling statement due to statement timeout', code='57014'), False, 'SQLSTATE 57014'),
+              ('STOP: fixtures SQLSTATE 55P03', wrap('canceling statement due to lock timeout', code='55P03'), False, 'SQLSTATE 55P03'),
+              ('STOP: fixtures two ERROR lines', T(3000, 400, 60).replace('\\nCONTEXT:', '\\nERROR:  P0001: again\\nCONTEXT:', 1), False, "exactly one 'ERROR:'"),
+              ('STOP: fixtures JSON not closed before CONTEXT', wrap('T4263_FIXTURES_OK ' + json.dumps(FIXTURE_EXPECT) + ' x'), False, 'right before CONTEXT')]
+    for name, raw, want, *need in fcases:
         text, got = report_fixtures(raw)
         dec = re.search(r'^decision: (FULL|SPLIT|STOP)\b', text, re.M)
         dec = dec.group(1) if dec else None
         want_dec = name.split(':')[0] if name.split(':')[0] in ('FULL', 'SPLIT', 'STOP') else ('STOP' if not want else None)
-        right = got == want and (want_dec is None or dec == want_dec)
+        right = got == want and (want_dec is None or dec == want_dec) and all(x in text for x in need)
         print(f"{'ok ' if right else 'BAD'} {name}: report-fixtures ok={got} decision={dec}, expected {want} {want_dec or ''}")
         bad += not right
     cases += fcases
@@ -977,7 +979,7 @@ if __name__ == '__main__':
             sys.exit(1)
         for f, o in _role_wrong:
             print(f'WRONG ROLE {f}:{o[1]} {o[3]} (owner {o[4]}, role {o[5]}): {o[2]}')
-        print(f'statements on objects another role owns: {sum(len(v) for v in _role_per.values())} in {len(_role_files)} files, '
+        print(f'statements on objects another role owns: {sum(len(v) for v in _role_per.values())} in {len(_role_per)} files, '
               f'{len(_role_wrong)} under the wrong role; migrations: {len(_role_mig)}')
         if _role_wrong:
             sys.exit(1)
