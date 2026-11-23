@@ -3,8 +3,8 @@
 
 usage: verdict.py <case> <pristine|mutant> <first.out> <second.out> <state.out> <IA> <IB>
        verdict.py applied <name> <md5.out>    -> 'MUTATION APPLIED <name> md5 <x>' or ERROR (the create left no body)
-       verdict.py precheck <pre.out> <need_on> -> 'ok auth_users=<n> one_computer=<b>' (exit 0) or the refusal (exit 1)
-       verdict.py fkcounts <label> <fk.out>   -> one line per table holding rows of the fixture user, then the total
+       verdict.py precheck <pre.out> <need_on> -> 'ok auth_users=<n> one_computer=<b> ...' (exit 0) or the refusal (exit 1)
+       verdict.py fkcounts <label> <fk.out>   -> one line per table holding rows of the fixture user, then 'total=<n> setnull=<m>'
 Prints one line and exits 0 only for the expected outcome:
   pristine run: PASS (the case's passing shape) or ERROR: <why> / INCONCLUSIVE: <why>
   mutant run:   RED  (the case's own red shape)  or ERROR: <why> / INCONCLUSIVE: <why>
@@ -107,37 +107,69 @@ SHAPES = {  # case -> fn returning (passing shape, the mutant's own red shape); 
 RED_CASES = ('R2', 'R3', 'R4', 'R6')
 
 
+def fk_rows(x):
+    """[(table, column, on-delete action, n)] from fk-counts rows, or None when unreadable."""
+    if not isinstance(x, list) or not x:
+        return None
+    try:
+        return [(str(r['tbl']), str(r['col']), str(r.get('del', '')), int(r['n'])) for r in x]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def fk_lines(label, fk):
+    total = sum(n for _, _, _, n in fk)
+    kept = sum(n for _, _, d, n in fk if d in ('n', 'd'))
+    lines = [f'  {label}: {len(fk)} columns reference auth.users; non-zero:']
+    lines += [f'    {t}.{c}: {n}' + (' (ON DELETE SET NULL/DEFAULT: stays behind with the id cleared)' if d in ('n', 'd') else '')
+              for t, c, d, n in fk if n] or ['    none']
+    return lines + [f'total={total} setnull={kept}']
+
+
+def probe(rows_, need):
+    """(ok, line) for the first call. ok only when it proves one call = one transaction and the shape (exactly one row,
+    the last statement's), read committed, readable per-table counts that are all 0, and nothing left behind."""
+    if not isinstance(rows_, list) or len(rows_) != 1 or not isinstance(rows_[0], dict):
+        n = len(rows_) if isinstance(rows_, list) else 0
+        return False, f'the probe answered {n} rows, not exactly 1: one call = one transaction (last statement only) not proven'
+    r = rows_[0]
+    if r.get('txn') != 'one':
+        return False, f"one call = one transaction NOT proven (txn {r.get('txn')!r}); nothing was created"
+    if r.get('iso') != 'read committed':
+        return False, f"isolation is {r.get('iso')!r}, not read committed; nothing was created"
+    try:
+        by_id, by_pat, mut, total = (int(r[k]) for k in ('by_id', 'by_pattern', 'mutants', 'auth_users'))
+    except (KeyError, TypeError, ValueError):
+        return False, 'probe row unreadable: ' + json.dumps(r)[:200]
+    fk = fk_rows(r.get('fk'))
+    why = [(f'{by_id} auth user(s) already have the fixture id', by_id),
+           (f'{by_pat} fixture user(s) exist: {r.get("pattern_emails")}', by_pat),
+           (f'{mut} public.*_m4263 function(s) exist: {r.get("mutant_names")}', mut),
+           ('the per-table count query is unreadable', fk is None),
+           (f'{sum(n for *_, n in fk or [])} rows already reference the fixture id', fk is not None and any(n for *_, n in fk))]
+    why += [(w, bad) for w, bad in need(r)]
+    why = [w for w, bad in why if bad]
+    if why:
+        return False, '; '.join(why) + '; nothing was created'
+    return True, (f"ok auth_users={total} one_computer={r.get('one_computer') is True} txn=one iso=read_committed "
+                  f"track_activity_query_size={r.get('track_size')} bypassrls={r.get('bypassrls')} orphans={r.get('orphans', '-')} "
+                  f"fk_columns={len(fk)}")
+
+
 def precheck(path, need_on):
     r, e = rows(path)
     if e:
         return False, f'precheck {e}'
-    r = r[-1]
-    try:
-        by_id, by_pat, mut, total = (int(r[k]) for k in ('by_id', 'by_pattern', 'mutants', 'auth_users'))
-    except (KeyError, TypeError, ValueError):
-        return False, 'precheck row unreadable: ' + json.dumps(r)[:200]
-    on = r.get('one_computer') is True
-    why = [w for w, bad in ((f'{by_id} auth user(s) already have the fixture id', by_id),
-                            (f'{by_pat} p4263s1cc-*@example.test fixture user(s) exist (a run in progress, or leftovers: run.sh cleanup <run-id> <user-id>)', by_pat),
-                            (f'{mut} public.*_m4263 function(s) exist', mut),
-                            ('the case needs one_computer on and it is off (the coordinator flips it; never flipped here)', need_on == '1' and not on)) if bad]
-    if why:
-        return False, '; '.join(why) + '; nothing was created'
-    return True, f'ok auth_users={total} one_computer={on}'
+    return probe(r, lambda x: [('the case needs one_computer on and it is off (the coordinator flips it; never flipped here)',
+                                need_on == '1' and x.get('one_computer') is not True)])
 
 
 def fkcounts(label, path):
     r, e = rows(path)
-    if e or not all(isinstance(x, dict) and {'tbl', 'col', 'n'} <= set(x) for x in r):
-        return [f'  {label}: per-table counts unreadable ({e or "unexpected rows"})', 'unreadable'], False
-    try:
-        nz = [(x['tbl'], x['col'], int(x['n'])) for x in r]
-    except (TypeError, ValueError):
+    fk = None if e else fk_rows(r)
+    if fk is None:
         return [f'  {label}: per-table counts unreadable', 'unreadable'], False
-    total = sum(n for _, _, n in nz)
-    lines = [f'  {label}: {len(nz)} columns reference auth.users; non-zero:']
-    lines += [f'    {t}.{c}: {n}' for t, c, n in nz if n] or ['    none']
-    return lines + [str(total)], True
+    return fk_lines(label, fk), True
 
 
 def applied(name, path):

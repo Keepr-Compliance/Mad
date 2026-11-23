@@ -110,20 +110,30 @@ APPLIED = [  # (label, md5 query output, expected first word)
     ('create failed (no body)', ok([{'m': None}]), 'ERROR'),
     ('create query failed', err('ERROR:  42501: permission denied\n'), 'ERROR'),
 ]
-PRE = {'by_id': 0, 'by_pattern': 0, 'mutants': 0, 'auth_users': 25, 'one_computer': True}
+FKROWS = [{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 0}]
+PRE = {'txn': 'one', 'iso': 'read committed', 'track_size': '1kB', 'bypassrls': True, 'by_id': 0, 'by_pattern': 0,
+       'pattern_emails': None, 'mutants': 0, 'mutant_names': None, 'auth_users': 25, 'one_computer': True, 'fk': FKROWS}
 PRECHECK = [  # (label, output, need_on, expected exit)
     ('clean', ok([PRE]), '1', 0),
     ('fixture id exists', ok([dict(PRE, by_id=1)]), '0', 1),
-    ('fixture pattern exists', ok([dict(PRE, by_pattern=1)]), '0', 1),
-    ('mutant left', ok([dict(PRE, mutants=1)]), '0', 1),
+    ('fixture pattern exists', ok([dict(PRE, by_pattern=1, pattern_emails='p4263s1cc-x@example.test')]), '0', 1),
+    ('mutant left', ok([dict(PRE, mutants=1, mutant_names='cloud_claim_install_m4263')]), '0', 1),
     ('switch off, case needs it', ok([dict(PRE, one_computer=False)]), '1', 1),
     ('switch off, case does not need it', ok([dict(PRE, one_computer=False)]), '0', 0),
+    ('not one transaction (setting lost)', ok([dict(PRE, txn=None)]), '0', 1),
+    ('two rows returned', ok([{'probe_set': 'one'}, PRE]), '0', 1),
+    ('isolation repeatable read', ok([dict(PRE, iso='repeatable read')]), '0', 1),
+    ('per-table counts unreadable', ok([dict(PRE, fk=None)]), '0', 1),
+    ('a row already references the id', ok([dict(PRE, fk=[dict(FKROWS[0], n=1)])]), '0', 1),
     ('precheck error', LOCK_TIMEOUT, '0', 1),
-    ('precheck row unreadable', ok([{'by_id': 0}]), '0', 1),
+    ('precheck row unreadable', ok([{'txn': 'one', 'iso': 'read committed', 'by_id': 0}]), '0', 1),
 ]
 FK = [  # (label, output, expected last line)
-    ('all zero', ok([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': 0}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'n': 0}]), '0'),
-    ('rows left', ok([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': 2}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'n': 1}]), '3'),
+    ('all zero', ok([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 0}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'del': 'c', 'n': 0}]),
+     'total=0 setnull=0'),
+    ('rows left', ok([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 2}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'del': 'c', 'n': 1}]),
+     'total=3 setnull=0'),
+    ('set null rows', ok([{'tbl': 'app_lifecycle_events', 'col': 'user_id', 'del': 'n', 'n': 2}]), 'total=2 setnull=2'),
     ('query failed', LOCK_TIMEOUT, 'unreadable'),
 ]
 

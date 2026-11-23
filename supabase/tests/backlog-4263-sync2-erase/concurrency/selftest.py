@@ -47,6 +47,9 @@ LOCK_TIMEOUT = err('ERROR:  55P03: canceling statement due to lock timeout\nCONT
 NO_FN = err('ERROR:  42883: function public.cloud_blob_erase_scrub_m4263(uuid, uuid, boolean, integer) does not exist\n')
 
 
+BS = '2026-11-23T10:00:01.240000+00:00'   # c6g_skip B right before its scrub: 0.01 s after its start
+
+
 def b(**kw):
     o = {'t_start': B0, 't_end': BW}
     o.update(kw)
@@ -68,15 +71,21 @@ CASES = [  # (label, case, mutant, a.out, b.out, expected first word)
     ('attach gate timeout', 'attach', 'single_statement_fence', ATTACH_A, GATE_TIMEOUT, 'INCONCLUSIVE'),
     ('attach both ok, no overlap', 'attach', '', ATTACH_A, b(fenced=False, t_start=B0_LATE), 'INCONCLUSIVE'),
     ('attach fenced missing', 'attach', '', ATTACH_A, b(), 'INCONCLUSIVE'),
-    ('c6g_skip pass', 'c6g_skip', '', SKIP_A, b(t_end=BN, answer={'state': 'skipped'}), 'PASS'),
-    ('c6g_skip waited', 'c6g_skip', '', SKIP_A, b(answer={'state': 'scrubbed'}), 'FAIL'),
-    ('c6g_skip mutant caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(answer={'state': 'scrubbed'}), 'CAUGHT'),
-    ('c6g_skip mutant not caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(t_end=BN, answer={'state': 'skipped'}), 'NOT_CAUGHT'),
+    ('c6g_skip pass', 'c6g_skip', '', SKIP_A, b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'PASS'),
+    ('c6g_skip waited', 'c6g_skip', '', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'FAIL'),
+    ('c6g_skip mutant caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'CAUGHT'),
+    ('c6g_skip mutant not caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'NOT_CAUGHT'),
     ('c6g_skip mutant, no overlap', 'c6g_skip', 'no_skip_locked', SKIP_A,
-     b(t_start=B0_LATE, answer={'state': 'scrubbed'}), 'INCONCLUSIVE'),
-    ('c6g_skip session A error', 'c6g_skip', '', LOCK_TIMEOUT, b(t_end=BN, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
-    ('c6g_skip session A answered no marker', 'c6g_skip', '', rows([{'r': 'x'}]), b(t_end=BN, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
-    ('c6g_skip answer missing', 'c6g_skip', '', SKIP_A, b(t_end=BN), 'INCONCLUSIVE'),
+     b(t_start=B0_LATE, t_scrub=B0_LATE, answer={'state': 'scrubbed'}), 'INCONCLUSIVE'),
+    ('c6g_skip session A error', 'c6g_skip', '', LOCK_TIMEOUT, b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
+    ('c6g_skip session A answered no marker', 'c6g_skip', '', rows([{'r': 'x'}]), b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
+    ('c6g_skip answer missing', 'c6g_skip', '', SKIP_A, b(t_end=BN, t_scrub=BS), 'INCONCLUSIVE'),
+    ('c6g_skip pristine did not wait but did not skip (state read)', 'c6g_skip', '', SKIP_A, b(t_end=BN, t_scrub=BS, answer={'state': 'scrubbed'}), 'FAIL'),
+    ('c6g_skip switch row held by someone else (B waited before its scrub)', 'c6g_skip', '', SKIP_A,
+     b(t_scrub='2026-11-23T10:00:03.900000+00:00', answer={'state': 'skipped'}), 'INCONCLUSIVE'),
+    ('c6g_skip t_scrub missing', 'c6g_skip', '', SKIP_A, b(t_end=BN, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
+    ('session B error carrying a row value', 'attach', '', ATTACH_A,
+     err('ERROR:  23505: duplicate key value violates unique constraint "k"\nDETAIL:  Failing row contains (fakerowvalue4263).\n'), 'INCONCLUSIVE'),
     ('c6g_wait pass', 'c6g_wait', '', WAIT_A, b(), 'PASS'),
     ('c6g_wait no wait', 'c6g_wait', '', WAIT_A, b(t_end=BN), 'FAIL'),
     ('c6g_wait mutant caught', 'c6g_wait', 'read_before_lock', WAIT_A, b(t_end=BN), 'CAUGHT'),
@@ -90,15 +99,23 @@ CASES = [  # (label, case, mutant, a.out, b.out, expected first word)
     ('wrong mutant for case', 'c6g_wait', 'no_skip_locked', WAIT_A, b(), 'INCONCLUSIVE'),
     ('empty outputs', 'attach', '', '', '', 'INCONCLUSIVE'),
 ]
-PRE = {'by_id': 0, 'by_pattern': 0, 'mutants': 0, 'marked_runs': 0, 'auth_users': 25, 'orphans': 3}
+FKROWS = [{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 0}]
+PRE = {'txn': 'one', 'iso': 'read committed', 'track_size': '1kB', 'bypassrls': True, 'one_computer': False, 'by_id': 0,
+       'by_pattern': 0, 'pattern_emails': None, 'mutants': 0, 'mutant_names': None, 'marked_runs': 0, 'auth_users': 25,
+       'orphans': 3, 'fk': FKROWS}
 PRECHECK = [  # (label, output, case, expected exit)
     ('clean', rows([PRE]), 'attach', 0),
     ('fixture id exists', rows([dict(PRE, by_id=1)]), 'c6g_skip', 1),
-    ('fixture pattern exists', rows([dict(PRE, by_pattern=2)]), 'c6g_skip', 1),
-    ('copy left', rows([dict(PRE, mutants=1)]), 'c6g_wait', 1),
+    ('fixture pattern exists', rows([dict(PRE, by_pattern=2, pattern_emails='p4263c-a@example.test, p4263c-b@example.test')]), 'c6g_skip', 1),
+    ('copy left', rows([dict(PRE, mutants=1, mutant_names='cloud_blob_erase_scrub_m4263')]), 'c6g_wait', 1),
     ('marked run row left', rows([dict(PRE, marked_runs=1)]), 'c6g_wait', 1),
     ('attach with 900 orphans', rows([dict(PRE, orphans=900)]), 'attach', 1),
     ('c6g with 900 orphans', rows([dict(PRE, orphans=900)]), 'c6g_skip', 0),
+    ('not one transaction (setting lost)', rows([dict(PRE, txn=None)]), 'attach', 1),
+    ('two rows returned', rows([{'probe_set': 'one'}, PRE]), 'attach', 1),
+    ('isolation repeatable read', rows([dict(PRE, iso='repeatable read')]), 'attach', 1),
+    ('per-table counts unreadable', rows([dict(PRE, fk=None)]), 'attach', 1),
+    ('a row already references the id', rows([dict(PRE, fk=[dict(FKROWS[0], n=1)])]), 'attach', 1),
     ('precheck error', LOCK_TIMEOUT, 'attach', 1),
 ]
 APPLIED = [
@@ -107,8 +124,10 @@ APPLIED = [
     ('md5 query failed', LOCK_TIMEOUT, 1),
 ]
 FK = [
-    ('all zero', rows([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': 0}]), '0'),
-    ('rows left', rows([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'n': 2}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'n': 1}]), '3'),
+    ('all zero', rows([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 0}]), 'total=0 setnull=0'),
+    ('rows left', rows([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 2}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'del': 'c', 'n': 1}]),
+     'total=3 setnull=0'),
+    ('set null rows', rows([{'tbl': 'app_lifecycle_events', 'col': 'user_id', 'del': 'n', 'n': 2}]), 'total=2 setnull=2'),
     ('query failed', LOCK_TIMEOUT, 'unreadable'),
 ]
 
@@ -126,7 +145,7 @@ with tempfile.TemporaryDirectory() as d:
         return p
     for label, case, mut, fa, fb, want in CASES:
         rc, out = run([case, mut, put('a', fa), put('b', fb)])
-        good = out.split(':')[0] == want and (rc == 0) == (want in ('PASS', 'CAUGHT'))
+        good = out.split(':')[0] == want and (rc == 0) == (want in ('PASS', 'CAUGHT')) and 'fakerowvalue4263' not in out
         bad += not good
         print(('ok   ' if good else 'BAD  ') + f'{label}: {out[:110]} (rc {rc})')
     for label, txt, case, want in PRECHECK:
@@ -144,6 +163,21 @@ with tempfile.TemporaryDirectory() as d:
         good = out.splitlines()[-1] == want and (rc == 0) == (want != 'unreadable')
         bad += not good
         print(('ok   ' if good else 'BAD  ') + f'fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
-n = len(CASES) + len(PRECHECK) + len(APPLIED) + len(FK)
+SUMMARY = [  # (label, output, must contain, must not contain)
+    ('error with a row value', err('ERROR:  23505: duplicate key value violates unique constraint "k"\nDETAIL:  Failing row contains (fakerowvalue4263).\n'),
+     'SQLSTATE 23505 (message withheld)', 'fakerowvalue4263'),
+    ('lock timeout', LOCK_TIMEOUT, 'SQLSTATE 55P03: canceling statement due to lock timeout', 'CONTEXT'),
+    ('own marker', b(fenced=False), 'P_B {', 'fakerowvalue4263'),
+    ('rows', rows([{'x': 'fakerowvalue4263'}]), 'columns x', 'fakerowvalue4263'),
+]
+with tempfile.TemporaryDirectory() as d:
+    for label, txt, want, never in SUMMARY:
+        p = os.path.join(d, 's')
+        open(p, 'w').write(txt)
+        rc, out = run(['summary', p])
+        good = want in out and never not in out
+        bad += not good
+        print(('ok   ' if good else 'BAD  ') + f'summary/{label}: {out[:110]}')
+n = len(CASES) + len(PRECHECK) + len(APPLIED) + len(FK) + len(SUMMARY)
 print(f'{n} canned outputs, {bad} wrong')
 sys.exit(1 if bad or n == 0 else 0)

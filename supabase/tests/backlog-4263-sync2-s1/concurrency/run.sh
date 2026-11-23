@@ -15,7 +15,9 @@
 # Order of a run: argument checks -> precheck and the per-table count query (read-only; nothing is created unless
 # both are clean) -> mutant
 # create (--mutant only) -> setup -> the two sessions -> state -> verdict -> trap.
-# Precheck refuses when: an auth user has the fixture id; an auth user has a p4263s1cc-*@example.test address; any
+# Precheck (the first call, read-only, printed as 'probe:' for the before-note) refuses unless one call = one
+# transaction is proven (a local setting set and read back in one call, exactly one row returned) and isolation is read
+# committed; and when: the fixture id is the nil id or one repeated digit (refused before any call); an auth user has the fixture id; any row references it; an auth user has a p4263s1cc-*@example.test address; any
 # public.*_m4263 function exists; or (R3-R6) public.cloud_release_switches.one_computer is not already true. The
 # switch is never flipped here (it is a shared row; the coordinator flips it).
 #   R1  IA writes a new deal and holds its transaction 4 s; IB claims with replace.
@@ -36,7 +38,8 @@
 #   R6  (needs one_computer ON) IA active; IB takes over and holds 4 s; IA writes a new deal.
 #       Expect: the write waits at its settings lock, then answers computer_not_active; no r6 deal written; IB active.
 #       --mutant: mutant-deal-gate-before-lock.sql (gate checked before the settings lock) -> RED.
-# --mutant creates ONE new function public.<name>_m4263 (granted to authenticated only); the live functions are never
+# --mutant creates ONE new function public.<name>_m4263 (REVOKEd from PUBLIC, anon, authenticated and service_role;
+# the sessions call it as the owner with the fixture user's claims set, no role switch); the live functions are never
 # replaced. Right after the create the script reads md5(prosrc) of that function and prints MUTATION APPLIED <name> md5 <x>
 # (no body -> ERROR, stop); after the sessions it checks the function still exists; the trap drops it FIRST
 # (drop-mutants.sql) and checks that no *_m4263 function is left.
@@ -54,7 +57,9 @@
 # references auth.users (catalogue query, counts only); deletes by the fixture user id (teardown.sql); verifies
 # (verify.sql, every count 0, auth.users total equal to the precheck's). Any failure: TEARDOWN NOT CLEAN with the user
 # id, the run id and the counts left, and nothing further is deleted. Last call: pg_stat_statements_reset().
-# Every call that writes (mutant create and drop, setup, teardown) runs with lock_timeout 3 s; no table-level lock.
+# Every call that writes runs with lock_timeout: 3 s for mutant create and drop, setup, teardown and session 1; 8 s for
+# session 2, which has to outwait session 1's hold (4 s hold - 1 s offset = ~3 s expected wait). No table-level lock.
+# Signals: INT, TERM and HUP wait for the sessions and 8 s more, then run the trap.
 # ONE RUN AT A TIME: the precheck and setup refuse while any p4263s1cc-*@example.test fixture user exists.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -65,6 +70,8 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 case "$CASE" in R1|R2|R3|R4|R5|R6|cleanup) ;; *) usage ;; esac
 [[ "$RUN" =~ ^[0-9a-f]{16}$ ]] || usage
 [[ "$A" =~ $UUID_RE ]] || { echo "a fixture user id (lowercase uuid) is required" >&2; usage; }
+# never the nil id or any id made of one repeated digit (a sentinel elsewhere in the schema): a fresh uuid4 only
+_hex="${A//-/}"; [ -z "${_hex//${_hex:0:1}/}" ] && { echo "refusing the fixture id ${A}: one repeated digit (use a fresh uuid4)" >&2; exit 2; }
 case "$MUT" in ""|--mutant) ;; *) usage ;; esac
 umask 077
 tmp="$(mktemp -d)"
@@ -94,18 +101,19 @@ fk_counts() {  # fk_counts <label>: prints the non-zero per-table counts of the 
 auth_total() { guarded ac.sql auth-count.sql; $K "$tmp/ac.sql" | col n; }
 stats_reset() { $K -c "select extensions.pg_stat_statements_reset()" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
 teardown() {  # 0 when clean; otherwise TEARDOWN NOT CLEAN with the ids and the counts left
-  local v total after
-  fk_counts "before the delete, rows of ${A}" || true
+  local v total after before kept
+  before="$(fk_counts "before the delete, rows of ${A}" | tee /dev/stderr | tail -1)" || before=unreadable
+  kept="${before##*setnull=}"
   guarded teardown.filled.sql lock-timeout.sql teardown.sql
   $K "$tmp/teardown.filled.sql" > "$tmp/teardown.out" 2>&1 || true
   guarded verify.filled.sql verify.sql
   v="$($K "$tmp/verify.filled.sql" 2>/dev/null | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin) if "verdict" in r][-1]["verdict"])' 2>/dev/null || echo unreadable)"
   total="$(fk_counts "after the delete" | tail -1)" || total=unreadable
   after="$(auth_total 2>/dev/null || echo unreadable)"
-  if [ "$v" = clean ] && [ "$total" = 0 ] && [ "$after" = "$AUTH_BEFORE" ]; then
+  if [ "$v" = clean ] && [ "$total" = "total=0 setnull=0" ] && [ "$kept" = 0 ] && [ "$after" = "$AUTH_BEFORE" ]; then
     echo "teardown verified clean (auth.users ${AUTH_BEFORE} before, ${after} after)"; return 0
   fi
-  echo "TEARDOWN NOT CLEAN: user ${A}, run ${RUN}; verify ${v}; rows left ${total}; auth.users ${AUTH_BEFORE} before, ${after} after." >&2
+  echo "TEARDOWN NOT CLEAN: user ${A}, run ${RUN}; verify ${v}; rows left ${total}; rows that stay with the id cleared ${kept:-unreadable}; auth.users ${AUTH_BEFORE} before, ${after} after." >&2
   fk_counts "left behind, rows of ${A}" >&2 || true
   echo "Nothing further was deleted. After review: run.sh cleanup ${RUN} ${A}" >&2
   return 1
@@ -115,7 +123,7 @@ precheck() {  # one read-only call; sets AUTH_BEFORE and ON; refuses (exit 1) un
   $K "$tmp/pre.sql" > "$tmp/pre.out" 2>&1 || { echo "refusing to start: precheck failed: $(head -c 300 "$tmp/pre.out")" >&2; exit 1; }
   local line
   line="$(python3 -I "$here/verdict.py" precheck "$tmp/pre.out" "$1")" || { echo "refusing to start: ${line}" >&2; exit 1; }
-  AUTH_BEFORE="${line#ok auth_users=}"; AUTH_BEFORE="${AUTH_BEFORE%% *}"; ON="${line##* one_computer=}"
+  PROBE="$line"; AUTH_BEFORE="${line#ok auth_users=}"; AUTH_BEFORE="${AUTH_BEFORE%% *}"; ON="${line#* one_computer=}"; ON="${ON%% *}"
 }
 
 if [ "$CASE" = cleanup ]; then
@@ -166,16 +174,16 @@ echo "  leftovers, if this run is killed: run.sh cleanup ${RUN} ${A}"
 
 case "$CASE" in R3|R4|R5|R6) NEED_ON=1 ;; *) NEED_ON=0 ;; esac
 precheck "$NEED_ON"
-FK0="$(fk_counts "precheck, rows of ${A}" 2>/dev/null | tail -1)" || true
-[ "$FK0" = 0 ] || { echo "refusing to start: the per-table count query answered ${FK0:-nothing} (needs 0 before setup); nothing was created" >&2; exit 1; }
+echo "probe: ${PROBE}"
 echo "precheck clean: no fixture user, no *_m4263 function; auth.users ${AUTH_BEFORE}; one_computer ${ON}"
 
 cleanup() {
   rc=$?
   set +e
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM HUP
   wait 2>/dev/null
-  [ "$INTERRUPTED" = 1 ] && sleep 8
+  # interrupted (INT, TERM or HUP): the sessions may still hold rows server-side for up to their 4 s hold
+  [ "$INTERRUPTED" = 1 ] && { echo "interrupted: waiting 8 s for the sessions before the trap's first call"; sleep 8; }
   STOP=0
   if [ "$MUTANT_MADE" = 1 ]; then
     left="$(mutants_left)"
@@ -193,7 +201,7 @@ cleanup() {
 }
 INTERRUPTED=0
 trap cleanup EXIT
-trap 'INTERRUPTED=1; exit 130' INT TERM
+trap 'INTERRUPTED=1; exit 130' INT TERM HUP
 
 if [ -n "$MUTANT_FILE" ]; then
   MUTANT_MADE=1
@@ -219,12 +227,12 @@ pair() {
   echo "second: $(cat "$tmp/second.out")"
 }
 case "$CASE" in
-  R1) holder a.sql as-user.sql r1-write-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql claim-ib-replace.sql end.sql ;;
-  R2) holder a.sql as-user.sql r2-confirm-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql claim-ib-replace.sql end.sql ;;
-  R3) holder a.sql as-user.sql r3-claim-ia-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql r3-claim-ib.sql end.sql ;;
-  R4) holder a.sql as-user.sql r4-claim-ib-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql r4-off-ia.sql end.sql ;;
-  R5) holder a.sql as-user.sql r5-off-ia-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql r5-claim-ib.sql end.sql ;;
-  R6) holder a.sql as-user.sql r6-claim-ib-hold.sql end-hold.sql; guarded b.sql gate.sql as-user.sql r6-write-ia.sql end.sql ;;
+  R1) holder a.sql lock-timeout.sql as-user.sql r1-write-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql claim-ib-replace.sql end.sql ;;
+  R2) holder a.sql lock-timeout.sql as-user.sql r2-confirm-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql claim-ib-replace.sql end.sql ;;
+  R3) holder a.sql lock-timeout.sql as-user.sql r3-claim-ia-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql r3-claim-ib.sql end.sql ;;
+  R4) holder a.sql lock-timeout.sql as-user.sql r4-claim-ib-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql r4-off-ia.sql end.sql ;;
+  R5) holder a.sql lock-timeout.sql as-user.sql r5-off-ia-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql r5-claim-ib.sql end.sql ;;
+  R6) holder a.sql lock-timeout.sql as-user.sql r6-claim-ib-hold.sql end-hold.sql; guarded b.sql lock-timeout-b.sql gate.sql as-user.sql r6-write-ia.sql end.sql ;;
 esac
 pair a.sql b.sql
 if [ -n "$MUTANT_FILE" ]; then

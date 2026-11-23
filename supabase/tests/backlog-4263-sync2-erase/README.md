@@ -25,7 +25,7 @@ rolls back, so nothing changes (inferred, not run). Then run `../backlog-4263-pr
 | `concurrency/run.sh c6g_skip <fixture-user-id> [no_skip_locked]` | C-6g (ii): a claim holding the settings row makes the batch skip that owner | **yes**: 8 fixture rows |
 | `concurrency/run.sh c6g_wait <fixture-user-id> [read_before_lock]` | C-6g (i): a move waits for a batch holding the settings row | **yes**: 8 fixture rows |
 | `concurrency/run.sh cleanup <fixture-user-id> <run-id>` | removes a fixture user the trap did not remove: by its id and that run's exact email only (refuses any other user); drops any own-name copy first | deletes only |
-| `concurrency/offline_check.py` | offline: drives `run.sh` against a local stub that records every text it would send (bash 3.2 parse, the hold marker within the first 900 bytes, own-name copies only, lock_timeout on writes, precheck first, delete by id, counts before and after, TEARDOWN NOT CLEAN paths) | no database call |
+| `concurrency/offline_check.py` | offline: drives `run.sh` against a local stub that records every text it would send (bash 3.2 parse, the hold marker within the first 900 bytes, argument shapes refused with no call, the probe first, own-name copies revoked and never granted, lock_timeout on writes and sessions, switch writes only in raising DOs, delete by id, counts right before and after, no row values in the output, signals, TEARDOWN NOT CLEAN paths) | no database call |
 | `concurrency/selftest.py` | offline: `verdict.py` on canned outputs in kt-sql's shape (transcribed), including session A error, session B error, gate timeout and both ok without overlap | no database call |
 | `rollback-20261123120000.sql`, `rollback-20261123110000.sql` | remove E3, then E1 (functions, tables, both vault secrets, ledger rows) | yes, when run on their own |
 
@@ -35,14 +35,25 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 
 ### Two-session runs (`concurrency/run.sh`)
 
-- **Order:** argument checks; one read-only precheck (no user with the fixture id, no `p4263c-*@example.test` user,
-  no `public.*_m4263` function, no `cloud_blob_erase_runs` row marked `p4263c`, and for `attach` fewer than 900
-  unreferenced blobs older than 24 h), then the per-table count query once (must answer 0); nothing is created
-  unless both are clean. Written and checked offline only; never run against a database. Then the own-name copy, setup, the two
-  sessions, the verdict and the trap.
+- **Order:** argument checks; the probe (`precheck.sql`, one read-only call: no user with the fixture id, no
+  `p4263c-*@example.test` user, no `public.*_m4263` function, no `cloud_blob_erase_runs` row marked `p4263c`, and for
+  `attach` fewer than 900 unreferenced blobs older than 24 h); nothing is created unless it is clean. Written and
+  checked offline only; never run against a database. Then the own-name copy, setup (one DO block, so the replica
+  setting covers only the user insert), the two sessions, the verdict and the trap.
+- **The fixture id is a run argument** (the coordinator's ruling: the test database is shared, so the before-note
+  names a fresh uuid4 before the run). It must be one lowercase uuid as a whole string; the nil id and any id of one
+  repeated digit are refused; anything else sends no call at all. Create and delete use only that id.
+- **First call = the probe** (read-only, printed as `probe:` for the before-note): a transaction-local setting set
+  and read back in one call (must come back as exactly one row with `txn = one`, which proves one call = one
+  transaction and that only the last statement's rows return), `transaction_isolation` (must be read committed),
+  `track_activity_query_size`, `rolbypassrls` of the role, `one_computer`, the per-table counts for the fixture id
+  (must be readable and all 0), the fixture checks below, and a count of unreferenced blobs older than 24 h. If one
+  call = one transaction is not proven, the run stops with nothing created. A refusal names what it found: fixture
+  addresses (fixture pattern only) and `_m4263` function names.
 - **Live functions are never replaced.** `copyfn.py` builds `public.cloud_blob_erase_claim_m4263` or
   `public.cloud_blob_erase_scrub_m4263` from the E1 text with one exact-string change (`CREATE FUNCTION`, never
-  `CREATE OR REPLACE`), REVOKEd from every API role. It is committed in its own call, proven by `md5(prosrc)`, and
+  `CREATE OR REPLACE`), REVOKEd from PUBLIC, anon, authenticated and service_role in the same call and granted to none.
+  The made flag is set before the create, so the trap drops it even when the md5 proof fails. It is committed in its own call, proven by `md5(prosrc)`, and
   dropped first in the trap, which then checks that no `*_m4263` function is left. The pristine `c6g_wait` also uses
   a copy: the live scrub with a 4 s sleep after its settings lock, so it is an instrumented copy of the live code,
   not the live function itself.
@@ -53,19 +64,28 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
   The verdict needs at least 1.5 s of A's hold left when B starts (the expected 3 s is twice that) and B's start
   after A's hold began; both sessions report start and end from the database clock. "Waited" = B ended after A's
   hold ended, i.e. after A's locks. With overlap measured, waited or not is decided by the locks, not by the
-  offset, so correct code cannot FAIL from timing alone; when overlap cannot be shown the verdict is INCONCLUSIVE,
-  never PASS, FAIL or CAUGHT. Session B's lock_timeout is 8 s (it must outwait the 4 s hold); every call that
+  offset; when overlap cannot be shown the verdict is INCONCLUSIVE, never PASS, FAIL or CAUGHT. One exception is
+  handled: `c6g_skip` B writes the switch row before its scrub, so if someone else held that row B would wait for a
+  reason that is not the case's; B records the time right before its scrub and the verdict is INCONCLUSIVE when that
+  write took more than 0.5 s. Session B's lock_timeout is 8 s (it must outwait the 4 s hold); every call that
   writes (setup, copy, drop, delete) and session A use 3 s.
 - **Verdict** (`verdict.py`): needs session A's own marker (attach: a row answered from one transaction; c6g: its
   `P_A` RAISE) and session B's `P_B`. Any error, gate or lock timeout, missing time or missing overlap is
-  INCONCLUSIVE and exits 1.
+  INCONCLUSIVE and exits 1. **A pristine `attach` PASS is evidence only together with `attach single_statement_fence:
+  CAUGHT` in the same window:** B's claim works through other arms over real rows before it reaches blob X, so if
+  those take longer than A's remaining hold, B reaches X after A committed and reads PASS without contention (its
+  mutant would then read NOT_CAUGHT). The verdict line says so.
+- **Output:** a session's answer is printed only as a summary that never carries row values: an error prints its
+  SQLSTATE, plus the message only for a gate, lock or deadlock timeout (the live claim in `attach` B works over real
+  rows, so a `DETAIL` could carry one).
 - **Shared rows:** `attach`'s session B runs the live claim across the whole database (row locks on eligible real
   rows until its RAISE, about 3 s; rolled back). `c6g_skip` B and `c6g_wait` A set `cloud_release_switches.one_computer`
   on only when it is off, inside their DO that ends in RAISE (rolled back; a writer to that row waits meanwhile).
-- **Trap:** after an interrupt it waits 8 s first (a session may still hold rows); drops the copy; prints the fixture user's row count in every table that references `auth.users`
+- **Trap:** after an interrupt (INT, TERM or HUP) it waits for the sessions and 8 s first (a session may still hold
+  rows); drops the copy; prints the fixture user's row count in every table that references `auth.users`
   (catalogue query at run time, counts only); deletes `auth.users` by the exact id and this run's exact email
   (rows cascade); checks residue (direct and second-level rows, marked run rows) and that the `auth.users` total
-  equals the precheck's. Any failure prints `TEARDOWN NOT CLEAN` with the user id, the run id and the counts left,
+  equals the probe's. Rows in ON DELETE SET NULL / SET DEFAULT columns before the delete count as left behind. Any failure prints `TEARDOWN NOT CLEAN` with the user id, the run id and the counts left,
   and deletes nothing further. Last call: `pg_stat_statements_reset()`.
 
 ## Load on the shared test database
@@ -115,8 +135,8 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 Counting: a mutant is caught only when its probe returns `FAIL`. `CRASH` (the mutated function or the probe raised),
 `PRECONDITION` and `NOT APPLIED IN DB` are printed as such and make the run not-ok.
 
-The concurrency fixture user id is an argument so the before-note can name it first; the run id is printed at the
-start. See "Two-session runs" above for the precheck, the verdict and the trap.
+The concurrency fixture user id is a run argument (the coordinator's ruling: the test database is shared, so the
+before-note names a fresh uuid4 first); the run id is printed at the start. See "Two-session runs" above for the precheck, the verdict and the trap.
 
 Row shapes: see the header of `lib/helpers.sql`. Message and file rows are inserted directly in the shapes the writers
 leave (cited there), not written through `cloud_upsert_*`, which need a licensed fixture account.

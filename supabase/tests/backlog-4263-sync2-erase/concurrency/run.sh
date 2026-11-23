@@ -8,19 +8,23 @@
 #        run.sh c6g_wait <fixture-user-id> [read_before_lock]         C-6g (i):  a batch holds the settings row -> move waits
 #        run.sh cleanup  <fixture-user-id> <run-id>                   remove a fixture user the trap did not remove
 #
-# Order: argument checks -> precheck and the per-table count query (read-only; nothing is created unless both
-# are clean) -> own-name copy
-# (when the case needs one) -> setup -> the two sessions -> verdict -> trap.
-# Precheck refuses when: an auth user has the fixture id; any p4263c-*@example.test user exists; any public.*_m4263
-# function exists; any cloud_blob_erase_runs row is marked p4263c; (attach) 900 or more unreferenced blobs are older
-# than 24 h (blob X might then not be listed).
-# Rows COMMITTED by setup (8): 1 auth.users (email p4263c-<run>@example.test, inserted with session_replication_role =
-# replica), 1 cloud_autosave_settings, 2 cloud_deals, 3 cloud_deal_messages, 1 cloud_blobs (no stored object).
+# Order: argument checks (the fixture id must be exactly one lowercase uuid as a whole string, never the nil id or one
+# repeated digit; the run id exactly 16 hex characters; anything else sends no call at all) -> the probe (the first
+# call, read-only, printed as 'probe:' for the before-note) -> own-name copy (when the case needs one) -> setup -> the
+# two sessions -> verdict -> trap.
+# The probe refuses unless one call = one transaction is proven (a local setting set and read back in one call, exactly
+# one row returned) and isolation is read committed; and when: an auth user has the fixture id; any row references it;
+# any p4263c-*@example.test user exists; any public.*_m4263 function exists; any cloud_blob_erase_runs row is marked
+# p4263c; (attach) 900 or more unreferenced blobs are older than 24 h (blob X might then not be listed). A refusal
+# names what it found (fixture addresses, function names).
+# Rows COMMITTED by setup (8, one DO block): 1 auth.users (email p4263c-<run>@example.test, inserted with
+# session_replication_role = replica inside the DO), 1 cloud_autosave_settings, 2 cloud_deals, 3 cloud_deal_messages, 1 cloud_blobs (no stored object).
 # attach's session A commits 1 cloud_deal_files row more (9). Every other session is one DO block that ends in RAISE,
 # so its writes (an erase run row marked {"p4263c": 1}; in c6g, the switch set on when it is off) roll back with it.
 # Functions: the live cloud_blob_erase_claim / cloud_blob_erase_scrub are NEVER replaced. A mutant, and the pristine
 # c6g_wait (which needs a sleep inside the scrub), use a COMMITTED own-name copy public.<function>_m4263 made by
-# copyfn.py from the E1 text with one exact-string change (REVOKEd from every API role); the script proves it exists
+# copyfn.py from the E1 text with one exact-string change (REVOKEd from PUBLIC, anon, authenticated and service_role in
+# the same call, granted to none); the made flag is set before the create, so the trap drops it even when the proof fails; the script proves it exists
 # (md5 of its body) before the sessions; the trap drops it FIRST and checks that no *_m4263 function is left.
 # Gate: session B starts 1 s after A and waits server-side (gate.sql, up to 20 s) until A sleeps in a call whose text
 # carries this run's marker; the marker is the first line of A's call (pg_stat_activity.query keeps the first 1 kB).
@@ -28,11 +32,17 @@
 # the expected 3 s). Both sessions answer start and end from the database clock (verdict.py). Waited = B ended after
 # A's hold ended. lock_timeout: 3 s on every call that writes (setup, copy, drop, delete) and in session A; 8 s in
 # session B, which has to outwait A's 4 s hold.
-#   attach:   PASS when B waited and fenced = false. Mutant single_statement_fence: CAUGHT when fenced = true.
-#   c6g_skip: PASS when B did not wait and state = skipped. Mutant no_skip_locked: CAUGHT when B waited.
+#   attach:   PASS when B waited and fenced = false. Mutant single_statement_fence: CAUGHT when fenced = true. A pristine
+#             PASS is evidence only together with the mutant's CAUGHT in the same window (B's earlier arms over real
+#             rows may delay its reach to blob X past A's commit); the verdict line says so.
+#   c6g_skip: PASS when B did not wait and state = skipped. Mutant no_skip_locked: CAUGHT when B waited. INCONCLUSIVE
+#             when B's own switch write waited more than 0.5 s before its scrub (someone else held the switch row).
 #   c6g_wait: PASS when B waited. Mutant read_before_lock (read and sleep BEFORE the lock): CAUGHT when B did not wait.
 # Verdict (verdict.py; offline self-test: python3 -I selftest.py): no P_A / P_B marker (an error, a gate or lock
 # timeout), a missing time, or no measured overlap is INCONCLUSIVE and exits 1, with or without a mutant.
+# Session output is printed only as a summary that never carries row values (verdict.py summary): an error prints its
+# SQLSTATE, plus the message only for a gate / lock / deadlock timeout.
+# Signals: INT, TERM and HUP wait for the sessions and 8 s more, then run the trap.
 # Trap: drops the copy; prints the fixture user's row count in every table that references auth.users (catalogue
 # query, counts only); deletes the auth user by id and this run's exact email (rows cascade); checks residue and that
 # the auth.users total equals the precheck's. Any failure: TEARDOWN NOT CLEAN with the user id, the run id and the
@@ -44,7 +54,12 @@ K=~/.claude/bin/kt-sql
 CASE="${1:-}"; U="${2:-}"; MUT="${3:-}"
 usage() { sed -n '2,9p' "$0"; exit 2; }
 case "$CASE" in attach|c6g_skip|c6g_wait|cleanup) ;; *) usage ;; esac
-echo "$U" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { echo "a fixture user id (lowercase uuid) is required"; usage; }
+# The whole value must be exactly one lowercase uuid ([[ =~ ]] on the full string: a newline, trailing text or a quote
+# fails), before anything uses it. It reaches SQL only after this check.
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+[[ "$U" =~ $UUID_RE ]] || { echo "a fixture user id (lowercase uuid) is required" >&2; usage; }
+# never the nil id or any id made of one repeated digit (a sentinel elsewhere in the schema): a fresh uuid4 only
+_hex="${U//-/}"; [ -z "${_hex//${_hex:0:1}/}" ] && { echo "refusing the fixture id ${U}: one repeated digit (use a fresh uuid4)" >&2; exit 2; }
 case "$CASE:$MUT" in attach:|attach:single_statement_fence|c6g_skip:|c6g_skip:no_skip_locked|c6g_wait:|c6g_wait:read_before_lock) ;;
   cleanup:*) [[ "$MUT" =~ ^[0-9a-f]{16}$ ]] || usage ;; *) echo "unknown mutant ${MUT}"; usage ;; esac
 umask 077
@@ -58,22 +73,23 @@ fill() {  # fill <template> <out>
 col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[-1][sys.argv[1]])' "$1"; }
 stats_reset() { $K -c "select extensions.pg_stat_statements_reset()" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
 copies_left() { fill drop-copies.sql drop.sql; $K "$tmp/drop.sql" 2>/dev/null | col left 2>/dev/null || echo unreadable; }
-fk_counts() {  # fk_counts <label>: the non-zero per-table counts of the fixture user; the last line is the total
+fk_counts() {  # fk_counts <label>: the non-zero per-table counts of the fixture user; last line 'total=<n> setnull=<m>'
   fill fk-counts.sql fk.sql
   $K "$tmp/fk.sql" > "$tmp/fk.out" 2>&1 || true
   python3 -I "$here/verdict.py" fkcounts "$1" "$tmp/fk.out"
 }
 remove_user() {  # 0 when clean; otherwise TEARDOWN NOT CLEAN with the ids and the counts left
-  local left after
-  fk_counts "before the delete, rows of ${U}" || true
+  local left after before kept
+  before="$(fk_counts "before the delete, rows of ${U}" | tee /dev/stderr | tail -1)" || before=unreadable
+  kept="${before##*setnull=}"
   fill delete.sql del.sql; $K "$tmp/del.sql" > "$tmp/del.out" 2>&1 || true
   fill residue.sql res.sql; $K "$tmp/res.sql" > "$tmp/res.out" 2>&1 || true
   left="$(col n < "$tmp/res.out" 2>/dev/null || echo unreadable)"; after="$(col auth_users < "$tmp/res.out" 2>/dev/null || echo unreadable)"
   total="$(fk_counts "after the delete" | tail -1)" || total=unreadable
-  if [ "$left" = 0 ] && [ "$total" = 0 ] && [ "$after" = "$AUTH_BEFORE" ]; then
+  if [ "$left" = 0 ] && [ "$total" = "total=0 setnull=0" ] && [ "$kept" = 0 ] && [ "$after" = "$AUTH_BEFORE" ]; then
     echo "residue check: fixture user ${U} and its rows gone (0); auth.users ${AUTH_BEFORE} before, ${after} after"; return 0
   fi
-  echo "TEARDOWN NOT CLEAN: user ${U}, run ${RUN}; residue ${left}; rows left ${total}; auth.users ${AUTH_BEFORE} before, ${after} after." >&2
+  echo "TEARDOWN NOT CLEAN: user ${U}, run ${RUN}; residue ${left}; rows left ${total}; rows that stay with the id cleared ${kept:-unreadable}; auth.users ${AUTH_BEFORE} before, ${after} after." >&2
   fk_counts "left behind, rows of ${U}" >&2 || true
   echo "Nothing further was deleted. After review: run.sh cleanup ${U} ${RUN}" >&2
   return 1
@@ -101,19 +117,17 @@ echo "RUN ${RUN} case ${CASE} ${MUT:-pristine}: fixture user ${U}, email p4263c-
 echo "  leftovers, if this run is killed: run.sh cleanup ${U} ${RUN}"
 
 fill precheck.sql pre.sql
-$K "$tmp/pre.sql" > "$tmp/pre.out" 2>&1 || { echo "refusing to start: precheck failed: $(head -c 300 "$tmp/pre.out")" >&2; exit 1; }
+$K "$tmp/pre.sql" > "$tmp/pre.out" 2>&1 || { echo "refusing to start: precheck failed: $(python3 -I "$here/verdict.py" summary "$tmp/pre.out")" >&2; exit 1; }
 line="$(python3 -I "$here/verdict.py" precheck "$tmp/pre.out" "$CASE")" || { echo "refusing to start: ${line}" >&2; exit 1; }
-AUTH_BEFORE="${line#ok auth_users=}"
-FK0="$(fk_counts "precheck, rows of ${U}" 2>/dev/null | tail -1)" || true
-[ "$FK0" = 0 ] || { echo "refusing to start: the per-table count query answered ${FK0:-nothing} (needs 0 before setup); nothing was created" >&2; exit 1; }
-echo "precheck clean: no fixture user, no *_m4263 function, no marked run row; auth.users ${AUTH_BEFORE}"
+AUTH_BEFORE="${line#ok auth_users=}"; AUTH_BEFORE="${AUTH_BEFORE%% *}"
+echo "probe: ${line}"
 
 SETUP=0; COPY_MADE=0; VERDICT=INCONCLUSIVE
 cleanup() {
-  rc=$?; set +e; trap - EXIT INT TERM
+  rc=$?; set +e; trap - EXIT INT TERM HUP
   wait 2>/dev/null
-  # interrupted: the server-side sessions may still hold rows for up to their 4 s hold; wait before the first call
-  [ "$INTERRUPTED" = 1 ] && sleep 8
+  # interrupted (INT, TERM or HUP): the sessions may still hold rows server-side for up to their 4 s hold
+  [ "$INTERRUPTED" = 1 ] && { echo "interrupted: waiting 8 s for the sessions before the trap's first call"; sleep 8; }
   STOP=0
   if [ "$COPY_MADE" = 1 ]; then
     left="$(copies_left)"
@@ -124,12 +138,13 @@ cleanup() {
   fi
   if [ "$SETUP" = 1 ] && [ "$STOP" = 0 ]; then remove_user || rc=1; fi
   stats_reset
-  rm -rf "$tmp"; echo "${CASE} ${MUT:-pristine}: ${VERDICT}"
+  NOTE=""; [ "$CASE:${MUT}:${VERDICT}" = "attach::PASS" ] && NOTE=" (evidence only together with attach single_statement_fence: CAUGHT in the same window)"
+  rm -rf "$tmp"; echo "${CASE} ${MUT:-pristine}: ${VERDICT}${NOTE}"
   case "$VERDICT" in PASS|CAUGHT) ;; *) rc=1 ;; esac
   exit $rc
 }
 INTERRUPTED=0
-trap cleanup EXIT; trap 'INTERRUPTED=1; exit 130' INT TERM
+trap cleanup EXIT; trap 'INTERRUPTED=1; exit 130' INT TERM HUP
 
 if [ -n "$COPY" ]; then
   E1="${root}/supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql"
@@ -159,6 +174,6 @@ fill gate.sql g.sql; cat "$tmp/g.sql" "$tmp/b1.sql" > "$tmp/b.sql"
 sleep 1
 ( $K "$tmp/b.sql" > "$tmp/b.out" 2>&1 || true ) & pb=$!
 wait $pa $pb
-echo "a: $(head -c 1500 "$tmp/a.out")"; echo "b: $(head -c 1500 "$tmp/b.out")"
+echo "a: $(python3 -I "$here/verdict.py" summary "$tmp/a.out")"; echo "b: $(python3 -I "$here/verdict.py" summary "$tmp/b.out")"
 VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MUT" "$tmp/a.out" "$tmp/b.out" || true)"
 [ -n "$VERDICT" ] || VERDICT="INCONCLUSIVE: no verdict"

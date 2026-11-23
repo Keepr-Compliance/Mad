@@ -2,9 +2,10 @@
 """Verdict of one erase two-session case, from the kt-sql outputs (BACKLOG-4263 sync plan P3).
 
 usage: verdict.py <attach|c6g_skip|c6g_wait> <mutant name or ''> <a.out> <b.out>
-       verdict.py precheck <pre.out> <case>   -> 'ok auth_users=<n>' (exit 0) or the refusal (exit 1)
+       verdict.py precheck <pre.out> <case>   -> 'ok auth_users=<n> ...' (exit 0) or the refusal (exit 1)
+       verdict.py summary <file.out>          -> one line that never carries row values (error: SQLSTATE only)
        verdict.py applied <name> <md5.out>    -> 'MUTATION APPLIED <name> md5 <x>' or ERROR (the create left no body)
-       verdict.py fkcounts <label> <fk.out>   -> one line per table holding rows of the fixture user, then the total
+       verdict.py fkcounts <label> <fk.out>   -> one line per table holding rows of the fixture user, then 'total=<n> setnull=<m>'
 Prints one line. Exit 0 only for PASS (pristine) or CAUGHT (mutant).
 
 A kt-sql output is the Management API's body (a JSON array of rows, or {"message": "Failed to run sql query: ERROR: ..."}
@@ -22,6 +23,7 @@ import re
 import sys
 from datetime import datetime
 
+SWITCH_WAIT_S = 0.5  # c6g_skip: B's own writes before the scrub must not wait longer than this
 OVERLAP_S = 1.5  # B must start at least this long before A's hold ends (hold 4 s, launch offset 1 s: ~3 s expected)
 CASES = {'attach': 'single_statement_fence', 'c6g_skip': 'no_skip_locked', 'c6g_wait': 'read_before_lock'}
 
@@ -39,6 +41,28 @@ def body(path):
     if isinstance(v, dict) and isinstance(v.get('message'), str):
         return None, v['message']
     return None, None
+
+
+SAFE = re.compile(r'(P_GATE_TIMEOUT|canceling statement due to (lock|statement) timeout|deadlock detected)')
+
+
+def safe(path):
+    """A one-line description of a kt-sql output that never carries row values: for a session's own marker its JSON
+    (times and fixture-only values); for any other error only the SQLSTATE and, when it is one of the gate / lock /
+    deadlock messages, that message; otherwise '(message withheld)'. A row answer prints its column names only."""
+    rows_, msg = body(path)
+    if rows_ is not None:
+        cols = sorted({k for r in rows_ if isinstance(r, dict) for k in r})
+        return f'{len(rows_)} row(s), columns {", ".join(cols)}'
+    if msg is None:
+        return 'no readable answer'
+    for name in ('P_A', 'P_B'):
+        m = marker(path, name)
+        if m is not None:
+            return f'{name} ' + json.dumps(m)[:600]
+    st = re.search(r'ERROR:\s+([0-9A-Z]{5}):', msg)
+    known = SAFE.search(msg)
+    return f'error SQLSTATE {st.group(1) if st else "unknown"}' + (f': {known.group(1)}' if known else ' (message withheld)')
 
 
 def marker(path, name):
@@ -79,14 +103,14 @@ def verdict(case, mut, fa, fb):
         rows, msg = body(fa)
         a = rows[-1] if rows and isinstance(rows[-1], dict) else None
         if a is None or a.get('txn') != 'one':
-            return 'INCONCLUSIVE: session A did not answer its row from one transaction ' + str(msg or rows)[:200]
+            return 'INCONCLUSIVE: session A did not answer its row from one transaction: ' + safe(fa)
     else:
         a = marker(fa, 'P_A')
         if a is None:
-            return 'INCONCLUSIVE: session A did not end with its P_A marker ' + str(body(fa)[1] or body(fa)[0])[:200]
+            return 'INCONCLUSIVE: session A did not end with its P_A marker: ' + safe(fa)
     b = marker(fb, 'P_B')
     if b is None:
-        return 'INCONCLUSIVE: session B did not end with its P_B marker ' + str(body(fb)[1] or body(fb)[0])[:200]
+        return 'INCONCLUSIVE: session B did not end with its P_B marker: ' + safe(fb)
     a_hold = ts(a.get('t_hold') or a.get('t_start'))
     a_end, b_start, b_end = ts(a.get('t_end')), ts(b.get('t_start')), ts(b.get('t_end'))
     if None in (a_hold, a_end, b_start, b_end):
@@ -103,6 +127,12 @@ def verdict(case, mut, fa, fb):
         ans = b.get('answer')
         if not isinstance(ans, dict):
             return 'INCONCLUSIVE: P_B lacks answer'
+        t_scrub = ts(b.get('t_scrub'))
+        if t_scrub is None:
+            return 'INCONCLUSIVE: P_B lacks t_scrub'
+        if (t_scrub - b_start).total_seconds() > SWITCH_WAIT_S:
+            return (f'INCONCLUSIVE: session B waited {(t_scrub - b_start).total_seconds():.3f} s before its scrub '
+                    '(the switch row was held by someone else)')
         passing, failing = (not waited) and ans.get('state') == 'skipped', waited
     else:
         passing, failing = waited, not waited
@@ -111,24 +141,69 @@ def verdict(case, mut, fa, fb):
     return 'PASS' if passing else 'FAIL'
 
 
-def precheck(path, case):
-    rows, msg = body(path)
-    if not rows or not isinstance(rows[-1], dict):
-        return False, 'precheck failed: ' + str(msg)[:200]
-    r = rows[-1]
+def fk_rows(x):
+    """[(table, column, on-delete action, n)] from fk-counts rows, or None when unreadable."""
+    if not isinstance(x, list) or not x:
+        return None
     try:
-        by_id, by_pat, mut, runs, total, orph = (int(r[k]) for k in ('by_id', 'by_pattern', 'mutants', 'marked_runs', 'auth_users', 'orphans'))
+        return [(str(r['tbl']), str(r['col']), str(r.get('del', '')), int(r['n'])) for r in x]
     except (KeyError, TypeError, ValueError):
-        return False, 'precheck row unreadable: ' + json.dumps(r)[:200]
-    why = [w for w, bad in ((f'{by_id} auth user(s) already have the fixture id', by_id),
-                            (f'{by_pat} p4263c-*@example.test fixture user(s) exist', by_pat),
-                            (f'{mut} public.*_m4263 function(s) exist', mut),
-                            (f'{runs} cloud_blob_erase_runs row(s) marked p4263c exist', runs),
-                            (f'{orph} unreferenced blobs older than 24 h (attach needs fewer than 900, or blob X may not be listed)',
-                             case == 'attach' and orph >= 900)) if bad]
+        return None
+
+
+def fk_lines(label, fk):
+    total = sum(n for _, _, _, n in fk)
+    kept = sum(n for _, _, d, n in fk if d in ('n', 'd'))
+    lines = [f'  {label}: {len(fk)} columns reference auth.users; non-zero:']
+    lines += [f'    {t}.{c}: {n}' + (' (ON DELETE SET NULL/DEFAULT: stays behind with the id cleared)' if d in ('n', 'd') else '')
+              for t, c, d, n in fk if n] or ['    none']
+    return lines + [f'total={total} setnull={kept}']
+
+
+def probe(rows_, need):
+    """(ok, line) for the first call. ok only when it proves one call = one transaction and the shape (exactly one row,
+    the last statement's), read committed, readable per-table counts that are all 0, and nothing left behind."""
+    if not isinstance(rows_, list) or len(rows_) != 1 or not isinstance(rows_[0], dict):
+        n = len(rows_) if isinstance(rows_, list) else 0
+        return False, f'the probe answered {n} rows, not exactly 1: one call = one transaction (last statement only) not proven'
+    r = rows_[0]
+    if r.get('txn') != 'one':
+        return False, f"one call = one transaction NOT proven (txn {r.get('txn')!r}); nothing was created"
+    if r.get('iso') != 'read committed':
+        return False, f"isolation is {r.get('iso')!r}, not read committed; nothing was created"
+    try:
+        by_id, by_pat, mut, total = (int(r[k]) for k in ('by_id', 'by_pattern', 'mutants', 'auth_users'))
+    except (KeyError, TypeError, ValueError):
+        return False, 'probe row unreadable: ' + json.dumps(r)[:200]
+    fk = fk_rows(r.get('fk'))
+    why = [(f'{by_id} auth user(s) already have the fixture id', by_id),
+           (f'{by_pat} fixture user(s) exist: {r.get("pattern_emails")}', by_pat),
+           (f'{mut} public.*_m4263 function(s) exist: {r.get("mutant_names")}', mut),
+           ('the per-table count query is unreadable', fk is None),
+           (f'{sum(n for *_, n in fk or [])} rows already reference the fixture id', fk is not None and any(n for *_, n in fk))]
+    why += [(w, bad) for w, bad in need(r)]
+    why = [w for w, bad in why if bad]
     if why:
         return False, '; '.join(why) + '; nothing was created'
-    return True, f'ok auth_users={total}'
+    return True, (f"ok auth_users={total} one_computer={r.get('one_computer') is True} txn=one iso=read_committed "
+                  f"track_activity_query_size={r.get('track_size')} bypassrls={r.get('bypassrls')} orphans={r.get('orphans', '-')} "
+                  f"fk_columns={len(fk)}")
+
+
+def precheck(path, case):
+    rows_, msg = body(path)
+    if rows_ is None:
+        return False, 'precheck failed: ' + safe(path)
+
+    def need(r):
+        try:
+            runs, orph = int(r['marked_runs']), int(r['orphans'])
+        except (KeyError, TypeError, ValueError):
+            return [('probe row unreadable (marked_runs / orphans)', True)]
+        return [(f'{runs} cloud_blob_erase_runs row(s) marked p4263c exist', runs),
+                (f'{orph} unreferenced blobs older than 24 h (attach needs fewer than 900, or blob X may not be listed)',
+                 case == 'attach' and orph >= 900)]
+    return probe(rows_, need)
 
 
 def applied(name, path):
@@ -140,16 +215,11 @@ def applied(name, path):
 
 
 def fkcounts(label, path):
-    rows, msg = body(path)
-    if rows is None or not all(isinstance(x, dict) and {'tbl', 'col', 'n'} <= set(x) for x in rows):
-        return [f'  {label}: per-table counts unreadable ({msg or "unexpected rows"})'[:300], 'unreadable'], False
-    try:
-        nz = [(x['tbl'], x['col'], int(x['n'])) for x in rows]
-    except (TypeError, ValueError):
-        return [f'  {label}: per-table counts unreadable', 'unreadable'], False
-    lines = [f'  {label}: {len(nz)} columns reference auth.users; non-zero:']
-    lines += [f'    {t}.{c}: {n}' for t, c, n in nz if n] or ['    none']
-    return lines + [str(sum(n for _, _, n in nz))], True
+    rows_, msg = body(path)
+    fk = fk_rows(rows_) if rows_ is not None else None
+    if fk is None:
+        return [f'  {label}: per-table counts unreadable ({safe(path)})', 'unreadable'], False
+    return fk_lines(label, fk), True
 
 
 if __name__ == '__main__':
@@ -162,6 +232,9 @@ if __name__ == '__main__':
         out = applied(a[1], a[2]).replace('\n', ' ')
         print(out)
         sys.exit(0 if out.startswith('MUTATION APPLIED ') else 1)
+    if len(a) == 2 and a[0] == 'summary':
+        print(safe(a[1]).replace('\n', ' '))
+        sys.exit(0)
     if len(a) == 3 and a[0] == 'fkcounts':
         lines, ok = fkcounts(a[1], a[2])
         print('\n'.join(lines))

@@ -81,10 +81,19 @@ run.sh R<n> <run-id> <fixture-user-id> [--mutant]   # both chosen before the run
 run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftovers (only if its email is that run's)
 ```
 
-- **Order:** argument checks; one read-only precheck, then the per-table count query once (it must answer 0, so its
-  dynamic SQL is proven readable before anything is committed); nothing is created unless both are clean; then the mutant
-  (`--mutant`), setup, the two sessions, the state call, the verdict, the trap.
-- **Precheck** (`precheck.sql`) refuses when an auth user has the fixture id, any `p4263s1cc-*@example.test` user
+- **Order:** argument checks; the probe (`precheck.sql`, one read-only call); nothing is created unless it is clean;
+  then the mutant (`--mutant`), setup, the two sessions, the state call, the verdict, the trap.
+- **The fixture id is a run argument** (the coordinator's ruling: the test database is shared, so the before-note
+  names a fresh uuid4 before the run). It must be one lowercase uuid as a whole string; the nil id and any id of one
+  repeated digit are refused; anything else sends no call at all. Create and delete use only that id.
+- **First call = the probe** (read-only, printed as `probe:` for the before-note): a transaction-local setting set
+  and read back in one call (must come back as exactly one row with `txn = one`, which proves one call = one
+  transaction and that only the last statement's rows return), `transaction_isolation` (must be read committed),
+  `track_activity_query_size`, `rolbypassrls` of the role, `one_computer`, the per-table counts for the fixture id
+  (must be readable and all 0), the fixture checks below, and a count of unreferenced blobs older than 24 h. If one
+  call = one transaction is not proven, the run stops with nothing created. A refusal names what it found: fixture
+  addresses (fixture pattern only) and `_m4263` function names.
+- **The probe** also refuses when an auth user has the fixture id, any `p4263s1cc-*@example.test` user
   exists, any `public.*_m4263` function exists, or (R3–R6) `one_computer` is not already true. R3–R6 therefore refuse
   before any fixture is committed while the switch is off. The switch is never flipped here (shared row; the
   coordinator flips it). R1, R2 and R2 `--mutant` run with the switch either way.
@@ -128,10 +137,19 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   (must total 0) and the `auth.users` total (must equal the precheck's). Any failure prints `TEARDOWN NOT CLEAN`
   with the user id, the run id and the counts left, and deletes nothing further (a mutant that was not dropped
   leaves the fixture rows in place too). Last call: `pg_stat_statements_reset()`.
-- **lock_timeout 3 s** on every call that writes (mutant create, mutant drop, setup, teardown); no table-level lock.
+- **lock_timeout** on every call that writes: 3 s for mutant create, mutant drop, setup, teardown and session 1; 8 s for
+  session 2, which has to outwait session 1's hold (4 s hold − 1 s offset = about 3 s of waiting expected; 8 s is
+  more than twice that). No table-level lock.
+- **No role switch:** the sessions set the fixture user's JWT claims (so `auth.uid()` answers the fixture user) and
+  call the function as the owner. The four functions, live and copies, are SECURITY DEFINER, so they run as their
+  owner either way; the copies are REVOKEd from PUBLIC, anon, authenticated and service_role and granted to none.
+- **Signals:** INT, TERM and HUP wait for the sessions and 8 s more, then run the trap. kill -9 runs nothing; the
+  next run's probe then refuses and names the leftovers.
+- **Per-table counts** also report rows in ON DELETE SET NULL / SET DEFAULT columns before the delete: they would stay
+  with the id cleared, so they count as left behind (TEARDOWN NOT CLEAN).
 - **`--mutant`** (R2, R3, R4, R6) creates exactly one function:
 
-  | Case | File | Function created (granted to authenticated only) |
+  | Case | File | Function created (REVOKEd from every API role, granted to none) |
   |---|---|---|
   | R2 | `mutant-confirm-nolock.sql` | `public.cloud_confirm_blob_m4263(uuid, uuid, uuid)` |
   | R3 | `mutant-claim-nolock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
@@ -168,5 +186,5 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
 | `concurrency/run.sh` | Two-session controls R1–R6, `--mutant`, `cleanup` |
 | `concurrency/offline_check.py`, `concurrency/selftest.py`, `concurrency/verdict.py` | Offline check of `run.sh` against a stub; verdict self-test; the verdict, precheck and per-table count readers |
 | `concurrency/guard.sql`, `drop-mutants.sql`, `mutant-*.sql` | Generated: the guard every sent file starts with; the mutant drop and check; the four own-name mutants |
-| `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `precheck.sql`, `fk-counts.sql`, `auth-count.sql`, `gate.sql`, `hold-marker.sql`, `lock-timeout.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql`, `end.sql`, `end-hold.sql` | Hand-written fixtures, teardown, checks and session statements |
+| `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `precheck.sql`, `fk-counts.sql`, `auth-count.sql`, `gate.sql`, `hold-marker.sql`, `lock-timeout.sql`, `lock-timeout-b.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql`, `end.sql`, `end-hold.sql` | Hand-written fixtures, teardown, checks and session statements |
 | `concurrency/verdict.py`, `selftest.py` | Hand-written verdict of a case, and its offline self-test (26 canned outputs) |

@@ -519,7 +519,7 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     ['mutant-off-check-before-lock.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
     ['mutant-deal-gate-before-lock.sql', 'cloud_upsert_deal', 'uuid, jsonb'],
   ];
-  it.each(MUTANTS)('two-session %s creates only %s_m4263, never replaces the live function, guard first', (file, name, sig) => {
+  it.each(MUTANTS)('two-session %s creates only %s_m4263, never replaces the live function, granted to no API role, guard first', (file, name, sig) => {
     const f = read(join(DIR, 'concurrency', file));
     const code = f.replace(/^--[^\n]*\n/gm, '');
     expect(code.startsWith('DO $guard4263s1cc$')).toBe(true);
@@ -527,7 +527,7 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect([...f.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(/gm)].map((m) => m[1])).toEqual([`${name}_m4263`]);
     expect(f).not.toMatch(/CREATE OR REPLACE FUNCTION/);
     expect(f).toContain(`REVOKE ALL ON FUNCTION public.${name}_m4263(${sig}) FROM PUBLIC, anon, authenticated, service_role;`);
-    expect([...f.matchAll(/^GRANT [^\n]*$/gm)].map((m) => m[0])).toEqual([`GRANT EXECUTE ON FUNCTION public.${name}_m4263(${sig}) TO authenticated;`]);
+    expect([...f.matchAll(/^GRANT [^\n]*$/gim)].map((m) => m[0])).toEqual([]);
     expect(read(join(DIR, 'concurrency/drop-mutants.sql'))).toContain(`DROP FUNCTION IF EXISTS public.${name}_m4263(${sig});`);
     expect(body(f.replace(`public.${name}_m4263(`, `public.${name}(`), name)).not.toBe(body(S1, name));
   });
@@ -552,6 +552,7 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     const run = read(join(cc, 'run.sh'));
     expect(run).toContain('{ cat "$here/hold-marker.sql"; cat "$here/guard.sql"; echo;');
     expect(readdirSync(cc)).not.toContain('sweep.sql');
+    expect(read(join(cc, 'as-user.sql'))).not.toMatch(/\bSET\s+(LOCAL\s+)?ROLE\b/i);
   });
 
   it('two-session session files call functions only through placeholders, and no pristine replacement file remains', () => {
