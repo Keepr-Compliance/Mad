@@ -602,7 +602,9 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
     it("a change the server refused and kept (not_restorable: the item was deleted for good online): the event is reported and the not-kept notice is there", async () => {
       const { db, deal, e, s } = await synced();
       const base = e.todosChanged.count;
-      onlineItem(e, I1).purged = true;
+      const gone = onlineItem(e, I1);
+      gone.removed = true;
+      gone.purged = true;
       db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("too late", I1);
       const r = await e.service.kick();
       expect(r!.todos).toMatchObject({ confirmed: 1, retried: 0 });
