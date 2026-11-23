@@ -47,9 +47,10 @@
 --   per run.
 --
 -- Call log CHECK: ALTER TABLE takes an ACCESS EXCLUSIVE lock on mcp_call_log until this migration commits; every
---   MCP call writes a row there, so MCP calls wait during that time. The swap is the last statement, with
---   lock_timeout 3s: if the lock is not obtained in 3 seconds the migration fails and nothing is applied. The new
+--   MCP call writes a row there, so MCP calls wait during that time. The swap is the last statement. The new
 --   table's foreign key takes SHARE ROW EXCLUSIVE on auth.users until commit.
+-- lock_timeout 3s is set right after the pre-check, before the first statement that takes a lock: if a lock is not
+--   obtained in 3 seconds the migration fails and nothing is applied.
 --
 -- Requires 20261123100000 (cloud_autosave_settings.active_install_id, cloud_release_switches.one_computer and
 --   messages_upload, the state answer's 'switches' and 'active_install_id') and the message and file columns of
@@ -108,6 +109,7 @@ BEGIN
   END IF;
 END
 $pre4263t$;
+SET LOCAL lock_timeout = '3s';
 
 -- ============================================================================ read log
 CREATE TABLE IF NOT EXISTS public.mcp_message_reads (
@@ -704,7 +706,6 @@ END
 $cron4263t$;
 
 -- ============================================================================ call log tool CHECK (last: see header)
-SET LOCAL lock_timeout = '3s';
 DO $chk4263t$
 DECLARE
   v_name text;
