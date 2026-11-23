@@ -34,8 +34,10 @@ BEGIN
   UPDATE public.cloud_autosave_settings SET active_install_id = '__IA__'::uuid WHERE user_id = A;
   r := public.cloud_upsert_deal(A, jsonb_build_object('source_install_id', '__IA__', 'local_id', 'r-a', 'content_hash', encode(sha256('r-a'::bytea), 'hex')));
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'deal a failed: %', r; END IF;
-  r := public.cloud_register_blob(A, '__IA__'::uuid, encode(sha256('r-blob-__RUN__'::bytea), 'hex'), 10, NULL);
-  IF r ->> 'state' IS DISTINCT FROM 'new' THEN RAISE EXCEPTION 'blob failed: %', r; END IF;
+  -- the blob row as cloud_register_blob writes a new one, inserted directly: from 20261123130000 on, register answers
+  -- feature_off while cloud_release_switches.messages_upload is off
+  INSERT INTO public.cloud_blobs (id, owner_user_id, sha256, size_bytes, mime_type, storage_path)
+  SELECT b.id, A, encode(sha256('r-blob-__RUN__'::bytea), 'hex'), 10, NULL, A::text || '/' || b.id::text FROM (SELECT gen_random_uuid() AS id) b;
   UPDATE public.cloud_autosave_settings SET active_install_id = '__IB__'::uuid WHERE user_id = A;
   r := public.cloud_upsert_deal(A, jsonb_build_object('source_install_id', '__IB__', 'local_id', 'r-b', 'content_hash', encode(sha256('r-b'::bytea), 'hex')));
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'deal b failed: %', r; END IF;
