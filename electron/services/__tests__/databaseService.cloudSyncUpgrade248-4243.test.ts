@@ -184,6 +184,12 @@ function seedV79(db: DatabaseType): void {
     insert(db, "messages", { id: id(12, n), user_id: U_ON, channel: "sms", direction: "inbound", body_text: `Text ${n}`, transaction_id: D1, sent_at: now });
   }
   insert(db, "attachments", { id: id(13, 1), message_id: id(12, 1), filename: "contract.pdf" });
+  // BACKLOG-4263 P5: links of D1 (a per-message link, a whole-thread link, an email link) and a hidden text.
+  insert(db, "messages", { id: id(12, 4), user_id: U_ON, channel: "sms", direction: "inbound", body_text: "Threaded", thread_id: "sweep-th", external_id: "guid-sweep", sent_at: now });
+  insert(db, "communications", { id: id(18, 1), user_id: U_ON, transaction_id: D1, message_id: id(12, 1), link_source: "manual", link_confidence: 1 });
+  insert(db, "communications", { id: id(18, 2), user_id: U_ON, transaction_id: D1, thread_id: "sweep-th", link_source: "manual", link_confidence: 1 });
+  insert(db, "communications", { id: id(18, 3), user_id: U_ON, transaction_id: D1, email_id: id(9, 1), link_source: "auto", link_confidence: 0.9 });
+  insert(db, "transaction_hidden_texts", { transaction_id: D1, message_id: id(12, 4), message_external_id: "guid-sweep", hidden_by: U_ON });
 }
 
 /** Every table seedV79 writes: each must be non-empty in the starting file. */
@@ -202,6 +208,8 @@ const SEEDED_TABLES = [
   "learn_mode_settings",
   "messages",
   "attachments",
+  "communications",
+  "transaction_hidden_texts",
 ];
 const WATCHED_TABLES = [...new Set(CLOUD_SYNC_TRIGGERS.map((t) => t.table))].sort();
 
@@ -232,10 +240,14 @@ function names(db: DatabaseType, type: "table" | "trigger", like: string): strin
 }
 const ALL_TRIGGERS = CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort();
 /**
- * BACKLOG-4263 PR-4a: the exact 22, by name (16 dirty-mark + 6 todo capture). The six checklist/item
+ * BACKLOG-4263 PR-4a / P5: the exact 31, by name (16 dirty-mark + 6 todo capture + 9 email and text marks). The six checklist/item
  * dirty-mark triggers are gone; a list derived only from CLOUD_SYNC_TRIGGERS would follow any change.
  */
 const PINNED_TRIGGERS = [
+  // BACKLOG-4263 P5: emails and texts (9)
+  "trg_cloud_sync_comm_delete",
+  "trg_cloud_sync_comm_insert",
+  "trg_cloud_sync_comm_update",
   "trg_cloud_sync_contact_emails_delete",
   "trg_cloud_sync_contact_emails_insert",
   "trg_cloud_sync_contact_emails_update",
@@ -246,6 +258,12 @@ const PINNED_TRIGGERS = [
   "trg_cloud_sync_contact_source_links_insert",
   "trg_cloud_sync_contact_source_links_update",
   "trg_cloud_sync_contact_update",
+  "trg_cloud_sync_email_update",
+  "trg_cloud_sync_hidden_delete",
+  "trg_cloud_sync_hidden_insert",
+  "trg_cloud_sync_msg_delete",
+  "trg_cloud_sync_msg_insert",
+  "trg_cloud_sync_msg_update",
   "trg_cloud_sync_party_delete",
   "trg_cloud_sync_party_insert",
   "trg_cloud_sync_party_update",
@@ -811,7 +829,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await again.svc.close();
   });
 
-  it("1b TURNED ON after the upgrade: the engine's enable path adds all 22 triggers and marks exactly the user's eligible deals in one transaction; a failed enable leaves nothing; no other row changes; the next pass uploads those deals", async () => {
+  it("1b TURNED ON after the upgrade: the engine's enable path adds all 31 triggers and marks exactly the user's eligible deals in one transaction; a failed enable leaves nothing; no other row changes; the next pass uploads those deals", async () => {
     buildV79Profile(dir);
     const { svc, db } = await openWithThisBuild();
     const afterOpen = snapshot(db);
@@ -896,7 +914,7 @@ describe("Keepr Cloud across 2.48.0 and 2.49 (real driver, real open path)", () 
     await svc.close();
   });
 
-  it("1d v80 PROFILE WITH KEEPR CLOUD ON (2.49 before v81): this build runs v81 (install_removed_at added, NULL; due_date added, NULL), every pre-existing row unchanged, all 22 triggers, the user's deals marked; the next open changes nothing", async () => {
+  it("1d v80 PROFILE WITH KEEPR CLOUD ON (2.49 before v81): this build runs v81 (install_removed_at added, NULL; due_date added, NULL), every pre-existing row unchanged, all 31 triggers, the user's deals marked; the next open changes nothing", async () => {
     // A v80 file as a 2.49 build at b869f3911 leaves it: the v79 profile, that build's five cloud tables
     // (vendored DDL, no install_removed_at), v80 applied, one user with Keepr Cloud on.
     const { file } = buildV79Profile(dir);
@@ -1253,7 +1271,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
   // machine rebind): every write still succeeds and records its ops with NULL edit_seq / clock_epoch.
   // WITH it (install row present at turn-on): edit_seq rises by one per recorded change.
   for (const withCounter of [false, true]) {
-    it(`2b GOING BACK, Keepr Cloud on (${withCounter ? "with" : "without"} the todo counter row): with all 22 triggers present, every common 2.48.0 write succeeds, none raises, each marks the deal it touched and records exactly its todo ops and trash rows`, async () => {
+    it(`2b GOING BACK, Keepr Cloud on (${withCounter ? "with" : "without"} the todo counter row): with all 31 triggers present, every common 2.48.0 write succeeds, none raises, each marks the deal it touched and records exactly its todo ops and trash rows`, async () => {
       buildV79Profile(dir);
       const first = await openWithThisBuild();
       if (withCounter) {
@@ -1297,7 +1315,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     });
   }
 
-  it("2b TRIGGER SWEEP, Keepr Cloud on: every one of the 22 triggers fires on its own event (a mark's generation moves; for the 6 todo triggers, an outbox or trash row changes), and no insert, update of any watched column, delete, bulk insert or cascade raises", async () => {
+  it("2b TRIGGER SWEEP, Keepr Cloud on: every one of the 31 triggers fires on its own event (a mark's generation moves; for the 6 todo triggers, an outbox or trash row changes), and no insert, update of any watched column, delete, bulk insert or cascade raises", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
     enable(first.db);
@@ -1328,7 +1346,34 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       contact_emails: { where: "id = ?", arg: id(5, 1), over: { id: id(5, 20), email: "sweep@example.test" } },
       contact_phones: { where: "id = ?", arg: id(6, 1), over: { id: id(6, 20), phone_e164: "+12125550196" } },
       contact_source_links: { where: "id = ?", arg: id(7, 1), over: { id: id(7, 20), source_record_id: "rec-sweep" } },
+      // BACKLOG-4263 P5: a copy of D1's email link; a copy of D1's threaded text (marks through the thread link)
+      communications: { where: "id = ?", arg: id(18, 3), over: { id: id(18, 20) } },
+      messages: { where: "id = ?", arg: id(12, 4), over: { id: id(12, 20), external_id: "guid-sweep-copy" } },
     };
+    // BACKLOG-4263 P5: the email and text UPDATE triggers fire only on a real change; each step sets a new value
+    // and puts the old one back (so the row stays linked to D1 for the next column).
+    const msgUpdate: Record<string, { key: (c: string) => string; values: Record<string, unknown> }> = {
+      communications: {
+        key: (c) => (c === "email_id" ? id(18, 3) : id(18, 1)),
+        values: { transaction_id: D4, message_id: id(12, 3), email_id: id(9, 2), thread_id: "th-moved", user_id: U_OFF, link_source: "scan", link_confidence: 0.42, match_reason: "swept", linked_at: "2026-11-03 00:00:00" },
+      },
+      messages: {
+        key: () => id(12, 4),
+        values: {
+          body_text: "swept", associated_message_type: 2000, associated_message_guid: "p:0/x", message_type: "unknown", thread_id: "th-moved",
+          user_id: U_OFF, sent_at: "2026-11-03T00:00:00.000Z", received_at: "2026-11-03T00:00:00.000Z", participants: "{\"from\":\"x\"}",
+          channel: "imessage", direction: "outbound", external_id: "guid-moved", subject: "Swept",
+        },
+      },
+      emails: {
+        key: () => id(9, 1),
+        values: {
+          subject: "Swept", body_plain: "p", body_html: "<p>h</p>", sender: "s@example.test", recipients: "r@example.test", cc: "c@example.test",
+          thread_id: "gth-x", sent_at: "2026-11-03T00:00:00.000Z", received_at: "2026-11-03T00:00:00.000Z", direction: "outbound", user_id: U_OFF,
+        },
+      },
+    };
+    const hiddenRow = { transaction_id: D1, message_id: id(12, 1), message_external_id: null, hidden_by: U_ON };
     // The todo triggers get their own rows (the dirty-mark DELETE step would otherwise delete them first).
     const todoSources: Record<string, { where: string; arg: string; over: Row }> = {
       transaction_checklists: { where: "id = ?", arg: CL1, over: { id: id(3, 21), template_id: "tpl-sweep-todo" } },
@@ -1347,7 +1392,9 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     for (const spec of CLOUD_SYNC_TRIGGERS) {
       const src = TODO.has(spec.name) ? todoSources[spec.table] : sources[spec.table];
       const event = / INSERT ON | DELETE ON | UPDATE /.exec(` ${spec.sql.split("\n")[1]} `)?.[0].trim().split(" ")[0];
-      if (event === "INSERT") {
+      if (event === "INSERT" && spec.table === "transaction_hidden_texts") {
+        step(spec.name, () => insert(db, spec.table, hiddenRow));
+      } else if (event === "INSERT") {
         step(spec.name, () => copyRow(spec.table, rowOf(spec.table, src.where, src.arg), src.over));
       } else if (event === "UPDATE") {
         const cols = /UPDATE OF ([^\n]+) ON/.exec(spec.sql)![1].split(", ");
@@ -1356,6 +1403,14 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
             // The person trigger fires only on a real change of the column.
             const v = c === "removed_at" ? "2026-11-03 00:00:00" : c === "source" ? "email" : `${c}-changed`;
             step(spec.name, () => db.prepare(`UPDATE contacts SET ${c} = ? WHERE id = ?`).run(v, C1));
+          } else if (msgUpdate[spec.table]) {
+            const u = msgUpdate[spec.table];
+            step(spec.name, () => {
+              const key = u.key(c);
+              const old = rowOf(spec.table, "id = ?", key)[c];
+              db.prepare(`UPDATE ${spec.table} SET ${c} = ? WHERE id = ?`).run(u.values[c] as never, key);
+              db.prepare(`UPDATE ${spec.table} SET ${c} = ? WHERE id = ?`).run(old as never, key);
+            });
           } else if (TODO.has(spec.name)) {
             step(spec.name, () => db.prepare(`UPDATE ${spec.table} SET ${todoUpdate[c]} WHERE id = ?`).run(src.arg));
           } else {
@@ -1366,6 +1421,10 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
       }
     }
     for (const spec of CLOUD_SYNC_TRIGGERS.filter((s) => s.sql.includes(" DELETE ON "))) {
+      if (spec.table === "transaction_hidden_texts") {
+        step(spec.name, () => db.prepare("DELETE FROM transaction_hidden_texts WHERE transaction_id = ? AND message_id = ?").run(D1, id(12, 1)));
+        continue;
+      }
       const src = TODO.has(spec.name) ? todoSources[spec.table] : sources[spec.table];
       step(spec.name, () => db.prepare(`DELETE FROM ${spec.table} WHERE id = ?`).run(src.over.id));
     }
@@ -1468,7 +1527,7 @@ CREATE TABLE IF NOT EXISTS cloud_sync_todo_cursor (
     await svc.close();
   });
 
-  it("2d 2.48.0's schema.sql re-run on a Keepr Cloud profile: it succeeds, drops or rebuilds nothing, keeps all 22 triggers, creates no mark, and changes no row", async () => {
+  it("2d 2.48.0's schema.sql re-run on a Keepr Cloud profile: it succeeds, drops or rebuilds nothing, keeps all 31 triggers, creates no mark, and changes no row", async () => {
     buildV79Profile(dir);
     const first = await openWithThisBuild();
     enable(first.db);

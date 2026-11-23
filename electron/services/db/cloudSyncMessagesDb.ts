@@ -4,8 +4,8 @@
  * THE SELECTION RULE lives here and nowhere else: every `communications` row of the deal, whatever its
  * `link_source` (Needs review included), through the two arms the Texts tab and the export read
  * (`getCommunicationsWithMessages`, communicationDbService.ts): a per-message link, or a whole-thread link
- * restricted to the linking user's copy of the thread; and the email arm. No date window. The review queue
- * (`pending_review_communications`) is never read. Owner copies and duplicates are collapsed by the same
+ * restricted to the linking user's copy of the thread; and the email arm. No date window. The review queue table
+ * (Needs-review suggestions that are not links) is never read. Owner copies and duplicates are collapsed by the same
  * `dedupeLinkedCommunicationRows`. Texts hidden from exports are NOT dropped: they carry `hidden_from_export`,
  * and so do reactions to them (the export's own rule, exportPlan.ts).
  *
