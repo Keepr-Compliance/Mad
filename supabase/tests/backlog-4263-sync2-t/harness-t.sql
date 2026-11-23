@@ -687,8 +687,8 @@ CREATE FUNCTION pg_temp.c_prune() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE o uuid := gen_random_uuid(); y uuid := gen_random_uuid(); z uuid := gen_random_uuid(); n int;
 BEGIN
   INSERT INTO public.mcp_message_reads (id, user_id, provider, client_name, tool, cloud_deal_id, cloud_message_id, channel, read_at) VALUES
-    (o, pg_temp.f('A'), 'anthropic', 'Fixture', 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now() - interval '366 days'),
-    (y, pg_temp.f('A'), 'anthropic', 'Fixture', 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now() - interval '364 days'),
+    (o, pg_temp.f('A'), 'anthropic', 'Fixture', 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now() - interval '400 days'),
+    (y, pg_temp.f('A'), 'anthropic', 'Fixture', 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now() - interval '300 days'),
     (z, pg_temp.f('A'), 'anthropic', 'Fixture', 'get_message', pg_temp.f('dA'), pg_temp.f('m_lin'), 'email', now());
   n := public._mcp_prune_message_reads();
   RETURN pg_temp.pass(n >= 1 AND NOT EXISTS (SELECT 1 FROM public.mcp_message_reads WHERE id = o)
@@ -743,16 +743,16 @@ END $c$;
 
 -- Participants: a 'from' array shows its first value and counts the others; list leaves cc out and counts it
 CREATE FUNCTION pg_temp.c_people() RETURNS text LANGUAGE plpgsql AS $c$
-DECLARE g jsonb; l jsonb; row jsonb;
+DECLARE g jsonb; l jsonb; lr jsonb;
 BEGIN
   g := pg_temp.getm('K2', pg_temp.s('m_from'), 1) -> 'result' -> 'message';
   l := pg_temp.lst('K2', pg_temp.s('dSw'), NULL, NULL, 50, NULL);
-  row := (SELECT e FROM jsonb_array_elements(l -> 'result' -> 'messages') e WHERE e ->> 'message_id' = pg_temp.s('m_from'));
+  lr := (SELECT e FROM jsonb_array_elements(l -> 'result' -> 'messages') e WHERE e ->> 'message_id' = pg_temp.s('m_from'));
   RETURN pg_temp.pass(g ->> 'from' = 'a@example.test' AND g -> 'to' = '["d@example.test"]' AND g -> 'cc' = '["e@example.test"]'
                       AND (g ->> 'participants_more')::int = 2
-                      AND row ->> 'from' = 'a@example.test' AND row -> 'to' = '["d@example.test"]' AND NOT row ? 'cc'
-                      AND (row ->> 'participants_more')::int = 3,
-    jsonb_build_object('get', g - 'body_text', 'list', row)::text);
+                      AND lr ->> 'from' = 'a@example.test' AND lr -> 'to' = '["d@example.test"]' AND NOT lr ? 'cc'
+                      AND (lr ->> 'participants_more')::int = 3,
+    jsonb_build_object('get', g - 'body_text', 'list', lr)::text);
 END $c$;
 
 -- Retention: more than one batch of old rows is deleted in one run (rows written directly with their read time)
