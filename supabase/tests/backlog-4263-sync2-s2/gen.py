@@ -528,7 +528,7 @@ BEGIN
   r := pg_temp.call('cloud_upsert_messages', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', A::text, pg_temp.s('IA'), pg_temp.s('dA'),
                     jsonb_build_array(pg_temp.mrow('fx-m1', 'email'), pg_temp.mrow('fx-m2-t', 'text'), pg_temp.mrow('fx-m3', 'email'))::text);
   IF (SELECT count(*) FROM jsonb_array_elements(r -> 'results') e WHERE e ->> 'status' = 'applied') <> 3 THEN RAISE EXCEPTION 'FIXTURE messages failed: %', r; END IF;
-  INSERT INTO pg_temp.s2_fx SELECT k, (r -> 'results' -> (o - 1)::int ->> 'cloud_id')::uuid FROM unnest(ARRAY['m1', 'm2', 'm3']) WITH ORDINALITY u(k, o);
+  INSERT INTO pg_temp.s2_fx SELECT u.key, (r -> 'results' -> (u.pos - 1)::int ->> 'cloud_id')::uuid FROM unnest(ARRAY['m1', 'm2', 'm3']) WITH ORDINALITY u(key, pos);
   r := pg_temp.call('cloud_upsert_messages', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', A::text, pg_temp.s('IB'), pg_temp.s('dB'),
                     jsonb_build_array(pg_temp.mrow('fx-mb', 'email'))::text);
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'FIXTURE message B failed: %', r; END IF;
@@ -545,7 +545,7 @@ BEGIN
                     jsonb_build_array(pg_temp.frow('fx-f1', 'fx-m1', pg_temp.h('fx-blob-1'), NULL), pg_temp.frow('fx-f2', 'fx-m1', NULL, 'too_large'),
                                       pg_temp.frow('fx-f3', 'fx-m2-t', pg_temp.h('fx-blob-2'), NULL), pg_temp.frow('fx-f4', 'fx-m3', pg_temp.h('fx-blob-1'), NULL))::text);
   IF (SELECT count(*) FROM jsonb_array_elements(r -> 'results') e WHERE e ->> 'status' = 'applied') <> 4 THEN RAISE EXCEPTION 'FIXTURE files failed: %', r; END IF;
-  INSERT INTO pg_temp.s2_fx SELECT k, (r -> 'results' -> (o - 1)::int ->> 'cloud_id')::uuid FROM unnest(ARRAY['f1', 'f2', 'f3', 'f4']) WITH ORDINALITY u(k, o);
+  INSERT INTO pg_temp.s2_fx SELECT u.key, (r -> 'results' -> (u.pos - 1)::int ->> 'cloud_id')::uuid FROM unnest(ARRAY['f1', 'f2', 'f3', 'f4']) WITH ORDINALITY u(key, pos);
   UPDATE public.cloud_autosave_settings SET active_install_id = NULL, active_since = NULL WHERE user_id = A;
   r := pg_temp.call('cloud_claim_install', '%L::uuid, %L::uuid, %L::boolean', A::text, pg_temp.s('IA'), 'false');
   IF r ->> 'ok' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'FIXTURE claim failed: %', r; END IF;

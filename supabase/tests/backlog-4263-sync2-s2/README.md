@@ -58,11 +58,12 @@ flip (section 11.4 step 9).
 
 ## Two-session cases
 
-None. Removing a message and attaching a file to it cannot interleave: `cloud_tombstone` locks the message's deal row
-`FOR NO KEY UPDATE` first (`/*TOMB:lockdeals*/`), and so does `cloud_upsert_files` (its deal lookup) before it reads
-the message (`/*FILE:livemessage*/`); attaching a file also takes `FOR KEY SHARE` on the message row through
-`cloud_deal_files_message_fk`, which conflicts with the tombstone's `FOR UPDATE` of that row. The removal therefore runs
+None. Removing a message and attaching a file to it cannot interleave (traced from the function text, not run):
+`cloud_tombstone` locks the message's deal row `FOR NO KEY UPDATE` first (`/*TOMB:lockdeals*/`), and so does
+`cloud_upsert_files` (its deal lookup) before it reads the message (`/*FILE:livemessage*/`). The removal therefore runs
 wholly before (the attach then answers `parent_missing`) or wholly after (the cascade sees the committed file row).
+Inferred, not run: setting `cloud_message_id` also takes `FOR KEY SHARE` on the message row through
+`cloud_deal_files_message_fk`, a second lock with the same effect.
 
 ## Notes for later pieces
 
