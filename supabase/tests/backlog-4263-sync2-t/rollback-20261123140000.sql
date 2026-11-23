@@ -2,7 +2,8 @@
 -- Undoes supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql. One transaction; RAISEs (nothing changed) unless its post-check holds.
 -- Refuses while public.mcp_message_reads holds any row (the read log of AI apps; keep a copy first).
 -- Deleted: the call log rows of list_deal_messages and get_message (counted in the NOTICE; their audit record is lost).
--- Then the job 'mcp-message-reads-prune' is unscheduled, the nine functions and the table are dropped, the 11-name tool
+-- Then the job 'mcp-message-reads-prune' is unscheduled, the nine functions (the two readers under the role that owns
+-- them, mcp_reader) and the table are dropped, the 11-name tool
 -- CHECK is put back (found by the tool column; the outcome CHECK is not touched) and the ledger row is removed.
 -- Locks: DROP TABLE takes ACCESS EXCLUSIVE on mcp_message_reads and, through its foreign key, a lock on auth.users;
 -- the CHECK swap takes ACCESS EXCLUSIVE on mcp_call_log; both until commit, lock_timeout 3s.
@@ -41,10 +42,12 @@ DROP FUNCTION IF EXISTS public.mcp_list_my_message_reads(text, integer);
 DROP FUNCTION IF EXISTS public.mcp_message_access(text, bytea, text);
 DROP FUNCTION IF EXISTS public.mcp_get_message(text, bytea, text, text, integer);
 DROP FUNCTION IF EXISTS public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text);
-DROP FUNCTION IF EXISTS public._mcp_r_get_message(uuid, integer);
-DROP FUNCTION IF EXISTS public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid);
 DROP FUNCTION IF EXISTS public._mcp_msg_people(jsonb, boolean);
 DROP FUNCTION IF EXISTS public._mcp_conn_reads_messages(uuid);
+SET LOCAL ROLE mcp_reader;
+DROP FUNCTION IF EXISTS public._mcp_r_get_message(uuid, integer);
+DROP FUNCTION IF EXISTS public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid);
+RESET ROLE;
 DROP TABLE IF EXISTS public.mcp_message_reads;
 DO $chk4263tr$
 DECLARE
