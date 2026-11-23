@@ -430,6 +430,89 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect(HARNESS).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{11}[1-9a-f]/i);
   });
 
+  it('harness backfill fixture: bf_7 tells the real ordering (greatest max save) apart from greatest min save', () => {
+    // the rule as the migration writes it
+    expect(S1).toContain('ORDER BY d.owner_user_id, max(d.last_synced_at) DESC, d.source_install_id) w');
+    // install ids exactly as the harness's pg_temp.fx() makes them; uuid order is byte order = hex text order
+    const fx = (k: string): string => md5(`p4263:sync2-s1-harness:${k}`);
+    const rowRe = /\(pg_temp\.f\('bf_7'\), pg_temp\.f\('(bf_7_i\d)'\), '[^']+', pg_temp\.h\('[^']+'\), now\(\) - interval '(\d+) hours', NULL\)/g;
+    const ago = new Map<string, number[]>();
+    for (const m of HARNESS.matchAll(rowRe)) ago.set(m[1], [...(ago.get(m[1]) ?? []), Number(m[2])]);
+    const installs = [...ago.keys()];
+    expect(installs.length).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...[...ago.values()].map((a) => a.length))).toBeGreaterThanOrEqual(2);
+    // fewer hours ago = saved later; ties to the lowest id
+    const pick = (score: (k: string) => number): string =>
+      [...installs].sort((a, b) => score(b) - score(a) || (fx(a) < fx(b) ? -1 : 1))[0];
+    const maxSave = (k: string): number => -Math.min(...ago.get(k)!);
+    const minSave = (k: string): number => -Math.max(...ago.get(k)!);
+    const real = pick(maxSave);
+    expect(pick(minSave)).not.toBe(real); // min(...) DESC, the harness's M_backfill_least_recent
+    expect(pick((k) => -maxSave(k))).not.toBe(real); // max(...) ASC
+    expect(pick((k) => -minSave(k))).not.toBe(real); // min(...) ASC
+    expect(pick(() => 0)).not.toBe(real); // install id only
+    const asserted = /'max_not_min', \(SELECT active_install_id FROM public\.cloud_autosave_settings WHERE user_id = pg_temp\.f\('bf_7'\)\) = pg_temp\.f\('(bf_7_i\d)'\)\)/.exec(HARNESS);
+    expect(asserted?.[1]).toBe(real);
+    expect(HARNESS).toContain("UPDATE pg_temp.s1_sql SET s = replace(s, 'max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC') WHERE k = 'backfill';");
+  });
+
+  it('harness backfill fixture: bf_2 is a tie on the most recent save, decided by the install id term', () => {
+    const fx = (k: string): string => md5(`p4263:sync2-s1-harness:${k}`);
+    const rowRe = /\(pg_temp\.f\('bf_2'\), pg_temp\.f\('(bf_2_i\d)'\), '[^']+', pg_temp\.h\('[^']+'\), timestamptz '([^']+)', NULL\)/g;
+    const rows = [...HARNESS.matchAll(rowRe)].map((m) => ({ inst: m[1], at: m[2] }));
+    expect(rows.length).toBe(2);
+    expect(new Set(rows.map((r) => r.inst)).size).toBe(2);
+    expect(rows[0].at).toBe(rows[1].at); // same save time on both installs: only the id term decides
+    const asc = [...rows].sort((a, b) => (fx(a.inst) < fx(b.inst) ? -1 : 1))[0].inst;
+    const desc = [...rows].sort((a, b) => (fx(a.inst) < fx(b.inst) ? 1 : -1))[0].inst;
+    expect(asc).not.toBe(desc); // the migration (ascending) and the mutant (descending) pick different installs
+    expect(HARNESS).toContain("= least(pg_temp.f('bf_2_i1'), pg_temp.f('bf_2_i2'))");
+    expect(HARNESS).toContain("UPDATE pg_temp.s1_sql SET s = replace(s, 'd.source_install_id) w', 'd.source_install_id DESC) w') WHERE k = 'backfill';");
+    expect(HARNESS).toContain('-- M_backfill_tie_highest (primary control c2b_backfill)');
+  });
+
+  const caseBody = (name: string): string => {
+    const at = HARNESS.indexOf(`CREATE FUNCTION pg_temp.${name}() RETURNS text`);
+    expect(at).toBeGreaterThan(0);
+    return HARNESS.slice(at, HARNESS.indexOf('END $c$;', at));
+  };
+
+  it('harness c1_push: the inactive call carries a real op, checked against the fingerprint taken just before it', () => {
+    const b = caseBody('c1_push');
+    const before = b.indexOf('before := pg_temp.fp();');
+    const inactive = b.indexOf("pg_temp.clop(pg_temp.f('dB'), 'c1-cl-IB')");
+    expect(before).toBeGreaterThan(0);
+    expect(inactive).toBeGreaterThan(before);
+    expect(b.indexOf('after := pg_temp.fp();')).toBeGreaterThan(inactive);
+    expect(b).toContain("(ra -> 'results' -> 0 ->> 'status') = 'added'");
+    expect(HARNESS).toMatch(/CREATE FUNCTION pg_temp\.clop\(deal uuid, lid text\)[\s\S]{0,200}'kind', 'create_checklist'/);
+    // the fingerprint covers what the op writes
+    expect(HARNESS).toMatch(/CREATE FUNCTION pg_temp\.fp\(\)[\s\S]*FROM public\.cloud_todo_ops o[\s\S]*FROM public\.cloud_deal_checklists c/);
+    // wrong implementation: answer computer_not_active only after the ops were applied
+    const m = HARNESS.slice(HARNESS.indexOf('-- M_push_gate_after_write (primary control c1_push)'));
+    const mut = m.slice(0, m.indexOf('\n  -- M_', 10));
+    expect(mut.indexOf('v_res := public._cloud_todo_apply(')).toBeGreaterThan(0);
+    expect(mut.indexOf('/*GATE:active:push*/')).toBeGreaterThan(mut.indexOf('v_res := public._cloud_todo_apply('));
+  });
+
+  it('harness c1_confirm: bA has its storage object first, so the inactive confirm would write without the gate', () => {
+    const b = caseBody('c1_confirm');
+    const obj = b.indexOf("INSERT INTO storage.objects (bucket_id, name, metadata)\n  SELECT 'cloud-deal-files', b.storage_path, jsonb_build_object('size', b.size_bytes::text) FROM public.cloud_blobs b WHERE b.id = pg_temp.f('bA');");
+    expect(obj).toBeGreaterThan(0);
+    expect(b.indexOf('before := pg_temp.fp();')).toBeGreaterThan(obj);
+    expect(b).toContain("(ra ->> 'ok') = 'true' AND (ra ->> 'state') = 'uploaded'");
+    expect(HARNESS).toMatch(/CREATE FUNCTION pg_temp\.fp\(\)[\s\S]*b\.uploaded_at, b\.purge_requested_at/);
+  });
+
+  it('harness c2_same: active_since is set to a fixed earlier time before the repeated claim', () => {
+    const b = caseBody('c2_same');
+    const set = b.indexOf("UPDATE public.cloud_autosave_settings SET active_since = timestamptz '2026-01-01 00:00:00+00' WHERE user_id = pg_temp.f('A');");
+    expect(set).toBeGreaterThan(0);
+    expect(b.indexOf("x_t := timestamptz '2026-01-01 00:00:00+00';")).toBeGreaterThan(set);
+    expect(b.indexOf("v := pg_temp.claim('IA', true);")).toBeGreaterThan(set);
+    expect(b).toContain("WHERE user_id = pg_temp.f('A')) = x_t");
+  });
+
   const MUTANTS: Array<[string, string, string]> = [
     ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
     ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],
