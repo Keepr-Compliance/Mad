@@ -48,6 +48,8 @@ export const cloudSyncService = {
   deleteOldInstalls: () => call(() => window.api.cloudSync.deleteOldInstalls()),
   /** BACKLOG-4263 PR-6: "Save this computer's deals again". */
   reclaimInstall: () => call(() => window.api.cloudSync.reclaimInstall()),
+  /** BACKLOG-4263 P2: "Use this computer instead". */
+  useThisComputer: () => call(() => window.api.cloudSync.useThisComputer()),
   /** BACKLOG-4263 PR-6: Keepr Cloud on for this user here (local read, no network); false when main is unreachable. */
   async localState(): Promise<{ on: boolean; online: boolean }> {
     try {

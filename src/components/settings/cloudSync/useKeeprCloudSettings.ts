@@ -14,7 +14,7 @@ export interface KeeprCloudSettingsState {
   viewRead: boolean;
   busy: boolean;
   /** A fixed message key, or null. */
-  message: "turn_off_done" | "turn_off_offline" | "reclaim_done" | "failed" | null;
+  message: "turn_off_done" | "turn_off_offline" | "reclaim_done" | "move_busy" | "failed" | null;
 }
 
 export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
@@ -29,6 +29,8 @@ export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
   deleteOldInstalls: () => Promise<boolean>;
   /** BACKLOG-4263 PR-6: "Save this computer's deals again". */
   reclaimInstall: () => Promise<boolean>;
+  /** BACKLOG-4263 P2: "Use this computer instead". */
+  useThisComputer: () => Promise<boolean>;
 }
 
 export function useKeeprCloudSettings(): UseKeeprCloudSettings {
@@ -52,7 +54,17 @@ export function useKeeprCloudSettings(): UseKeeprCloudSettings {
     async (fn: () => Promise<CloudSyncResult>, onSuccess?: (r: CloudSyncResult) => KeeprCloudSettingsState["message"]) => {
       setState((s) => ({ ...s, busy: true, message: null }));
       const r = await fn();
-      const message = r.success ? (onSuccess ? onSuccess(r) : null) : "failed";
+      // BACKLOG-4263 P2: another computer is active (a turn-on or confirm refused by the claim, a turn-off dropped):
+      // the refreshed view says so, so no failure line. A move made in the last minute: its own line.
+      const message = r.success
+        ? onSuccess
+          ? onSuccess(r)
+          : null
+        : r.error === "computer_not_active"
+          ? null
+          : r.error === "busy"
+            ? "move_busy"
+            : "failed";
       const view = await cloudSyncService.getView();
       if (mounted.current) setState({ view, viewRead: true, busy: false, message });
       return r.success;
@@ -72,5 +84,6 @@ export function useKeeprCloudSettings(): UseKeeprCloudSettings {
     deleteOnlineNotHere: () => act(() => cloudSyncService.deleteOnlineNotHere()),
     deleteOldInstalls: () => act(() => cloudSyncService.deleteOldInstalls()),
     reclaimInstall: () => act(() => cloudSyncService.reclaimInstall(), () => "reclaim_done"),
+    useThisComputer: () => act(() => cloudSyncService.useThisComputer()),
   };
 }

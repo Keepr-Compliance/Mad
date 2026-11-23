@@ -37,13 +37,21 @@ import {
   RESET_DIRTY_FAILURE_SQL,
   UPDATE_DIRTY_FAILURE_SQL,
   UPSERT_DEAL_STATE_SQL,
+  DELETE_STATE_AFTER_MOVE_SQL,
+  DELETE_SWITCH_MARKER_SQL,
+  MOVE_PENDING_ID,
+  SELECT_SWITCH_MARKER_SQL,
+  TURN_OFF_DROPPED_ID,
+  UPSERT_SWITCH_MARKER_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
 import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects, noteDealRemovedOnline } from "./cloudSyncDealArchive";
 import {
+  clearInstallRemoved,
   clearTodoStateEverywhere,
   clearTodoStateForUser,
+  installRemovedAt,
   forgetTodoOtherProjects,
   prepareTodoPass,
   resetTodoDeal,
@@ -708,4 +716,60 @@ export function setOrphanCount(
     projectRef,
     userId,
   );
+}
+
+// ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
+
+/** Plan §13.1 step 1: written before cloud_claim_install(p_replace = true) is called. */
+export function writeMovePending(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+  db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID, nowIso(now));
+}
+
+export function hasMovePending(db: SqlDb, projectRef: string, userId: string): boolean {
+  return !!db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, MOVE_PENDING_ID);
+}
+
+/** The claim did not move the account here (refused, or the server names another computer): only the marker goes. */
+export function clearMovePending(db: SqlDb, projectRef: string, userId: string): void {
+  db.prepare(DELETE_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID);
+}
+
+/**
+ * After a move to this computer (plan §14 D1, P2 acceptance condition 6), ONE local transaction, whatever the local
+ * enabled flag: the email, text and file records and the move marker go, and every eligible deal of the user is
+ * marked, so the next pass sends again what the erase job may have scrubbed while this computer was not active.
+ * Deal and party records and the messages_upload sentinel stay.
+ *
+ * A computer whose online copy had been removed ("Delete them" on another computer) takes the reclaim path instead:
+ * the claim already deleted its register row on the server (migration 20261123100000 marker CLAIM:reclaim, :859-862),
+ * and its deals were soft-removed online, so every record of what was saved is forgotten, as after
+ * cloud_reclaim_install (reclaimInstallForUser), and the local stop is cleared, in the same transaction.
+ */
+export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+  db.transaction(() => {
+    if (installRemovedAt(db, projectRef, userId)) {
+      reclaimInstallForUser(db, projectRef, userId, now);
+      clearInstallRemoved(db, projectRef, userId);
+      return;
+    }
+    db.prepare(DELETE_STATE_AFTER_MOVE_SQL).run(projectRef, userId);
+    db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+  })();
+}
+
+/**
+ * Plan §2.5: a turn-off made here while offline is dropped because another computer became active first. The owed
+ * marker goes (this computer stays off; nothing online is deleted) and a marker records why, for the screen, in one
+ * transaction with the trigger rule.
+ */
+export function dropOwedTurnOff(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+  db.transaction(() => {
+    db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(projectRef, userId);
+    db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, TURN_OFF_DROPPED_ID, nowIso(now));
+    applyCloudSyncTriggerRule(db);
+  })();
+}
+
+export function turnOffDropped(db: SqlDb, projectRef: string, userId: string): boolean {
+  return !!db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, TURN_OFF_DROPPED_ID);
 }

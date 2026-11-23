@@ -12,7 +12,9 @@ export type CloudSyncStatus =
   | "not_active"
   | "update_needed"
   | "turning_off"
-  | "error";
+  | "error"
+  /** BACKLOG-4263 P2: another computer is the account's active one; nothing from this computer is saved online. */
+  | "other_computer";
 
 export type CloudSyncPausedReason =
   | "signed_out"
@@ -51,6 +53,13 @@ export interface CloudSyncView {
   parked?: { locked: number; other: number };
   /** BACKLOG-4263 PR-6: online deals of this install the owner restored online ("Online only"), from the last check. */
   restoredOnlineOnly?: number;
+  /**
+   * BACKLOG-4263 P2: with status `off` (the notice changed), another computer is the account's active one. Turning on
+   * re-accepts the notice; then "Use this computer instead" is offered.
+   */
+  otherComputerActive?: boolean;
+  /** BACKLOG-4263 P2: a turn-off made here offline was dropped because another computer became active first. */
+  turnOffDropped?: boolean;
 }
 
 export interface CloudSyncResult {
@@ -105,6 +114,8 @@ export interface WindowApiCloudSync {
   deleteOldInstalls: () => Promise<CloudSyncResult>;
   /** BACKLOG-4263 PR-4b: "Save this computer's deals again" after its online copy was removed elsewhere. */
   reclaimInstall: () => Promise<CloudSyncResult>;
+  /** BACKLOG-4263 P2: "Use this computer instead" (Settings › Keepr Cloud, status other_computer). */
+  useThisComputer: () => Promise<CloudSyncResult>;
   /** BACKLOG-4263 PR-4c: this user's deals deleted on this computer in the last 30 days (Settings › Keepr Cloud › Removed). */
   listRemovedDeals: () => Promise<CloudSyncRemovedDeal[]>;
   /** BACKLOG-4263 PR-4c: restore one of them on this computer. Settings › Keepr Cloud › Removed. */

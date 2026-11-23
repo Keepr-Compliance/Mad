@@ -117,4 +117,22 @@ export const KEEPR_CLOUD_COPY = {
   // Delete for good, not_found: the deal was restored or already deleted (SR review 2, required 6)
   deleteNotListed: "This deal is no longer in this list.",
   restoredElsewhere: "This deal was restored elsewhere; it was not deleted.",
+
+  // ---- BACKLOG-4263 P2: one computer per account. PLACEHOLDER wording for the founder (plan §5, P8); each says
+  // what the app does today, truthfully.
+  otherComputer: "Keepr Cloud is saving from another computer. Deals on this computer are not saved online.",
+  // Plan §12.3 (lost computer) and P2 acceptance condition 4 (a reset or moved profile reads as a second computer).
+  otherComputerHelp:
+    "If that computer is lost, or this one was reset or moved, use this computer instead. To turn Keepr Cloud off, use this computer first.",
+  useThisComputer: "Use this computer instead",
+  moveConfirmTitle: "Use this computer for Keepr Cloud?",
+  // Coordinator condition C: says the move removes the other computer's emails, texts and files online and that its
+  // deals stay online and stop updating.
+  moveConfirm:
+    "Keepr Cloud will save this computer's deals instead, and your other computer stops saving. " +
+    "The emails, texts and files saved from your other computer are removed from Keepr Cloud: AI apps can no longer read them, and an hourly cleanup erases them. " +
+    "Deals saved from your other computer stay online and stop updating.",
+  moveConfirmButton: "Use this computer",
+  moveBusy: "Keepr Cloud moved a moment ago. Try again in a minute.",
+  turnOffDropped: "Keepr Cloud moved to another computer before this computer could turn it off. Nothing was deleted online.",
 } as const;

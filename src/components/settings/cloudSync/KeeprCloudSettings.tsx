@@ -56,6 +56,8 @@ function statusLine(view: CloudSyncView): string | null {
       return C.updateNeeded;
     case "turning_off":
       return C.turnOffOffline;
+    case "other_computer":
+      return C.otherComputer;
     default:
       return null;
   }
@@ -76,7 +78,7 @@ export function KeeprCloudSettings({
   cloud: UseKeeprCloudSettings;
   listed?: boolean;
 }): React.ReactElement | null {
-  const [dialog, setDialog] = useState<"notice" | "off" | "forget" | "delete-online" | "delete-installs" | null>(null);
+  const [dialog, setDialog] = useState<"notice" | "off" | "forget" | "delete-online" | "delete-installs" | "move" | null>(null);
   const view = cloud.view;
   const isOn = !!view && (view.status === "on" || view.status === "error" || view.status === "paused");
   // BACKLOG-4263 PR-6: Settings › Keepr Cloud › Removed (Keepr Cloud users only; the online list only when on and online)
@@ -152,6 +154,27 @@ export function KeeprCloudSettings({
               {C.saveThisComputer}
             </button>
           </div>
+        )}
+
+        {view.engineInstalled && view.status === "other_computer" && (
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4" data-testid="cloud-other-computer">
+            <span className="text-[13px] text-gray-700">{C.otherComputerHelp}</span>
+            <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => setDialog("move")}>
+              {C.useThisComputer}
+            </button>
+          </div>
+        )}
+
+        {view.engineInstalled && view.status === "off" && view.otherComputerActive && (
+          <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-other-computer-off">
+            {C.otherComputer}
+          </p>
+        )}
+
+        {view.turnOffDropped && (
+          <p className="m-0 text-[13px] text-gray-700" data-testid="cloud-turn-off-dropped">
+            {C.turnOffDropped}
+          </p>
         )}
 
         {view.installRemoved && isOn && (
@@ -241,7 +264,9 @@ export function KeeprCloudSettings({
                 ? C.turnOffOffline
                 : cloud.message === "reclaim_done"
                   ? C.reclaimDone
-                  : C.actionFailed}
+                  : cloud.message === "move_busy"
+                    ? C.moveBusy
+                    : C.actionFailed}
           </p>
         )}
 
@@ -296,6 +321,16 @@ export function KeeprCloudSettings({
         onConfirm={() =>
           void (dialog === "delete-online" ? cloud.deleteOnlineNotHere() : cloud.deleteOldInstalls()).finally(() => setDialog(null))
         }
+      />
+      <SettingsConfirm
+        open={dialog === "move"}
+        title={C.moveConfirmTitle}
+        description={C.moveConfirm}
+        confirmLabel={C.moveConfirmButton}
+        cancelLabel={C.cancel}
+        loading={cloud.busy}
+        onCancel={() => setDialog(null)}
+        onConfirm={() => void cloud.useThisComputer().finally(() => setDialog(null))}
       />
       <SettingsConfirm
         open={dialog === "forget"}

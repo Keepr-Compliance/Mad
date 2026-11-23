@@ -13,7 +13,7 @@ import type { CloudClient } from "./cloudClient";
 import { CloudSyncRunner, type PassSummary, type RunnerDeps, type RunnerLog } from "./runner";
 import { isNoticeSupported } from "./notice";
 import { TodoOutboxWatcher } from "./todoOutboxWatcher";
-import { parseState, type ServerState } from "./stateReader";
+import { otherComputerActive, parseState, type ServerState } from "./stateReader";
 import { restoreEpoch } from "../db/cloudSyncTriggers";
 import type { SessionIdentity } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
@@ -201,7 +201,8 @@ export class CloudSyncService {
       this.failedPasses = summary.failed > 0 ? this.failedPasses + 1 : summary.outcome === "done" ? 0 : this.failedPasses;
       this.todoWatcher?.passEnded(summary);
     }
-    if (summary.outcome === "not_enabled") this.refreshSchedule();
+    // BACKLOG-4263 P2: a dropped turn-off also leaves this computer off (other_computer after the owed marker went).
+    if (summary.outcome === "not_enabled" || summary.outcome === "other_computer") this.refreshSchedule();
     // BACKLOG-4263: also after the server answered this computer's own todo changes (a kept or refused change, a
     // removal), so an open History and Recently removed read again. Reads only: handling the event queues nothing.
     const confirmed = (summary.todos?.confirmed ?? 0) + (summary.todosAfterPull?.confirmed ?? 0);
@@ -265,12 +266,15 @@ export class CloudSyncService {
     const read = parseState(await this.deps.client.getState());
     if (read.kind !== "state" || read.state.userId !== session.userId) return locallyOn ? paused("unknown") : base;
     const state = read.state;
-    const view = this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at);
+    // BACKLOG-4263 P2: read only (no install is created or rebound by opening Settings).
+    const mine = todoStore.currentInstallId(db, ref);
+    const view = this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at, mine);
+    if (store.turnOffDropped(db, ref, session.userId) && !locallyOn) view.turnOffDropped = true;
     if (view.status === "on" || view.status === "error") {
       view.onlineNotHereDeals = this.onlineNotHere(db, ref, session.userId);
       const restored = this.restoredOnlineOnly(db, ref, session.userId);
       if (restored > 0) view.restoredOnlineOnly = restored;
-      view.otherInstalls = await this.oldInstalls(session.userId);
+      view.otherInstalls = await this.oldInstalls(session.userId, state);
     }
     return view;
   }
@@ -298,8 +302,8 @@ export class CloudSyncService {
   }
 
   /** Other installs of this account idle for 30+ days (plan §8.9); null when unknown or none. */
-  private async oldInstalls(userId: string): Promise<{ deals: number; lastSavedAt: string } | null> {
-    const list = await this.listOldInstalls(userId);
+  private async oldInstalls(userId: string, state: ServerState): Promise<{ deals: number; lastSavedAt: string } | null> {
+    const list = await this.listOldInstalls(userId, state);
     if (!list || list.length === 0) return null;
     return {
       deals: list.reduce((n, i) => n + i.deals, 0),
@@ -307,35 +311,49 @@ export class CloudSyncService {
     };
   }
 
-  private async listOldInstalls(userId: string): Promise<Array<{ installId: string; deals: number; lastSyncedAt: string }> | null> {
+  /**
+   * BACKLOG-4263 P2 (plan §2.6, §2.7): while the one-computer rule is on and this computer is the active one, every
+   * other install counts (their deals stopped updating), not only those idle for 30 days. The active install itself
+   * is never listed (P1 review N5: "Delete them" with the active id would register the active computer as removed).
+   */
+  private async listOldInstalls(userId: string, state: ServerState): Promise<Array<{ installId: string; deals: number; lastSyncedAt: string }> | null> {
     const res = await this.deps.client.listInstalls();
     if (res.kind !== "ok") return null;
     const mine = this.ensureInstallId();
+    const allOthers = state.switches?.oneComputer === true && state.activeInstallId === mine;
     const cutoff = this.now().getTime() - OTHER_INSTALL_IDLE_MS;
     const out: Array<{ installId: string; deals: number; lastSyncedAt: string }> = [];
     for (const i of Array.isArray(res.body.installs) ? (res.body.installs as Array<Record<string, unknown>>) : []) {
       if (!i || typeof i.source_install_id !== "string" || i.source_install_id === mine) continue;
+      if (i.source_install_id === state.activeInstallId) continue;
       const at = typeof i.last_synced_at === "string" ? Date.parse(i.last_synced_at) : NaN;
       const deals = typeof i.deals === "number" ? i.deals : 0;
-      if (Number.isFinite(at) && at < cutoff) out.push({ installId: i.source_install_id, deals, lastSyncedAt: new Date(at).toISOString() });
+      if (Number.isFinite(at) && (allOthers || at < cutoff)) out.push({ installId: i.source_install_id, deals, lastSyncedAt: new Date(at).toISOString() });
     }
     void userId;
     return out;
   }
 
-  private viewFor(base: CloudSyncView, state: ServerState, locallyOn: boolean, confirmed: boolean): CloudSyncView {
+  private viewFor(base: CloudSyncView, state: ServerState, locallyOn: boolean, confirmed: boolean, mine: string | null): CloudSyncView {
     const visible = state.licensed || locallyOn;
     if (!visible) return base;
     if (!isNoticeSupported(state.currentNoticeVersion)) return { ...base, status: "update_needed" };
     const withNotice = { ...base, noticeVersion: state.currentNoticeVersion };
+    // BACKLOG-4263 P2 (plan §2.5): another computer is the account's active one.
+    const other = otherComputerActive(state, mine);
     switch (state.reasonClass) {
       case "entitled":
+        if (other) return { ...withNotice, status: "other_computer" };
         if (!locallyOn || !confirmed) return { ...withNotice, status: "needs_confirmation" };
         if (this.failedPasses >= 3) return { ...withNotice, status: "error" };
         return { ...withNotice, status: "on" };
       case "not_enabled":
-      case "notice_outdated":
         return { ...withNotice, status: "off" };
+      case "notice_outdated":
+        // P2 acceptance condition 3: re-accepting the notice (Turn on) stays offered on a refused computer, so the
+        // lost-computer path needs only signed in, online and licensed. After it, the claim refuses and the view
+        // shows "Use this computer instead".
+        return other ? { ...withNotice, status: "off", otherComputerActive: true } : { ...withNotice, status: "off" };
       case "licence":
         return locallyOn ? { ...withNotice, status: "not_active", pausedReason: "not_active" } : base;
       default:
@@ -423,7 +441,10 @@ export class CloudSyncService {
     if (res.kind !== "ok") return { success: false, error: res.code };
     const after = parseState(await this.deps.client.getState());
     const acceptedAt = after.kind === "state" && after.state.userId === userId ? after.state.acceptedAt : null;
-    this.ensureInstallId();
+    const installId = this.ensureInstallId();
+    // BACKLOG-4263 P2 (plan §2.5, P2 acceptance condition 2): claim this computer before enabling anything here.
+    const claimed = await this.claimBeforeEnable(userId, installId, read.state);
+    if (claimed) return claimed;
     store.enableForUser(this.deps.db(), this.deps.projectRef as string, userId, { noticeVersion, acceptedAt }, this.now());
     this.refreshSchedule();
     void this.kick();
@@ -439,7 +460,9 @@ export class CloudSyncService {
     const read = parseState(await this.deps.client.getState());
     if (read.kind !== "state" || read.state.userId !== userId) return { success: false, error: "unknown" };
     if (read.state.reasonClass !== "entitled") return { success: false, error: "not_entitled" };
-    this.ensureInstallId();
+    const installId = this.ensureInstallId();
+    const claimed = await this.claimBeforeEnable(userId, installId, read.state);
+    if (claimed) return claimed;
     store.enableForUser(
       this.deps.db(),
       this.deps.projectRef as string,
@@ -447,6 +470,52 @@ export class CloudSyncService {
       { noticeVersion: read.state.currentNoticeVersion, acceptedAt: read.state.acceptedAt },
       this.now(),
     );
+    this.refreshSchedule();
+    void this.kick();
+    return { success: true };
+  }
+
+  /**
+   * BACKLOG-4263 P2: on a server with the one-computer rule, cloud_claim_install(p_replace = false) before enabling
+   * this computer. Null when enabling may go ahead; otherwise the answer to return, with nothing enabled here:
+   * computer_not_active (another computer is active; the screen shows "Use this computer instead"), a refusal, or a
+   * transport failure or missing function (P2 acceptance condition 2). A server without the rule: no claim.
+   */
+  private async claimBeforeEnable(userId: string, installId: string, state: ServerState): Promise<CloudSyncResult | null> {
+    if (state.switches === null) return null;
+    const claim = await this.deps.client.claimInstall(userId, installId, false);
+    if (claim.kind === "ok") return null;
+    return { success: false, error: claim.code };
+  }
+
+  /**
+   * BACKLOG-4263 P2 (plan §2.5, §13.1, §14 D1): "Use this computer instead". Only while the rule is on and another
+   * computer is active, for the signed-in owner, online and entitled. The runner claims with p_replace = true and
+   * runs the move's local transaction; a computer that was off here is then enabled (a fresh enable).
+   */
+  async useThisComputer(): Promise<CloudSyncResult> {
+    const userId = await this.actingUser();
+    if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    if (this.turnOffOwed(userId)) return { success: false, error: "turn_off_pending" };
+    if (this.deps.blockedReason()) return { success: false, error: "blocked" };
+    if (!this.deps.isOnline()) return { success: false, error: "offline" };
+    const read = parseState(await this.deps.client.getState());
+    if (read.kind !== "state" || read.state.userId !== userId) return { success: false, error: "unknown" };
+    if (read.state.reasonClass !== "entitled") return { success: false, error: "not_entitled" };
+    const installId = this.ensureInstallId();
+    if (!otherComputerActive(read.state, installId)) return { success: false, error: "not_other_computer" };
+    const r = await this.runner.moveHere(userId, installId);
+    if (!r.ok) return { success: false, error: r.code };
+    if (store.getSettings(this.deps.db(), this.deps.projectRef as string, userId)?.enabled !== 1) {
+      store.enableForUser(
+        this.deps.db(),
+        this.deps.projectRef as string,
+        userId,
+        { noticeVersion: read.state.currentNoticeVersion, acceptedAt: read.state.acceptedAt },
+        this.now(),
+      );
+    }
+    this.failedPasses = 0;
     this.refreshSchedule();
     void this.kick();
     return { success: true };
@@ -467,6 +536,13 @@ export class CloudSyncService {
     if (res.kind === "ok") {
       this.refreshSchedule();
       return { success: true };
+    }
+    // BACKLOG-4263 P2 (plan §2.5): another computer became active first. Nothing online was deleted; the owed
+    // turn-off is dropped and this computer stays off.
+    if (res.kind === "refused" && res.code === "computer_not_active") {
+      store.dropOwedTurnOff(db, ref, userId, this.now());
+      this.refreshSchedule();
+      return { success: false, error: "computer_not_active" };
     }
     this.refreshSchedule();
     if (res.kind === "transport") return { success: true, pendingOnline: true };
@@ -579,7 +655,11 @@ export class CloudSyncService {
   async deleteOldInstalls(): Promise<CloudSyncResult> {
     const userId = await this.actingUser();
     if (!userId) return { success: false, error: "signed_out" };
-    const list = await this.listOldInstalls(userId);
+    const read = parseState(await this.deps.client.getState());
+    if (read.kind !== "state" || read.state.userId !== userId) return { success: false, error: "unknown" };
+    // BACKLOG-4263 P2 (P1 review N5): never from a computer that is not the active one.
+    if (otherComputerActive(read.state, this.ensureInstallId())) return { success: false, error: "computer_not_active" };
+    const list = await this.listOldInstalls(userId, read.state);
     if (!list) return { success: false, error: "unknown" };
     for (const i of list) {
       const res = await this.deps.client.deleteInstall(userId, i.installId);

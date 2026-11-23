@@ -559,7 +559,8 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       u.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("x", I1);
       u.w.tick();
       expect(u.kicks.n).toBe(1);
-      expect(u.prepared.length).toBeGreaterThanOrEqual(4);
+      // BACKLOG-4263 P2 removed the look's settings read (see todoOutboxWatcher.ts): pass start, two outbox reads.
+      expect(u.prepared.length).toBeGreaterThanOrEqual(3);
       for (const sql of u.prepared) expect(sql.trimStart().slice(0, 6).toUpperCase()).toBe("SELECT");
     });
 
