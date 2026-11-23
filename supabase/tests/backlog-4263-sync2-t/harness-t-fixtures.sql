@@ -366,15 +366,15 @@ $fx4263t$;
 DO $fxtime4263t$
 DECLARE t0 timestamptz; v_body text; v_n bigint; g jsonb;
 BEGIN
-  PERFORM pg_temp.rec('fixture_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - (SELECT (v #>> '{}')::timestamptz FROM pg_temp.t_out WHERE k = 't_fixture_start')) * 1000)));
+  PERFORM pg_temp.rec('fixture_ms', to_jsonb(ceil(extract(epoch FROM clock_timestamp() - (SELECT (v #>> '{}')::timestamptz FROM pg_temp.t_out WHERE k = 't_fixture_start')) * 1000)));
   SELECT m.body_text INTO v_body FROM public.cloud_deal_messages m WHERE m.id = pg_temp.f('m_big1');
   t0 := clock_timestamp();
   v_n := char_length(public._mcp_strip(v_body));
-  PERFORM pg_temp.rec('strip_big1_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - t0) * 1000)));
+  PERFORM pg_temp.rec('strip_big1_ms', to_jsonb(ceil(extract(epoch FROM clock_timestamp() - t0) * 1000)));
   PERFORM pg_temp.rec('strip_big1_chars', to_jsonb(v_n));
   t0 := clock_timestamp();
   g := pg_temp.getm('K2', pg_temp.s('m_big1'), 1);
-  PERFORM pg_temp.rec('getm_big1_ms', to_jsonb(round(extract(epoch FROM clock_timestamp() - t0) * 1000)));
+  PERFORM pg_temp.rec('getm_big1_ms', to_jsonb(ceil(extract(epoch FROM clock_timestamp() - t0) * 1000)));
   PERFORM pg_temp.rec('getm_big1_ok', to_jsonb(g ->> 'ok' = 'true'));
   PERFORM pg_temp.rec('big1_parts', coalesce(g -> 'result' -> 'message' -> 'parts', 'null'));
   PERFORM pg_temp.rec('big1_frame_bytes', to_jsonb(octet_length(jsonb_set(g -> 'result', '{message,body_text}', '""')::text)));

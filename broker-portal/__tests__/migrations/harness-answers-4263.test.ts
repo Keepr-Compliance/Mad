@@ -58,8 +58,23 @@ describe('BACKLOG-4263 T-S harness answers', () => {
     const c = read(`${DIR}/harness-t-controls.sql`);
     const m = read(`${DIR}/harness-t-mutants.sql`);
     const nMut = full.match(/pg_temp\.rec\('mutant:/g)!.length;
-    expect(nMut).toBe(57);
+    // 57 mutants + 1 negative control (a no-op the report requires to read NOT_APPLIED)
+    expect(nMut).toBe(58);
     expect(m.match(/pg_temp\.rec\('mutant:/g)!.length).toBe(nMut);
+    expect(full).toContain("pg_temp.rec('mutant:noop_probe'");
+    expect(full).toMatch(/-- noop_probe\n  BEGIN\n    o := '\{\}';\n    applied := NULL;\n    EXECUTE \$neg0\$\nSELECT 1\n\$neg0\$;\n    applied := has_function_privilege\('anon', 'public\._mcp_r_get_message\(uuid,integer\)', 'EXECUTE'\);/);
+    // after every mutant block the catalogue fingerprint is compared with the one taken after the fixtures
+    for (const t of [full, m]) {
+      expect(t.match(/RAISE EXCEPTION 'MUTANT NOT RESTORED \w+';/g)!.length).toBe(nMut);
+      expect(t.match(/pg_temp\.rec\('baseline_fp', to_jsonb\(pg_temp\.fingerprint\(\)\)\);/g)!.length).toBe(1);
+      const blocks = t.split(/\n  -- /).filter((b) => b.includes("pg_temp.rec('mutant:"));
+      expect(blocks.length).toBe(nMut);
+      for (const b of blocks) {
+        expect(b.indexOf("IF pg_temp.fingerprint() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN"))
+          .toBeGreaterThan(b.indexOf("pg_temp.rec('mutant:"));
+      }
+    }
+    expect(c).not.toContain('MUTANT NOT RESTORED');
     expect(c).not.toContain("pg_temp.rec('mutant:");
     expect(m).not.toContain("pg_temp.rec('controls', base)");
     expect(c).toContain("pg_temp.rec('controls', base)");
@@ -88,5 +103,8 @@ describe('BACKLOG-4263 T-S harness answers', () => {
     expect(f.trimEnd().endsWith("FROM public.cloud_release_switches w WHERE w.id));\nEND\n$fxend4263t$;")).toBe(true);
     expect(f).toContain("RAISE EXCEPTION 'T4263_FIXTURES_OK %'");
     for (const k of ['fixture_ms', 'strip_big1_ms', 'getm_big1_ms', 'big1_parts', 'big1_frame_bytes']) expect(f).toContain(`'${k}'`);
+    // timings are rounded up, so a fast step never records 0 ms
+    expect(f).not.toMatch(/to_jsonb\(round\(extract\(epoch/);
+    expect(f.match(/to_jsonb\(ceil\(extract\(epoch/g)!.length).toBe(3);
   });
 });

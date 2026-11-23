@@ -352,8 +352,10 @@ DELETE FROM public.mcp_call_log WHERE tool IN ('find_people', 'list_todos');
 DELETE FROM public.mcp_rate_counters WHERE bucket LIKE 'find\\_people\\_user:%';
 DROP FUNCTION IF EXISTS public.mcp_find_people(text, bytea, text, text, text, text, text, text, text);
 DROP FUNCTION IF EXISTS public.mcp_list_todos(text, bytea, text, text, text, text, text, boolean, boolean, text);
+SET LOCAL ROLE mcp_reader;
 DROP FUNCTION IF EXISTS public._mcp_r_find_people(text, text, uuid, text, text, uuid);
 DROP FUNCTION IF EXISTS public._mcp_r_list_todos(text, text, date, date, boolean, boolean, date, uuid);
+RESET ROLE;
 SET LOCAL lock_timeout = '3s';
 DO $chk4263p8r$
 DECLARE
