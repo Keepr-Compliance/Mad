@@ -48,6 +48,8 @@ import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
 import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects, noteDealRemovedOnline } from "./cloudSyncDealArchive";
 import {
+  pendingTodoRemovals,
+  requeueTodoRemovals,
   clearInstallRemoved,
   clearTodoStateEverywhere,
   clearTodoStateForUser,
@@ -760,7 +762,11 @@ export function clearMovePending(db: SqlDb, projectRef: string, userId: string):
 export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now: Date = new Date(), reclaim = false): void {
   db.transaction(() => {
     if (reclaim || installRemovedAt(db, projectRef, userId)) {
+      // SR N1: removals queued while refused survive the todo restart (only on this path; the first enable and
+      // PR-4b's own reclaim are unchanged).
+      const removals = pendingTodoRemovals(db, projectRef, userId);
       reclaimInstallForUser(db, projectRef, userId, now);
+      requeueTodoRemovals(db, projectRef, userId, removals, now);
       clearInstallRemoved(db, projectRef, userId);
       return;
     }
