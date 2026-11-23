@@ -209,7 +209,8 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
     it("one pass: header, people, the mark call, then the todos as todo changes; every row recorded; no old item call", async () => {
       const { db, e, id } = dealWithChildren();
       await startAndPass(e);
-      expect(fns(e)).toEqual(["cloud_upsert_deal", "cloud_upsert_parties", "cloud_mark_deal_synced", "cloud_todo_push"]);
+      // BACKLOG-4263 P2: on a server with the one-computer migration the first pass claims this computer before any write.
+      expect(fns(e)).toEqual(["cloud_claim_install", "cloud_upsert_deal", "cloud_upsert_parties", "cloud_mark_deal_synced", "cloud_todo_push"]);
       expect(e.server.todos.map((t) => `${t.entity}:${t.localId}`).sort()).toEqual(["checklist:cl-1", "item:it-1", "item:it-2"]);
       const parties = e.server.children.filter((c) => c.kind === "party");
       expect(parties).toHaveLength(2);

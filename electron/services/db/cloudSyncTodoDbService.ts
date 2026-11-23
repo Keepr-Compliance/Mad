@@ -348,6 +348,42 @@ export function scanTodosAllEnabled(db: SqlDb, now: Date): number {
 
 // ---------------------------------------------------------------- turn-on, the one-time step (N1a), a lost deal
 
+/** A removal op waiting in the outbox (BACKLOG-4263 P2, SR N1). */
+export interface PendingTodoRemoval {
+  entity: string;
+  local_id: string;
+  transaction_id: string;
+  edited_at: string | null;
+}
+
+/**
+ * BACKLOG-4263 P2 (SR N1): this user's removal ops still waiting to be sent. Read by the move's reclaim path before
+ * startTodoTracking clears the outbox, so a todo deleted while this computer was not the active one is not
+ * recreated by the full pull that follows. Value edits and creates need no carry: the full pull keeps this
+ * computer's values and its scan queues them again (cloudSyncMoveBackTodos-4263.test.ts).
+ */
+export function pendingTodoRemovals(db: SqlDb, projectRef: string, userId: string): PendingTodoRemoval[] {
+  if (!hasTable(db, "cloud_sync_todo_outbox")) return [];
+  return db
+    .prepare(
+      `SELECT entity, local_id, transaction_id, edited_at FROM cloud_sync_todo_outbox
+        WHERE project_ref = ? AND owner_user_id = ? AND part = 'removed'`,
+    )
+    .all(projectRef, userId) as PendingTodoRemoval[];
+}
+
+/** BACKLOG-4263 P2 (SR N1): queues them again after startTodoTracking, with the same removal op it writes. */
+export function requeueTodoRemovals(db: SqlDb, projectRef: string, userId: string, removals: PendingTodoRemoval[], now: Date): void {
+  if (removals.length === 0) return;
+  const removal = db.prepare(
+    `INSERT INTO cloud_sync_todo_outbox
+       (project_ref, owner_user_id, entity, local_id, part, transaction_id, value_json, base_rev, edit_seq, edited_at, clock_epoch, op_id, generation)
+     VALUES (?, ?, ?, ?, 'removed', ?, '{"removed":1}', NULL, NULL, ?, NULL, lower(hex(randomblob(16))), 1)
+     ON CONFLICT (project_ref, owner_user_id, entity, local_id, part) DO NOTHING`,
+  );
+  for (const r of removals) removal.run(projectRef, userId, r.entity, r.local_id, r.transaction_id, r.edited_at ?? now.toISOString());
+}
+
 /**
  * A fresh start for this user's todos, in the caller's transaction: clear every per-user todo row and the
  * old one-way records of checklists and items (N3), seed this computer's counter (N1b) and record that a full

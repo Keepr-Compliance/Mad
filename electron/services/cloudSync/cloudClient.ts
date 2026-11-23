@@ -42,6 +42,10 @@ export const KNOWN_ENVELOPE_ERRORS = [
   "install_removed",
   "busy",
   "horizon_required",
+  // BACKLOG-4263 P2 (migration 20261123100000): the writers' gate /*GATE:active:*/, the claim's refusal
+  // /*CLAIM:refuse*/ :851 and the turn-off's /*SET:active:other*/ :726; the turn-off's /*SET:active:required*/ :722.
+  "computer_not_active",
+  "install_required",
 ] as const;
 
 export type CallResult =
@@ -125,11 +129,32 @@ export class CloudClient {
     }
   }
 
-  setAutosave(expectedUserId: string, enabled: boolean, noticeVersion: number | null): Promise<CallResult> {
+  /**
+   * set_my_cloud_autosave. BACKLOG-4263 P2: a turn-off passes this computer's install id (migration 20261123100000
+   * :691-692, `p_source_install_id`); without it a turn-off is refused install_required while the rule is on and a
+   * computer is active (:721-723). `installId` undefined sends the 3-argument call, for a server without that
+   * migration (its state answer has no `switches`).
+   */
+  setAutosave(expectedUserId: string, enabled: boolean, noticeVersion: number | null, installId?: string): Promise<CallResult> {
     return this.call("set_my_cloud_autosave", {
       p_expected_user_id: expectedUserId,
       p_enabled: enabled,
       p_notice_version: noticeVersion,
+      ...(installId !== undefined ? { p_source_install_id: installId } : {}),
+    });
+  }
+
+  /**
+   * BACKLOG-4263 P2: cloud_claim_install (migration 20261123100000 :827-869). Answers {ok:true, active:true}
+   * (:842 same, :847 first), {ok:true, active:true, replaced:<old id>} (:868 moved), {ok:false, error:
+   * 'computer_not_active', active_since} (:851, rule on and p_replace false), {ok:false, error:'busy'} (:855, a move
+   * in the last minute), not_entitled (:839), wrong_account, not_authorized, invalid_input.
+   */
+  claimInstall(expectedUserId: string, installId: string, replace: boolean): Promise<CallResult> {
+    return this.call("cloud_claim_install", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_replace: replace,
     });
   }
 

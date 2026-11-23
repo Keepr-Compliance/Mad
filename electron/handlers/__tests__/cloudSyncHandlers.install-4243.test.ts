@@ -50,10 +50,10 @@ describe("installCloudSync", () => {
     expect(mockWarn).toHaveBeenCalledWith("[CloudSync] Not installed this launch", "CloudSync", { code: "Error" });
   });
 
-  it("positive: installs and registers the twenty-one channels when nothing throws (BACKLOG-4263 PR-4b: reclaim-install; PR-4c: list-removed-deals, restore-deal, delete-deal-for-good; PR-6: three cloud-sync and five cloud-todos)", () => {
+  it("positive: installs and registers the twenty-two channels when nothing throws (BACKLOG-4263 PR-4b: reclaim-install; PR-4c: list-removed-deals, restore-deal, delete-deal-for-good; PR-6: three cloud-sync and five cloud-todos; P2: use-this-computer)", () => {
     mockHandle.mockImplementation(() => undefined);
     expect(installCloudSync()).not.toBeNull();
-    expect(mockHandle).toHaveBeenCalledTimes(21);
+    expect(mockHandle).toHaveBeenCalledTimes(22);
     const names = mockHandle.mock.calls.map((c) => c[0]);
     expect(names).toEqual(expect.arrayContaining(["cloud-sync:list-removed-deals", "cloud-sync:restore-deal", "cloud-sync:delete-deal-for-good"]));
     expect([...names].sort()).toEqual([...CLOUD_SYNC_CHANNELS, ...CLOUD_TODOS_CHANNELS].sort());

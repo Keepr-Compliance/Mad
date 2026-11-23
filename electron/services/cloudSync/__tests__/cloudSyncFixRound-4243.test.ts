@@ -188,7 +188,8 @@ describe(`Keepr Cloud review fixes [${DRIVER}]`, () => {
       });
       const s = await startAndPass(e);
       expect(s?.outcome).toBe("stopped");
-      expect(e.server.writeCalls().map((c) => c.fn)).toEqual(["cloud_upsert_deal"]);
+      // BACKLOG-4263 P2: on a server with the one-computer migration the first pass claims this computer before any write.
+      expect(e.server.writeCalls().map((c) => c.fn)).toEqual(["cloud_claim_install", "cloud_upsert_deal"]);
       expect(stateRows(db).filter((r) => r.last_status === "synced")).toHaveLength(0);
     });
   });
@@ -202,7 +203,8 @@ describe(`Keepr Cloud review fixes [${DRIVER}]`, () => {
       e.clock.now = new Date("2026-11-14T13:00:00.000Z");
       db.prepare("INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at) SELECT id, 1, 'x' FROM transactions").run();
       await pass(e);
-      expect(e.server.writeCalls()).toHaveLength(2);
+      // BACKLOG-4263 P2: on a server with the one-computer migration the first pass claims this computer before any write.
+      expect(e.server.writeCalls().map((c) => c.fn)).toEqual(["cloud_claim_install", "cloud_upsert_deal", "cloud_mark_deal_synced"]);
       expect((await e.service.getView()).lastSavedAt).toBe(first);
     });
 

@@ -2,7 +2,7 @@
 """BACKLOG-4263 sync plan P3 (E1 erase functions, E3 schedule): controls and mutants in ONE kt-sql call each
 (one transaction that ends in RAISE, so nothing persists).
 
-Usage: harness.py run [--print] [--controls] [--mutants] [--only=<name,...>] | harness.py check | harness.py write
+Usage: harness.py run [--print] [--controls] [--mutants] [--only=<name,...>] | harness.py check | harness.py write | harness.py selftest
 
 `harness.py write` writes apply-20261123110000.sql (E1's text unchanged + its ledger row); `harness.py check` (offline)
 also fails when that file differs from what E1 gives now.
@@ -241,14 +241,21 @@ def run(sel, show=False):
     r = subprocess.run([os.path.expanduser('~/.claude/bin/kt-sql'), p], capture_output=True, text=True)
     os.remove(p); os.rmdir(d)
     subprocess.run([os.path.expanduser('~/.claude/bin/kt-sql'), '-c', 'select extensions.pg_stat_statements_reset()'], capture_output=True)
-    msg = r.stdout
+    return report(r.stdout, r.stderr)
+
+
+def report(stdout, stderr='', out=print):
+    """Reads kt-sql's output (first line: the API's JSON answer, whose "message" holds the final RAISE text), prints
+    one line per result and returns the exit code: 0 all good; 1 a control not PASS, or a mutant MISSED, CRASH,
+    PRECONDITION or NOT APPLIED IN DB; 2 no result found; 3 zero tests ran."""
+    msg = stdout
     try:
-        msg = json.loads(r.stdout.strip().split('\n')[0]).get('message', r.stdout)
+        msg = json.loads(stdout.strip().split('\n')[0]).get('message', stdout)
     except Exception:
         pass
     m = re.search(r'P4263E_RESULT (\{.*\})\s*\nCONTEXT', msg, re.S)
     if not m:
-        print('NO RESULT:', (msg + r.stderr)[:3000])
+        out('NO RESULT: ' + (msg + stderr)[:3000])
         return 2
     res = json.loads(m.group(1))
     bad = n_ctl = n_mut = 0
@@ -257,7 +264,7 @@ def run(sel, show=False):
         if k.startswith('C_'):
             n_ctl += 1
             ok = v == 'PASS'
-            print('%-6s %s %s' % ('PASS' if ok else 'FAIL', k, '' if ok else v[:900]))
+            out('%-6s %s %s' % ('PASS' if ok else 'FAIL', k, '' if ok else v[:900]))
             bad += 0 if ok else 1
         elif k.startswith('M_'):
             n_mut += 1
@@ -268,27 +275,203 @@ def run(sel, show=False):
             ok = (red and want == 'red') or (v == 'PASS' and want == 'green')
             tag = 'CAUGHT' if (red and want == 'red') else ('EQUIV' if ok else ('CRASH' if v.startswith('CRASH') else
                   ('PRECOND' if v.startswith('PRECONDITION') else 'MISSED')))
-            print('%-7s %s want=%s -> %s' % (tag, k, want, v[:300]))
+            out('%-7s %s want=%s -> %s' % (tag, k, want, v[:300]))
             bad += 0 if ok else 1
-    print('controls=%d mutants=%d problems=%d' % (n_ctl, n_mut, bad))
+    out('controls=%d mutants=%d problems=%d' % (n_ctl, n_mut, bad))
     if n_ctl + n_mut == 0:
-        print('FAIL: zero tests ran')
+        out('FAIL: zero tests ran')
         return 3
     return 1 if bad else 0
 
+# canned outputs in kt-sql's real shape (one JSON line, then the HTTP status line), for `harness.py selftest`
+def _canned(results):
+    body = 'Failed to run sql query: ERROR:  P0001: P4263E_RESULT ' + json.dumps(results) + '\nCONTEXT:  PL/pgSQL function inline_code_block line 1 at RAISE\n'
+    return json.dumps({'message': body}) + '\nkt-sql: HTTP 400\n'
+
+
+def selftest():
+    mutants()  # fills WANT
+    green = [k for k, w in WANT.items() if w == 'green'][0]
+    red = [k for k, w in WANT.items() if w == 'red'][0]
+    cases = [
+        ('all pass', {'C_p_a': 'PASS', red: 'FAIL x', green: 'PASS'}, 0),
+        ('control FAIL', {'C_p_a': 'FAIL x'}, 1),
+        ('control CRASH', {'C_p_a': 'CRASH 42601 non-integer constant in GROUP BY'}, 1),
+        ('control PRECONDITION', {'C_p_a': 'PRECONDITION 950 unreferenced blobs'}, 1),
+        ('mutant CRASH is not caught', {'C_p_a': 'PASS', red: 'CRASH 42601 x'}, 1),
+        ('mutant PRECONDITION is not caught', {'C_p_a': 'PASS', red: 'PRECONDITION 950'}, 1),
+        ('mutant NOT APPLIED IN DB', {'C_p_a': 'PASS', red: 'NOT APPLIED IN DB'}, 1),
+        ('mutant missed (PASS)', {'C_p_a': 'PASS', red: 'PASS'}, 1),
+        ('equivalent mutant goes red', {'C_p_a': 'PASS', green: 'FAIL x'}, 1),
+        ('zero tests', {'fixtures': 'x'}, 3),
+    ]
+    bad = 0
+    for label, res, want in cases:
+        got = report(_canned(res), out=lambda *_: None)
+        bad += got != want
+        print('%-4s %s: exit %d (want %d)' % ('ok' if got == want else 'BAD', label, got, want))
+    got = report('{"message":"Failed to run sql query: ERROR:  57014: canceling statement due to statement timeout"}\nkt-sql: HTTP 400\n', out=lambda *_: None)
+    bad += got != 2
+    print('%-4s no result line: exit %d (want 2)' % ('ok' if got == 2 else 'BAD', got))
+    return 1 if bad else 0
+
+
+
+
+# ------------------------------------------------------------------------------------------------ offline structure check
+# Dependency-free (no parser library): what a syntax check by eye missed in the first run. Strings and comments are
+# blanked; a dollar-quoted text after AS or DO is code (a function body or a DO block) and is scanned, any other
+# dollar-quoted text is a literal and is blanked (each mutant's EXECUTE text is checked on its own by structure_all).
+def strip_sql(text, label):
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith('--', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            if j < 0:
+                raise ValueError('%s: unterminated /* comment' % label)
+            out.append(' ')
+            i = j + 2
+            continue
+        if c == "'":
+            j = i + 1
+            while True:
+                j = text.find("'", j)
+                if j < 0:
+                    raise ValueError('%s: unterminated string literal near %r' % (label, text[i:i + 60]))
+                if text[j + 1:j + 2] == "'":
+                    j += 2
+                    continue
+                break
+            out.append("''")
+            i = j + 1
+            continue
+        if c == '"':
+            j = text.find('"', i + 1)
+            if j < 0:
+                raise ValueError('%s: unterminated quoted identifier' % label)
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if c == '$' and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')):
+            m = re.match(r'\$([A-Za-z_][A-Za-z0-9_]*)?\$', text[i:])
+            if m:
+                tag = m.group(0)
+                j = text.find(tag, i + len(tag))
+                if j < 0:
+                    raise ValueError('%s: unterminated dollar quote %s' % (label, tag))
+                body = text[i + len(tag):j]
+                prev = re.search(r'(\w+)\s*$', ''.join(out[-40:]))
+                if prev and prev.group(1).upper() in ('AS', 'DO'):
+                    out.append(' ' + strip_sql(body, label) + ' ')
+                else:
+                    out.append("''")
+                i = j + len(tag)
+                continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def call_args(code, open_at):
+    """number of top-level arguments of the call whose '(' is at code[open_at]; raises on an unclosed call"""
+    depth, args, seen = 0, 1, False
+    for k in range(open_at, len(code)):
+        ch = code[k]
+        if ch in '([':
+            depth += 1
+        elif ch in ')]':
+            depth -= 1
+            if depth == 0:
+                return args if seen else 0
+        elif ch == ',' and depth == 1:
+            args += 1
+        elif depth >= 1 and not ch.isspace():
+            seen = True
+    raise ValueError('unclosed call at offset %d' % open_at)
+
+
+def pg_temp_defs(code):
+    defs = {}
+    for m in re.finditer(r'CREATE\s+FUNCTION\s+pg_temp\.(\w+)\s*\(', code, re.I):
+        defs[m.group(1)] = call_args(code, m.end() - 1)
+    return defs
+
+
+CONST_ORDER = re.compile(r"\b(GROUP|ORDER)\s+BY\s+(TRUE|FALSE|NULL|''|\d*\.\d+)(?![\w.])", re.I)
+
+
+def structure(text, label, defs):
+    """problems in one SQL text: unbalanced parentheses, a pg_temp call with the wrong argument count, a non-integer
+    constant in GROUP BY / ORDER BY (PostgreSQL rejects it at analysis: 42601)."""
+    try:
+        code = strip_sql(text, label)
+    except ValueError as e:
+        return [str(e)]
+    bad, depth = [], 0
+    for ch in code:
+        depth += (ch == '(') - (ch == ')')
+        if depth < 0:
+            bad.append('%s: a closing parenthesis without an opening one' % label)
+            break
+    if depth > 0:
+        bad.append('%s: %d unclosed parenthesis' % (label, depth))
+    for m in re.finditer(r'(?<!FUNCTION )pg_temp\.(\w+)\s*\(', code):
+        name = m.group(1)
+        if name not in defs:
+            bad.append('%s: pg_temp.%s is called but never defined' % (label, name))
+            continue
+        try:
+            got = call_args(code, m.end() - 1)
+        except ValueError as e:
+            bad.append('%s: %s' % (label, e))
+            continue
+        if got != defs[name]:
+            bad.append('%s: pg_temp.%s called with %d argument(s), defined with %d' % (label, name, got, defs[name]))
+    for m in CONST_ORDER.finditer(code):
+        bad.append('%s: constant in %s BY: %s' % (label, m.group(1).upper(), m.group(2)))
+    return bad
+
+
+def structure_all(composed):
+    try:
+        defs = pg_temp_defs(strip_sql(HL, 'lib/helpers.sql') + strip_sql(PR, 'lib/probes.sql'))
+    except ValueError as e:
+        return [str(e)], 0, 0
+    defs['p4263e_out'] = -1
+    bad = structure(HL, 'lib/helpers.sql', defs) + structure(PR, 'lib/probes.sql', defs)
+    bad += structure(composed, 'composed call', defs)
+    lits = re.findall(re.escape(TAG) + r'(.*?)' + re.escape(TAG), composed, re.S)
+    for i, lit_text in enumerate(lits):
+        bad += structure(lit_text, 'literal %d (%s)' % (i, lit_text.strip().split('\n')[0][:60]), defs)
+    return [b for b in bad if 'pg_temp.p4263e_out' not in b], len(lits), len(defs) - 1
 
 if __name__ == '__main__':
     a = sys.argv[1:]
-    if not a or a[0] not in ('run', 'check', 'write'):
+    if not a or a[0] not in ('run', 'check', 'write', 'selftest'):
         print(__doc__); sys.exit(2)
     ap = os.path.join(root, APPLY_REL)
     if a[0] == 'write':
         open(ap, 'w', encoding='utf-8').write(APPLY)
         print('written', APPLY_REL, md5(APPLY))
         sys.exit(0)
+    if a[0] == 'selftest':
+        sys.exit(selftest())
     if a[0] == 'check':
         ms = mutants()
         print('%d mutants, every fragment matched exactly once; %d controls' % (len(ms), len(CONTROLS)))
+        probs, nlit, ndef = structure_all(compose({'controls': True, 'mutants': True}))
+        for p_ in probs:
+            print('STRUCTURE: ' + p_)
+        if probs:
+            sys.exit(1)
+        print('structure: helpers, probes, the composed call and %d literal texts (E1, E3, rollbacks, each mutated '
+              'function): balanced; every pg_temp call matches its definition (%d helpers); no constant in GROUP/ORDER BY'
+              % (nlit, ndef))
         if not os.path.exists(ap) or open(ap, encoding='utf-8').read() != APPLY:
             print('differs: ' + APPLY_REL + ' (run harness.py write)')
             sys.exit(1)

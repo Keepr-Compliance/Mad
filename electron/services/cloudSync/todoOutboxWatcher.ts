@@ -13,13 +13,19 @@
  * the server keeps answering with a retry never changes, so it never asks again (no kick storm). A wall clock
  * that steps back can only hide a change from this check; the 60 s timer still sends it.
  *
- * Never asks while: offline, signed out, the database is not ready, a pass is running, the last pass did not
- * end `done`, Keepr Cloud is off here for the user or a turn-off is owed. At most one ask per 10 s after any
- * pass start; after failed passes 10 s, 20 s, 40 s, then only the 60 s timer until a pass ends `done` with no
- * failure.
+ * Never asks while: offline, signed out, the database is not ready, a pass is running, or the last pass did not
+ * end `done` (an allowlist: every other outcome, including P2's `other_computer` for a computer that is not the
+ * account's active one, blocks it, and so does a fresh start until a pass ends `done`). At most one ask per 10 s
+ * after any pass start; after failed passes 10 s, 20 s, 40 s, then only the 60 s timer until a pass ends `done`
+ * with no failure.
+ *
+ * BACKLOG-4263 P2 removed the settings check (Keepr Cloud on here, no turn-off owed) that sat before the kick. No
+ * test could make it matter (P0 review N1, mutation M7/M8 green; re-run on this branch's base, green): a turn-off
+ * empties the user's outbox and the capture triggers queue nothing while enabled = 0, and sign-out forgets the
+ * last outcome, so a different user gets no kick before their own pass ends `done`. A refused computer stays
+ * enabled = 1, so that check would not have stopped it either; the allowlist does (control "W-4b").
  */
 import type { SqlDb } from "../db/cloudSyncSqlDb";
-import * as store from "../db/cloudSyncDbService";
 import { OUTBOX_TOP_SQL } from "../db/cloudSyncTodoSql";
 import type { PassOutcome, PassSummary } from "./runner";
 
@@ -130,11 +136,6 @@ export class TodoOutboxWatcher {
       if (gap === null) return;
       if (this.lastPassStartMs !== null && deps.now().getTime() - this.lastPassStartMs < gap) return;
       if (!this.mark || !isNewer(this.readTop(), this.mark)) return;
-      // Not observed by any test today: a turn-off sets enabled = 0 and empties this user's outbox, and the capture
-      // triggers queue nothing while enabled = 0, so no outbox change can reach these two checks. They become live
-      // when a refused computer stays enabled locally (the next PR adds that state and its control).
-      const settings = store.getSettings(deps.db(), deps.projectRef, userId);
-      if (!settings || settings.enabled !== 1 || settings.turn_off_owed_at) return;
       deps.kick();
     } catch {
       /* the next look, or the 60 s timer, tries again */

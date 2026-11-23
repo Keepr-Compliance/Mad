@@ -119,7 +119,13 @@ describe(`Keepr Cloud engine [${DRIVER}]`, () => {
       expect(await e.service.getView()).toMatchObject({ status: "paused", pausedReason: "unknown" });
       const r = await e.service.turnOff();
       expect(r.success).toBe(true);
-      expect(e.server.callsTo("set_my_cloud_autosave")[0].args).toEqual({ p_expected_user_id: USER_A, p_enabled: false, p_notice_version: null });
+      // BACKLOG-4263 P2 (plan §11.2): a turn-off always carries this computer's install id.
+      expect(e.server.callsTo("set_my_cloud_autosave")[0].args).toEqual({
+        p_expected_user_id: USER_A,
+        p_enabled: false,
+        p_notice_version: null,
+        p_source_install_id: expect.any(String),
+      });
       expect(settingsRow(db)).toMatchObject({ enabled: 0, turn_off_owed_at: null });
       expect(dirtyCount(db)).toBe(0);
     });
@@ -418,7 +424,8 @@ describe(`Keepr Cloud engine [${DRIVER}]`, () => {
     it("R2/R3: a header is saved only on applied/unchanged with the matching hash; then mark-synced; then the mark clears", async () => {
       const { db, e, id } = onWithDeal();
       await startAndPass(e);
-      expect(e.server.writeCalls().map((c) => c.fn)).toEqual(["cloud_upsert_deal", "cloud_mark_deal_synced"]);
+      // BACKLOG-4263 P2: on a server with the one-computer migration the first pass claims this computer before any write.
+      expect(e.server.writeCalls().map((c) => c.fn)).toEqual(["cloud_claim_install", "cloud_upsert_deal", "cloud_mark_deal_synced"]);
       expect(e.server.deals[0].fullSyncAt).not.toBeNull();
       const [st] = stateRows(db);
       expect(st).toMatchObject({ local_id: id, cloud_id: e.server.deals[0].id, content_hash: e.server.deals[0].hash, last_status: "synced" });

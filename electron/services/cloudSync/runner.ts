@@ -28,7 +28,7 @@ import {
   type ChildPlan,
   type ChildTombstone,
 } from "./children";
-import { parseState, type ServerState } from "./stateReader";
+import { otherComputerActive, parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity, SessionUser } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
@@ -94,7 +94,13 @@ export type PassOutcome =
   | "unknown_state"
   | "stopped"
   /** BACKLOG-4263 PR-4b: this computer's online copy was removed elsewhere; nothing is sent until reclaimed. */
-  | "install_removed";
+  | "install_removed"
+  /**
+   * BACKLOG-4263 P2: another computer is the account's active one (state answer), or the server refused a write or
+   * a claim with computer_not_active. Nothing is sent and nothing local is cleared; the next pass reads the state
+   * again. Not stored in any column.
+   */
+  | "other_computer";
 
 export interface RunnerLog {
   info(message: string, meta?: Record<string, unknown>): void;
@@ -171,6 +177,16 @@ export class CloudSyncRunner {
   private passUser: string | null = null;
   /** BACKLOG-4263 PR-4b (D2): users whose install_removed stop was checked online this launch (once each). */
   private readonly installStatusChecked = new Set<string>();
+  /**
+   * BACKLOG-4263 P2: whether the last state answer carried `switches` (a server with migration 20261123100000);
+   * null before any state read this launch. Decides whether a turn-off sends this computer's install id.
+   */
+  private serverHasOneComputer: boolean | null = null;
+  /**
+   * BACKLOG-4263 P2: users whose owed turn-off was dropped this launch because another computer became active (for
+   * the screen's line). In memory only; cleared when Keepr Cloud is turned on or moved here again.
+   */
+  readonly turnOffDropped = new Set<string>();
 
   constructor(private readonly deps: RunnerDeps) {
     deps.identity.onCleared(() => {
@@ -284,6 +300,47 @@ export class CloudSyncRunner {
         store.reclaimInstallForUser(this.deps.db(), this.deps.projectRef, userId, this.now());
         this.installStatusChecked.delete(userId);
         return { ok: true, code: "" };
+      } catch (error) {
+        if (error instanceof StopPass) return { ok: false, code: error.outcome };
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * BACKLOG-4263 P2 (plan §2.5, §13.1, §14 D1): "Use this computer instead", under the pass lock. Reads whether this
+   * computer's online copy was removed (cloud_install_status, a read the rule allows; an unanswered read stops here
+   * with nothing done), writes the move marker with that answer, then claims with p_replace = true, then:
+   * - ok: the move's local transaction (applyMoveHere: email, text and file records and the marker go, every deal is
+   *   marked; or the reclaim path for a computer whose copy had been removed), whatever the local enabled flag;
+   * - refused (computer_not_active cannot happen with p_replace; busy, not_entitled, wrong_account, ...): only the
+   *   marker goes;
+   * - transport: the marker stays (whether the claim landed is unknown); the next pass reads the state and either
+   *   runs the move's local transaction (this computer is active) or drops the marker.
+   */
+  moveHere(userId: string, installId: string): Promise<{ ok: boolean; code: string }> {
+    return this.exclusive(async () => {
+      const session = await this.deps.identity.current();
+      if (!session || session.userId !== userId || this.deps.getAuthUserId() !== userId) return { ok: false, code: "signed_out" };
+      const pinned: SessionUser = { userId, epoch: session.epoch };
+      const db = this.deps.db();
+      try {
+        this.guard(pinned);
+        const st = await this.deps.client.installStatus(userId, installId);
+        if (st.kind === "refused" && st.code === "wrong_account") throw new StopPass("wrong_account");
+        if (st.kind !== "ok" || typeof st.body.removed !== "boolean") return { ok: false, code: st.kind === "ok" ? "unknown" : st.code };
+        const reclaim = st.body.removed;
+        this.guard(pinned);
+        store.writeMovePending(db, this.deps.projectRef, userId, this.now(), reclaim);
+        const res = await this.deps.client.claimInstall(userId, installId, true);
+        // Transport: the marker stays (whether the claim landed is unknown); the next pass settles it.
+        if (res.kind !== "transport") store.settleMovePending(db, this.deps.projectRef, userId, res.kind === "ok", this.now(), reclaim);
+        if (res.kind === "ok") {
+          this.installStatusChecked.delete(userId);
+          return { ok: true, code: "" };
+        }
+        if (res.kind === "refused" && res.code === "wrong_account") throw new StopPass("wrong_account");
+        return { ok: false, code: res.code };
       } catch (error) {
         if (error instanceof StopPass) return { ok: false, code: error.outcome };
         throw error;
@@ -457,14 +514,31 @@ export class CloudSyncRunner {
     if (state.userId !== session.userId) return this.finish({ outcome: "identity_mismatch", done: 0, failed: 0, state });
 
     const pinned: SessionUser = { userId: session.userId, epoch: session.epoch };
+    this.serverHasOneComputer = state.switches !== null;
+
+    // BACKLOG-4263 P2 (plan §13.1): a move whose local transaction did not run (a crash after the claim, or the
+    // claim's answer was lost). This computer is active now: run it. Anything else: the claim did not land.
+    this.healMovePending(db, pinned.userId, state.activeInstallId === installId);
+
+    // BACKLOG-4263 P2 (plan §2.5): another computer is active. Checked BEFORE the owed turn-off, which would
+    // otherwise delete the active computer's online copy, and before any write or local preparation.
+    // Only while licensed, mirroring the server's turn-off check (migration 20261123100000 marker SET:active:licence):
+    // without a licence every writer refuses not_entitled anyway, and the turn-off must go through from any computer
+    // (plan §12.3) — the pass falls to the licence branch (paused, no write) or settles the owed turn-off.
+    const otherActive = otherComputerActive(state, installId) && state.licensed;
 
     // A turn-off made offline is still owed (plan §8.8).
     if (fresh.turn_off_owed_at) {
+      if (otherActive) return this.finishTurnOffDropped(pinned.userId, state);
       this.guard(pinned);
       const res = await this.settleOwedTurnOff(pinned.userId);
       if (res.kind === "refused" && res.code === "wrong_account") return this.wrongAccount(state);
+      // The server's own check (a move committed after the state read): the newer choice wins here too.
+      if (res.kind === "refused" && res.code === "computer_not_active") return this.finishTurnOffDropped(pinned.userId, state);
       return this.finish({ outcome: "not_enabled", done: 0, failed: 0, state });
     }
+
+    if (otherActive) return this.finish({ outcome: "other_computer", done: 0, failed: 0, state });
 
     switch (state.reasonClass) {
       case "entitled":
@@ -478,6 +552,24 @@ export class CloudSyncRunner {
         return this.finish({ outcome: "paused", done: 0, failed: 0, state });
     }
     if (!fresh.local_confirmed_at) return this.finish({ outcome: "needs_confirmation", done: 0, failed: 0, state });
+
+    // BACKLOG-4263 P2 (plan §2.5): no computer is active yet on a server with the rule: claim before any write
+    // (the server refuses every write until one is active). Any answer but ok ends the pass with no write.
+    if (state.switches !== null && state.activeInstallId === null) {
+      try {
+        this.guard(pinned);
+      } catch (error) {
+        if (error instanceof StopPass) return this.finish({ outcome: error.outcome, done: 0, failed: 0, state });
+        throw error;
+      }
+      const claim = await deps.client.claimInstall(pinned.userId, installId, false);
+      if (claim.kind === "refused" && claim.code === "wrong_account") return this.wrongAccount(state);
+      if (claim.kind === "refused" && claim.code === "computer_not_active") return this.finish({ outcome: "other_computer", done: 0, failed: 0, state });
+      if (claim.kind === "refused" && (claim.code === "not_entitled" || claim.code === "not_authorized")) {
+        return this.finish({ outcome: "paused", done: 0, failed: 0, state });
+      }
+      if (claim.kind !== "ok") return this.finish({ outcome: "unknown_state", done: 0, failed: 0, state });
+    }
 
     store.preparePass(db, deps.projectRef, pinned.userId, state.acceptedAt, this.log, this.now());
 
@@ -546,9 +638,30 @@ export class CloudSyncRunner {
    * marker is cleared only when the server confirmed. Safe to repeat.
    */
   async settleOwedTurnOff(userId: string): Promise<CallResult> {
-    const res = await this.deps.client.setAutosave(userId, false, null);
+    // BACKLOG-4263 P2 (plan §11.2): always this computer's install id, unless the last state answer showed a server
+    // without the one-computer migration (then the 3-argument call that server has).
+    const installId = this.serverHasOneComputer === false ? undefined : this.deps.installId();
+    const res = await this.deps.client.setAutosave(userId, false, null, installId);
     if (res.kind === "ok") store.clearTurnOffOwed(this.deps.db(), this.deps.projectRef, userId);
     return res;
+  }
+
+  /** BACKLOG-4263 P2 (plan §13.1): settles a move marker left by a crash or a lost claim answer, if there is one. */
+  private healMovePending(db: SqlDb, userId: string, activeHere: boolean): void {
+    const pendingMove = store.movePending(db, this.deps.projectRef, userId);
+    if (pendingMove) store.settleMovePending(db, this.deps.projectRef, userId, activeHere, this.now(), pendingMove.reclaim);
+  }
+
+  /**
+   * BACKLOG-4263 P2 (plan §2.5): another computer became active before this computer's offline turn-off reached the
+   * server. The newer choice (the move) wins: the owed turn-off is dropped here, nothing online is deleted, and
+   * this computer stays off.
+   */
+  private finishTurnOffDropped(userId: string, state: ServerState): PassSummary {
+    store.dropOwedTurnOff(this.deps.db(), this.deps.projectRef, userId);
+    this.turnOffDropped.add(userId);
+    this.log.warn("[CloudSync] Turn-off dropped: another computer is active", {});
+    return this.finish({ outcome: "other_computer", done: 0, failed: 0, state });
   }
 
   /** Turned off for the account on another computer: off here, this user's state and marks cleared. */
@@ -589,6 +702,9 @@ export class CloudSyncRunner {
     if (res.kind !== "refused") return;
     if (res.code === "wrong_account") throw new StopPass("wrong_account");
     if (res.code === "not_entitled" || res.code === "not_authorized") throw new StopPass("paused");
+    // BACKLOG-4263 P2: another computer became active during this pass (the writers' gate). Before any per-deal
+    // failure is recorded, so no deal is parked for it; nothing else is sent this pass.
+    if (res.code === "computer_not_active") throw new StopPass("other_computer");
     if (res.code === "install_removed") {
       // BACKLOG-4263 PR-4b (R8, D2): persisted per user, beside wrong_account; nothing else is sent this pass,
       // and later passes make no call until the status check or the user's reclaim clears it.

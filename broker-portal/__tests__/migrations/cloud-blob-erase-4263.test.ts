@@ -242,3 +242,125 @@ describe('config.toml', () => {
     expect(CONFIG).toMatch(/\[functions\.cloud-blob-erase\]\nverify_jwt = false\n/);
   });
 });
+
+/**
+ * Harness structure (no database, no parser library). The first harness run on the test project hit a constant in
+ * GROUP BY that a read missed. This pins, for lib/helpers.sql, lib/probes.sql and the control and probe calls written in
+ * harness.py: every string, comment and dollar quote is closed; parentheses balance; every pg_temp call has the argument
+ * count of its definition; no non-integer constant sits in GROUP BY / ORDER BY. `harness.py check` runs the same checks
+ * over the composed call and every mutated function text.
+ */
+describe('BACKLOG-4263 erase harness structure', () => {
+  const DIR = 'supabase/tests/backlog-4263-sync2-erase';
+  const HL = read(`${DIR}/lib/helpers.sql`);
+  const PR = read(`${DIR}/lib/probes.sql`);
+  const PY = read(`${DIR}/harness.py`);
+
+  /** Strings -> '', comments removed; a dollar quote after AS or DO is code and scanned, any other is a literal. */
+  function strip(text: string, label: string): string {
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (text.startsWith('--', i)) {
+        const j = text.indexOf('\n', i);
+        i = j < 0 ? text.length : j;
+      } else if (text.startsWith('/*', i)) {
+        const j = text.indexOf('*/', i + 2);
+        if (j < 0) throw new Error(`${label}: unterminated comment`);
+        out += ' ';
+        i = j + 2;
+      } else if (c === "'") {
+        let j = i + 1;
+        for (;;) {
+          j = text.indexOf("'", j);
+          if (j < 0) throw new Error(`${label}: unterminated string literal`);
+          if (text[j + 1] === "'") j += 2;
+          else break;
+        }
+        out += "''";
+        i = j + 1;
+      } else if (c === '$' && (i === 0 || !/[A-Za-z0-9_]/.test(text[i - 1]))) {
+        const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
+        if (!m) {
+          out += c;
+          i += 1;
+          continue;
+        }
+        const j = text.indexOf(m[0], i + m[0].length);
+        if (j < 0) throw new Error(`${label}: unterminated dollar quote ${m[0]}`);
+        const body = text.slice(i + m[0].length, j);
+        out += /\b(AS|DO)\s*$/i.test(out.slice(-40)) ? ` ${strip(body, label)} ` : "''";
+        i = j + m[0].length;
+      } else {
+        out += c;
+        i += 1;
+      }
+    }
+    return out;
+  }
+  function args(code: string, open: number): number {
+    let depth = 0;
+    let n = 1;
+    let seen = false;
+    for (let k = open; k < code.length; k++) {
+      const ch = code[k];
+      if (ch === '(' || ch === '[') depth += 1;
+      else if (ch === ')' || ch === ']') {
+        depth -= 1;
+        if (depth === 0) return seen ? n : 0;
+      } else if (ch === ',' && depth === 1) n += 1;
+      else if (depth >= 1 && !/\s/.test(ch)) seen = true;
+    }
+    throw new Error(`unclosed call at ${open}`);
+  }
+  const code = { helpers: strip(HL, 'helpers.sql'), probes: strip(PR, 'probes.sql') };
+  const defs = new Map<string, number>();
+  for (const src of [code.helpers, code.probes]) {
+    for (const m of src.matchAll(/CREATE\s+FUNCTION\s+pg_temp\.(\w+)\s*\(/gi)) defs.set(m[1], args(src, m.index! + m[0].length - 1));
+  }
+
+  it('finds the helpers and probes it checks', () => {
+    expect(defs.size).toBeGreaterThan(30);
+    expect(defs.get('scrub')).toBe(4);
+    expect(defs.get('p_c6g_seq')).toBe(0);
+  });
+
+  it.each(['helpers', 'probes'] as const)('lib/%s.sql: parentheses balance', (k) => {
+    let depth = 0;
+    for (const ch of code[k]) {
+      depth += ch === '(' ? 1 : ch === ')' ? -1 : 0;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it.each(['helpers', 'probes'] as const)('lib/%s.sql: every pg_temp call matches its definition', (k) => {
+    const bad: string[] = [];
+    let calls = 0;
+    for (const m of code[k].matchAll(/pg_temp\.(\w+)\s*\(/g)) {
+      if (/FUNCTION\s+$/i.test(code[k].slice(Math.max(0, m.index! - 20), m.index!))) continue;
+      calls += 1;
+      const want = defs.get(m[1]);
+      const got = args(code[k], m.index! + m[0].length - 1);
+      if (want === undefined) bad.push(`${m[1]} not defined`);
+      else if (got !== want) bad.push(`${m[1]}: ${got} argument(s), defined with ${want}`);
+    }
+    expect(calls).toBeGreaterThan(k === 'probes' ? 100 : 5);
+    expect(bad).toEqual([]);
+  });
+
+  it.each(['helpers', 'probes'] as const)('lib/%s.sql: no non-integer constant in GROUP BY or ORDER BY', (k) => {
+    expect(code[k].match(/\b(GROUP|ORDER)\s+BY\s+(TRUE|FALSE|NULL|''|\d*\.\d+)(?![\w.])/gi) ?? []).toEqual([]);
+  });
+
+  it('harness.py: every control and mutant probe call names a defined probe with its argument count', () => {
+    const calls = [...PY.matchAll(/'(p_\w+)\(([^']*)\)'/g)];
+    expect(calls.length).toBeGreaterThan(40);
+    const bad = calls
+      .map((m) => [m[1], m[2].trim() === '' ? 0 : m[2].split(',').length] as const)
+      .filter(([name, n]) => defs.get(name) !== n)
+      .map(([name, n]) => `${name}(${n}) vs ${defs.get(name)}`);
+    expect(bad).toEqual([]);
+  });
+});

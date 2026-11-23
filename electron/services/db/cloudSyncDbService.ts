@@ -37,13 +37,23 @@ import {
   RESET_DIRTY_FAILURE_SQL,
   UPDATE_DIRTY_FAILURE_SQL,
   UPSERT_DEAL_STATE_SQL,
+  DELETE_STATE_AFTER_MOVE_SQL,
+  RECORD_ACCEPTED_AT_SQL,
+  DELETE_SWITCH_MARKER_SQL,
+  MOVE_PENDING_ID,
+  SELECT_SWITCH_MARKER_SQL,
+  UPSERT_SWITCH_MARKER_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
 import { SEED_TODO_COUNTER_SQL } from "./cloudSyncTodoSql";
 import { deleteDealArchiveForUser, deleteDealArchiveOtherProjects, noteDealRemovedOnline } from "./cloudSyncDealArchive";
 import {
+  pendingTodoRemovals,
+  requeueTodoRemovals,
+  clearInstallRemoved,
   clearTodoStateEverywhere,
   clearTodoStateForUser,
+  installRemovedAt,
   forgetTodoOtherProjects,
   prepareTodoPass,
   resetTodoDeal,
@@ -708,4 +718,84 @@ export function setOrphanCount(
     projectRef,
     userId,
   );
+}
+
+// ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
+
+/** SR MF-2: records a notice acceptance made on this computer while it was refused (RECORD_ACCEPTED_AT_SQL). */
+export function recordAcceptedAt(db: SqlDb, projectRef: string, userId: string, acceptedAt: string | null): void {
+  db.prepare(RECORD_ACCEPTED_AT_SQL).run(acceptedAt, projectRef, userId);
+}
+
+/**
+ * Plan §13.1 step 1: written before cloud_claim_install(p_replace = true) is called. `reclaim`: this computer's online
+ * copy was found removed before the claim (the claim deletes that register row, so it is recorded here first).
+ */
+export function writeMovePending(db: SqlDb, projectRef: string, userId: string, now: Date = new Date(), reclaim = false): void {
+  db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID, reclaim ? "reclaim" : null, nowIso(now));
+}
+
+/** The move marker, or null: `reclaim` as written by writeMovePending. */
+export function movePending(db: SqlDb, projectRef: string, userId: string): { reclaim: boolean } | null {
+  const r = db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, MOVE_PENDING_ID) as { last_status: string | null } | undefined;
+  return r ? { reclaim: r.last_status === "reclaim" } : null;
+}
+
+/** The claim did not move the account here (refused, or the server names another computer): only the marker goes. */
+export function clearMovePending(db: SqlDb, projectRef: string, userId: string): void {
+  db.prepare(DELETE_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID);
+}
+
+/**
+ * After a move to this computer (plan §14 D1, P2 acceptance condition 6), ONE local transaction, whatever the local
+ * enabled flag: the email, text and file records and the move marker go, and every eligible deal of the user is
+ * marked, so the next pass sends again what the erase job may have scrubbed while this computer was not active.
+ * Deal and party records and the messages_upload sentinel stay.
+ *
+ * A computer whose online copy had been removed ("Delete them" on the active computer: `reclaim`, read online before
+ * the claim; or a local stop already recorded) takes the reclaim path instead: the claim already deleted its register
+ * row on the server (migration 20261123100000 marker CLAIM:reclaim, :859-862), and its deals were soft-removed
+ * online, so every record of what was saved is forgotten, as after cloud_reclaim_install (reclaimInstallForUser), and
+ * the local stop is cleared, in the same transaction. Without this its deal records still say "synced" and the
+ * pass's shortcut would never send the removed deals again.
+ */
+export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now: Date = new Date(), reclaim = false): void {
+  db.transaction(() => {
+    if (reclaim || installRemovedAt(db, projectRef, userId)) {
+      // SR N1: removals queued while refused survive the todo restart (only on this path; the first enable and
+      // PR-4b's own reclaim are unchanged).
+      const removals = pendingTodoRemovals(db, projectRef, userId);
+      reclaimInstallForUser(db, projectRef, userId, now);
+      requeueTodoRemovals(db, projectRef, userId, removals, now);
+      clearInstallRemoved(db, projectRef, userId);
+      return;
+    }
+    db.prepare(DELETE_STATE_AFTER_MOVE_SQL).run(projectRef, userId);
+    db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+  })();
+}
+
+/**
+ * Settles the move marker in one step: `movedHere` runs the move's local transaction (applyMoveHere), otherwise only
+ * the marker goes (the claim was refused, or the server names another computer). Used after the claim's answer and
+ * by the next pass's heal.
+ */
+export function settleMovePending(db: SqlDb, projectRef: string, userId: string, movedHere: boolean, now: Date = new Date(), reclaim = false): void {
+  db.transaction(() => {
+    if (movedHere) applyMoveHere(db, projectRef, userId, now, reclaim);
+    else clearMovePending(db, projectRef, userId);
+  })();
+}
+
+/**
+ * Plan §2.5: a turn-off made here while offline is dropped because another computer became active first. The owed
+ * marker goes (this computer stays off; nothing online is deleted), with the trigger rule, in one transaction. Why it
+ * was dropped is kept in memory only (CloudSyncRunner.turnOffDropped): a state row would outlive the turn-off and
+ * read as another project's data if this profile were later pointed at another project (otherProjectInUse).
+ */
+export function dropOwedTurnOff(db: SqlDb, projectRef: string, userId: string): void {
+  db.transaction(() => {
+    db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(projectRef, userId);
+    applyCloudSyncTriggerRule(db);
+  })();
 }
