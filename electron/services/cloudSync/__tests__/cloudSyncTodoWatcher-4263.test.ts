@@ -173,6 +173,26 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
     });
   });
 
+  describe("W-6 worst case: a pass started off the 5 s look grid (the 60 s timer, a restore, power resume)", () => {
+    it("pass start at +20.1..24 s, edit right after it: kicked at the first look >= start + 10 s, at most 15 s after the edit", async () => {
+      const delays: number[] = [];
+      for (const off of [20_100, 21_000, 22_000, 23_000, 24_000, 24_900]) {
+        const h = await setup();
+        await h.advanceTo(h.t0 + off);
+        h.fireTimer();
+        await h.settle();
+        expect(h.timerKicks()).toEqual([h.t0 + off]);
+        h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(`off ${off}`, I1);
+        await h.advanceTo(h.t0 + 60_000 - 1);
+        const expected = h.t0 + Math.ceil((off + GAP_MS) / LOOK_MS) * LOOK_MS;
+        expect({ off, kicks: h.watchKicks() }).toEqual({ off, kicks: [expected] });
+        delays.push(h.watchKicks()[0] - (h.t0 + off));
+        expect(onlineNote(h.e, I1)).toBe(`off ${off}`);
+      }
+      expect(Math.max(...delays)).toBe(14_900);
+    });
+  });
+
   describe("BURST: ten edits in 3 s", () => {
     it("inside one 5 s window: one pass sends all ten", async () => {
       const h = await setup();
@@ -386,8 +406,9 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       const hold = holdingServer();
       const h = await setup(hold.server);
       h.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("first", I1);
-      hold.on();
+      const reached = hold.on();
       await h.advanceTo(h.t0 + 10_000, { idle: false }); // the watcher's kick starts a pass, which waits at its push
+      await reached;
       expect(h.watchKicks()).toEqual([h.t0 + 10_000]);
       expect(h.e.service.runner!.isRunning()).toBe(true);
       h.db.prepare(RENAME_PRIVATE_ITEM_SQL).run("Renamed during the pass", I2, h.deal, MY_ITEMS_TEMPLATE_ID);
@@ -417,13 +438,18 @@ describe(`Keepr Cloud todo watcher [${DRIVER}]`, () => {
       expect(outbox(h.db)).toHaveLength(1);
     });
 
-    it("a deal locked here (held op answered after the pull): at most one follow-up kick in 5 minutes", async () => {
+    it("a deal locked here (held op sent after the pull, answered not_found and kept): at most one follow-up kick in 5 minutes", async () => {
       const h = await setup();
+      h.e.server.override = (fn, args) =>
+        fn === "cloud_todo_push"
+          ? { data: { ok: true, results: (args.p_ops as Array<Record<string, JsonValue>>).map((op) => ({ op_id: op.op_id, entity: "item", status: "not_found" })) }, error: null, status: 200 }
+          : undefined;
       h.db.prepare("UPDATE transactions SET submission_status = 'submitted' WHERE id = ?").run(h.deal);
       h.e.server.aiSet(h.e.server.todos.find((t) => t.entity === "item" && t.localId === I1)!, "note", "ai during review");
       h.fireTimer();
       await h.settle();
       expect(h.e.service.runner!.lastSummary!.pull!.held).toBeGreaterThan(0);
+      expect(outbox(h.db).length).toBeGreaterThan(0);
       await h.advanceTo(h.t0 + 300_000);
       expect(h.watchKicks().length).toBeLessThanOrEqual(1);
     });
@@ -575,14 +601,20 @@ function holdingServer() {
   const real = server.transport;
   let gate: Promise<void> | null = null;
   let open: () => void = () => undefined;
+  let arrived: () => void = () => undefined;
   server.transport = async (fn, args, signal) => {
-    if (fn === "cloud_todo_push" && gate) await gate;
+    if (fn === "cloud_todo_push" && gate) {
+      arrived();
+      await gate;
+    }
     return real(fn, args, signal);
   };
   return {
     server,
-    on: () => {
+    /** Holds the next todo push; resolves when a push is waiting at the gate. */
+    on: (): Promise<void> => {
       gate = new Promise<void>((r) => (open = r));
+      return new Promise<void>((r) => (arrived = r));
     },
     release: () => {
       gate = null;
@@ -632,6 +664,7 @@ async function setup(server?: FakeServer) {
     settle,
     pushes: () => e.server.callsTo("cloud_todo_push").length,
     watchKicks: () => kicks.filter((k) => k.source === "watch").map((k) => k.t),
+    timerKicks: () => kicks.filter((k) => k.source === "timer").map((k) => k.t),
     activeWatchTimers: () => e.watchTimers.filter((w) => !w.cleared).length,
     fireTimer: () => {
       source = "timer";
