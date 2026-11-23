@@ -221,7 +221,8 @@ function installCloudSyncUnguarded(): CloudSyncService {
     },
     // BACKLOG-4263 PR-4c (plan §14 F3): a restored deal is recorded as TRANSACTION_CREATE, inside the restore.
     auditRestore: recordDealRestoreAuditSync,
-    // BACKLOG-4263 PR-6: open screens refresh when a pull changed todos here.
+    // BACKLOG-4263 PR-6: open screens refresh when a pass changed todos here, or the server answered this computer's
+    // todo changes.
     onTodosChanged: () => {
       sendToMainWindow("cloud-todos:changed");
     },
