@@ -7,13 +7,16 @@ definition of each name, across the migrations up to LAST), every key and string
 the same for every public function its body calls, transitively. A superset: a literal in E is not proven to reach the
 answer, but a literal outside E cannot come from that function.
 
-What a harness compares (per .sql file of a folder, after comments are removed):
+What a harness reads and compares (per .sql file of a folder, after comments and copies of product functions are
+removed):
   - helpers:   each pg_temp.<name> is linked to the product functions (cloud_*, mcp_*, _mcp_*, ...) it calls, by name
                in its body (public.<fn>( or a string literal naming a function), and through other helpers it calls;
   - variables: `v := <expression>` / `DECLARE v jsonb := <expression>` links v to the product functions named in the
-               expression, through helpers;
-  - compares:  a JSON path on a linked variable or an inline helper call (`x -> 'a' ->> 'b'`, `x ? 'k'`) is checked key
-               by key; when it is compared (=, <>, !=, IS [NOT] DISTINCT FROM) with a string literal, that literal is
+               expression, through helpers (the last assignment before a read counts); an object the harness builds
+               itself (jsonb_build_object ... around product answers) also carries its own literals as keys;
+  - reads:     every JSON path on a linked variable, alias or inline helper call (`x -> 'a' ->> 'b'`, `x ? 'k'`) is
+               checked key by key, whether or not it is compared;
+  - compares: when it is compared (=, <>, !=, IS [NOT] DISTINCT FROM) with a string literal, that literal is
                checked too, unless it is data the harness itself passed in (a literal that occurs in the file outside
                every compare); a variable or call compared with a JSON object literal is checked key by key and value
                by value. A compare whose left side links to no product function is listed as not checkable.
@@ -223,6 +226,9 @@ def check_file(path, helpers, data):
             var_json[m.group(1)] = m.group(2).replace("''", "'")
         for m in re.finditer(r'(?<![:\w])([a-z_][a-z0-9_]*)\s+(?:jsonb\s+|text\s+)?:=\s*(.+?);', unit, re.S):
             pr, ow = sources_of(m.group(2), helpers, lambda n, p=m.start(): var_at(n, p))
+            # an object the harness builds itself (keys of its own around product answers)
+            if re.match(r'\s*(?:jsonb_build_object|jsonb_build_array|jsonb_object_agg)\s*\(', m.group(2)) or re.search(r'\|\|\s*jsonb_build_object\s*\(', m.group(2)):
+                ow = set(ow) | compare_free_literals(m.group(2))
             if pr or ow:
                 assigns.append((m.start(), m.group(1), pr, ow))
         for m in re.finditer(r'jsonb_array_elements\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?:AS\s+)?([a-z_][a-z0-9_]*)', unit, re.I):
@@ -252,6 +258,16 @@ def check_file(path, helpers, data):
                     unchecked.append((path, expr + '   [value computed from harness data]'))
                     continue
                 findings.append((path, expr, v, names))
+        # every key read on an answer, compared or not (a cast, an argument, a SELECT list)
+        seen_reads = set()
+        for m in re.finditer(r"((?:pg_temp\.\w+\s*\((?:[^()]|\([^()]*\))*\))|\b[a-z_][a-z0-9_]*)(" + PATH + r")", unit):
+            base = m.group(1)
+            if base.lower() in ('and', 'or', 'not', 'then', 'when', 'else', 'select', 'where', 'if', 'case', 'is', 'end'):
+                continue
+            if not base.startswith('pg_temp.') and not var_at(base, m.start())[0] and not var_at(base, m.start())[1]:
+                continue
+            seen_reads.add(m.start())
+            judge(m.start(), base, literals(m.group(2)), [], m.group(0).strip()[:140])
         for m in re.finditer(r"([a-z_][a-z0-9_]*)(" + PATH + r")?\s*\?\s*'((?:[^']|'')*)'", unit):
             judge(m.start(), m.group(1), literals(m.group(2) or '') + [m.group(3)], [], m.group(0).strip()[:140])
         for m in re.finditer(r"((?:pg_temp\.\w+\s*\((?:[^()]|\([^()]*\))*\))|\b[a-z_][a-z0-9_]*)(" + PATH + r")?\s*(" + OPS + r")\s*('(?:[^']|'')*'|[a-z_][a-z0-9_]*\b)", unit, re.I):
