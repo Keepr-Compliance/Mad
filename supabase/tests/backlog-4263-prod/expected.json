@@ -47,7 +47,7 @@
     },
     "20261123110000": {
       "file": "supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql",
-      "file_md5": "c697acf83b5c2faa83a9d164fafddb02"
+      "file_md5": "8d76ccc42e978eddd88b1f02a40a74a2"
     },
     "20261123120000": {
       "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",
@@ -16967,7 +16967,7 @@
         "function cloud_blob_erase_claim(boolean,integer,integer) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "1a9b0c11bf915773e9c14abe3cee4ae8"
+          "want": "3eac70008dafbee6985acb8f5a9e9ba8"
         },
         "function cloud_blob_erase_claim(boolean,integer,integer) owner": {
           "label": "MUST HOLD",
@@ -23823,7 +23823,7 @@
         "function cloud_blob_erase_claim(boolean,integer,integer) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "1a9b0c11bf915773e9c14abe3cee4ae8"
+          "want": "3eac70008dafbee6985acb8f5a9e9ba8"
         },
         "function cloud_blob_erase_claim(boolean,integer,integer) owner": {
           "label": "MUST HOLD",

@@ -20,6 +20,7 @@
 --         blobs first, then checks references in a later statement);
 --      c. leases up to p_limit fenced blobs that no file row references and returns their storage paths;
 --      d. returns objects in cloud-deal-files older than 24 h that have no cloud_blobs row;
+--      The run row records listing_capped (0, 1 or 2): how many of the two listings (c, d) reached p_limit.
 --      e. returns the owners whose computers other than the active one still have live message or file rows, oldest
 --         move (active_since) first.
 --    In dry_run mode (the default) it writes only its own run row, and returns counts and the owner list.
@@ -262,7 +263,8 @@ BEGIN
   v_counts := jsonb_build_object(
     'messages_hard_deleted', v_n_msg, 'files_hard_deleted', v_n_file, 'files_removed_with_message', v_n_dep,
     'blobs_fenced_by_delete', v_n_fence, 'orphans_fenced', v_n_orphan, 'blobs_listed', v_n_blobs,
-    'rowless_listed', v_n_rowless, 'scrub_owners', jsonb_array_length(v_owners));
+    'rowless_listed', v_n_rowless, 'scrub_owners', jsonb_array_length(v_owners),
+    'listing_capped', (v_n_blobs >= p_limit)::integer + (v_n_rowless >= p_limit)::integer);   /*COUNT:listing_capped*/
   UPDATE public.cloud_blob_erase_runs SET counts = v_counts WHERE id = v_run;
 
   RETURN jsonb_build_object('run_id', v_run, 'dry_run', p_dry_run, 'counts', v_counts,

@@ -301,11 +301,26 @@ describe('run row: finish carries the erase counts, note carries the scrub count
     expect(note.p_outcome).toBe('partial');
     expect(note.p_counts.scrub_errors).toBe(1);
   });
-  it('a failing note does not fail the run', async () => {
-    const { deps } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, noteStatus: 500 });
+  it('a failing note does not fail the run, but is reported: Sentry event (stage note), error check-in, partial', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, noteStatus: 500 });
     const res = await handleRequest(post(), deps);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ outcome: 'ok', note_errors: 1 });
+    expect(await res.json()).toMatchObject({ outcome: 'partial', note_errors: 1 });
+    const events = sentry(calls).filter((b) => b.includes('"type":"event"'));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toContain('"stage":"note"');
+    const statuses = sentry(calls).filter((b) => b.includes('"type":"check_in"')).map((b) => JSON.parse(b.split('\n')[2]).status);
+    expect(statuses).toEqual(['in_progress', 'error']);
+  });
+  it('a clean run sends no Sentry event', async () => {
+    const { deps, calls } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' } });
+    await handleRequest(post(), deps);
+    expect(sentry(calls).some((b) => b.includes('"type":"event"'))).toBe(false);
+  });
+  it('reports listing_capped from the claim counts', async () => {
+    const { deps } = makeDeps({ env: { CLOUD_BLOB_ERASE_MODE: 'live' }, claim: { ...CLAIM, counts: { ...CLAIM.counts, listing_capped: 1 } } });
+    const res = await handleRequest(post(), deps);
+    expect(await res.json()).toMatchObject({ listing_capped: 1 });
   });
 });
 

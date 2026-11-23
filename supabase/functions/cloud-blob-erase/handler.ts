@@ -61,6 +61,7 @@ export interface EraseCounts {
   scrub_owners_left: number;
   scrub_ms: number;
   note_errors?: number;
+  listing_capped: number;
 }
 
 interface ClaimResult {
@@ -219,7 +220,7 @@ export function emptyCounts(mode: "dry_run" | "live"): EraseCounts {
   return {
     mode, blobs_listed: 0, rowless_listed: 0, objects_removed: 0, rowless_removed: 0, remove_errors: 0,
     blob_rows_deleted: 0, blob_rows_kept: 0, scrub_owners: 0, scrub_rounds: 0, scrub_batches: 0,
-    rows_scrubbed: 0, rows_would_scrub: 0, scrub_skipped: 0, scrub_errors: 0, scrub_owners_left: 0, scrub_ms: 0,
+    rows_scrubbed: 0, rows_would_scrub: 0, scrub_skipped: 0, scrub_errors: 0, scrub_owners_left: 0, scrub_ms: 0, listing_capped: 0,
   };
 }
 
@@ -299,6 +300,8 @@ export async function handleRequest(req: Request, deps: HandlerDeps): Promise<Re
     counts.blobs_listed = blobs.length;
     counts.rowless_listed = rowless.length;
     counts.scrub_owners = owners.length;
+    // the claim hit its listing limit: more fenced blobs or rowless objects wait for the next run
+    counts.listing_capped = Number((claim as { counts?: { listing_capped?: unknown } })?.counts?.listing_capped) || 0;
 
     // ── Erase bytes first ─────────────────────────────────────────────────
     const finishIds: string[] = [];
@@ -343,17 +346,21 @@ export async function handleRequest(req: Request, deps: HandlerDeps): Promise<Re
     const eraseShort = removeShort || counts.blob_rows_kept > 0;
     const failed = eraseShort || counts.scrub_errors > 0;
     stage = "note";
+    let noteFailed = false;
     try {
       await rpc(deps, "note", "cloud_blob_erase_note", {
         p_run_id: runId, p_counts: numericCounts(counts, "scrub"), p_outcome: failed ? "partial" : "ok",
       });
     } catch {
+      // the run row then lacks the scrub counts: reported as a degraded run, the run itself is not failed
+      noteFailed = true;
       counts.note_errors = 1;
     }
-    deps.log(JSON.stringify({ cloud_blob_erase: failed ? "partial" : "ok", ...counts }));
-    if (failed) await captureFailure(deps, eraseShort ? "remove" : "scrub", 0, counts, runId);
-    await checkIn(deps, checkInId, failed ? "error" : "ok", (deps.now() - started) / 1000);
-    return json({ outcome: failed ? "partial" : "ok", ...counts });
+    const degraded = failed || noteFailed;
+    deps.log(JSON.stringify({ cloud_blob_erase: degraded ? "partial" : "ok", ...counts }));
+    if (degraded) await captureFailure(deps, eraseShort ? "remove" : counts.scrub_errors > 0 ? "scrub" : "note", 0, counts, runId);
+    await checkIn(deps, checkInId, degraded ? "error" : "ok", (deps.now() - started) / 1000);
+    return json({ outcome: degraded ? "partial" : "ok", ...counts });
   } catch (err) {
     const status = err instanceof EraseError ? err.status : 0;
     const failedStage = err instanceof EraseError ? err.stage : stage;

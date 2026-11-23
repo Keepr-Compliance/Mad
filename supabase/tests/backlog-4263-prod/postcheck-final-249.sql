@@ -80,7 +80,7 @@ fn(sig, md5, owner, secdef, vol, lang, config, ret, strict, leak, par) AS (VALUE
     ('public.cloud_computer_move_notice_claim(integer)', '7e53fdbc192927ebfffc815cb37c1bc4', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public.cloud_computer_move_notice_done(uuid,integer,text,text)', 'b4b115cf7f04d19977baf0b5a622032a', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'boolean', 'false', 'false', 'u'),
     ('public.cloud_blob_erase_secret()', '5e1fc753469874c31f5a86a4f80655e6', 'postgres', 'true', 's', 'plpgsql', 'search_path=""', 'text', 'false', 'false', 'u'),
-    ('public.cloud_blob_erase_claim(boolean,integer,integer)', '1a9b0c11bf915773e9c14abe3cee4ae8', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
+    ('public.cloud_blob_erase_claim(boolean,integer,integer)', '3eac70008dafbee6985acb8f5a9e9ba8', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public.cloud_blob_erase_finish(uuid,uuid[],jsonb,text)', 'f4423f812a90172c431f0083805598be', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public.cloud_blob_erase_note(uuid,jsonb,text)', '2145d36a0cbb3ecffdf6df394d44af42', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public.cloud_blob_erase_scrub(uuid,uuid,boolean,integer)', '8ef3f7c2277b9c2e1be3e640ba45f676', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),

@@ -106,7 +106,7 @@ def ddl_mutant(mode, sql, verify, probe, want='red'):
 
 
 CONTROLS = ['p_grants()', 'p_invoke_url()', 'p_secrets(%s)' % q(E1), 'p_c6a()', 'p_c6b()', 'p_c6c()', 'p_c6d()', 'p_c6e()',
-            'p_c6f()', 'p_note()', 'p_scrub_off()', 'p_owners()', 'p_c6g_seq()', 'p_dry_run()', 'p_e3(%s)' % q(E3),
+            'p_c6f()', 'p_capped()', 'p_note()', 'p_scrub_off()', 'p_owners()', 'p_c6g_seq()', 'p_dry_run()', 'p_e3(%s)' % q(E3),
             'p_rollback(%s, %s)' % (q(RB3), q(RB1))]
 CNAME = lambda c: c.split('(')[0]
 
@@ -122,6 +122,9 @@ def mutants():
     m.append(fn_mutant('Erase_lists_unfenced', C, [(
         "       WHERE b.purge_requested_at IS NOT NULL                                                /*ERASE:fenced*/",
         "       WHERE (b.purge_requested_at IS NOT NULL OR b.uploaded_at IS NOT NULL)")], P('p_c6c()')))
+    m.append(fn_mutant('Listing_cap_not_recorded', C, [(
+        "    'listing_capped', (v_n_blobs >= p_limit)::integer + (v_n_rowless >= p_limit)::integer);   /*COUNT:listing_capped*/",
+        "    'listing_capped', 0);")], P('p_capped()')))
     m.append(fn_mutant('Note_overwrites_counts', 'cloud_blob_erase_note', [(
         "     AND NOT (r.counts ? e.k);                                                               /*NOTE:new_keys_only*/", "     ;")], P('p_note()')))
     m.append(fn_mutant('Note_sets_any_outcome', 'cloud_blob_erase_note', [(

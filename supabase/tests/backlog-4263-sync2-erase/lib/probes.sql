@@ -131,12 +131,12 @@ DECLARE u uuid := pg_temp.mk_user(13); d uuid; old_b uuid; young_b uuid; ref_b u
         c jsonb; n_widened bigint;
 BEGIN
   -- precondition for the listing assertions below: the claim lists at most 1000 blobs ordered by purge_requested_at,
-  -- so a wrong listing of unfenced blobs is only visible while fewer than 900 blobs in the whole database are fenced
-  -- or uploaded and unreferenced. Otherwise this control cannot tell, and says so instead of passing.
+  -- and its orphan step first fences unreferenced blobs in any state (never-uploaded ones too), which then sort ahead.
+  -- A wrong listing of unfenced blobs is only visible while fewer than 900 blobs in the whole database are
+  -- unreferenced, in any state. Otherwise this control cannot tell, and says so instead of passing.
   SELECT count(*) INTO n_widened FROM public.cloud_blobs b
-   WHERE (b.purge_requested_at IS NOT NULL OR b.uploaded_at IS NOT NULL)
-     AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id);
-  IF n_widened >= 900 THEN RETURN 'PRECONDITION ' || n_widened || ' fenced or uploaded unreferenced blobs (need < 900)'; END IF;
+   WHERE NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id);
+  IF n_widened >= 900 THEN RETURN 'PRECONDITION ' || n_widened || ' unreferenced blobs in the database (need < 900)'; END IF;
   d := pg_temp.mk_deal(u, pg_temp.fx(1301), 'c6c');
   old_b    := pg_temp.mk_blob(u, 'c6c-old',   now() - interval '25 hours', now() - interval '25 hours', NULL);
   young_b  := pg_temp.mk_blob(u, 'c6c-young', now() - interval '23 hours', now() - interval '23 hours', NULL);
@@ -246,6 +246,22 @@ BEGIN
   c := pg_temp.claim(false);
   IF NOT (own = ANY (pg_temp.ids(c))) THEN bad := bad || 'scrubbed blob not listed by the next claim; '; END IF;
   RETURN CASE WHEN bad = '' THEN 'PASS' ELSE 'FAIL ' || bad END;
+END $p$;
+
+-- listing_capped: a claim whose blob listing reaches p_limit records it in the run row
+CREATE FUNCTION pg_temp.p_capped() RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE u uuid := pg_temp.mk_user(31); c jsonb; i int;
+BEGIN
+  FOR i IN 1..2 LOOP
+    PERFORM pg_temp.mk_blob(u, 'cap' || i, now() - interval '3 days', now() - interval '3 days', now() - interval '1 hour');
+  END LOOP;
+  c := pg_temp.svc('SELECT public.cloud_blob_erase_claim(false, 1, 20000)::text');
+  IF jsonb_array_length(c -> 'blobs') <> 1 THEN RETURN 'FAIL setup: want 1 blob listed, got ' || left(c::text, 200); END IF;
+  IF (c -> 'counts' ->> 'listing_capped')::int < 1 THEN RETURN 'FAIL listing_capped not set: ' || (c -> 'counts')::text; END IF;
+  IF (SELECT (counts ->> 'listing_capped')::int FROM public.cloud_blob_erase_runs WHERE id = (c ->> 'run_id')::uuid) < 1 THEN
+    RETURN 'FAIL run row lacks listing_capped';
+  END IF;
+  RETURN 'PASS';
 END $p$;
 
 -- note (after the scrub): adds only keys the run row does not hold; moves ok to partial, never a failed run back

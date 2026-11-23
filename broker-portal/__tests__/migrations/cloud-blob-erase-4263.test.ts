@@ -131,6 +131,11 @@ describe('BACKLOG-4263 cloud blob erase migration (E1)', () => {
     expect(body.slice(tomb, del)).toContain('public._cloud_fence_unreferenced(r.owner, r.blobs)');
   });
 
+  it('claim: records how many listings reached their limit', () => {
+    const body = fnBody('cloud_blob_erase_claim');
+    expect(body).toContain("'listing_capped', (v_n_blobs >= p_limit)::integer + (v_n_rowless >= p_limit)::integer);");
+  });
+
   it('claim: lists only fenced blobs no file row references, under a 5-minute lease', () => {
     const body = fnBody('cloud_blob_erase_claim');
     expect(body).toContain('WHERE b.purge_requested_at IS NOT NULL');
