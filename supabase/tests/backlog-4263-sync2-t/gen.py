@@ -860,7 +860,7 @@ def selftest(green_ok=False):
              ('SQLSTATE 55P03 (lock timeout)', wrap('canceling statement due to lock timeout', code='55P03'), False, 'SQLSTATE 55P03'),
              ('SQLSTATE P0002 with a result', wrap(full(), code='P0002'), False, 'SQLSTATE P0002'),
              ('JSON not closed right before CONTEXT', wrap(full() + ' trailing'), False, 'right before CONTEXT'),
-             ('MUTANT NOT RESTORED', wrap('MUTANT NOT RESTORED reader_granted_anon'), False, 'MUTANT NOT RESTORED reader_granted_anon'),
+             ('MUTANT NOT RESTORED', wrap('MUTANT NOT RESTORED reader_granted_anon'), False, 'NOT OK: MUTANT NOT RESTORED reader_granted_anon (the catalogue differed'),
              ('negative control missing', wrap(full().replace(f'"mutant:{neg}"', '"x_absent"')), False, 'NEG_FAILED'),
              ('negative control applied', wrap(full((neg, {'applied': True, 'want': 'not_applied'}))), False, 'NEG_FAILED'),
              ('negative control: another error', wrap(full((neg, {'applied': False, 'error': 'boom', 'want': 'not_applied'}))), False, 'NEG_FAILED'),
