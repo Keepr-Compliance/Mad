@@ -25,7 +25,8 @@ purge, turn-off, the erase job.
 
 ## Order on the test project (one engineer at a time; before-note to the coordinator for each step)
 
-Plan section 11.4 step 7: after E3 (`20261123120000`) is applied, before T-S (`20261123140000`).
+Production order is version order: E3 (`20261123120000`) before S2, and S2 before T-S (`20261123140000`). S2 itself
+does not depend on E3 (on the test project S2 was applied without E3).
 
 0. Before S2 is applied: any re-run of the S1 harness (`../backlog-4263-sync2-s1/harness-s1.sql`) happens now. Once S2
    is applied the S1 harness cannot run. Offline, any time: `python3 gen.py selftest` must print
