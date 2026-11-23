@@ -558,7 +558,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
     it("own note edit: the pass that sends it reports the event once (pull wrote nothing); the next pass does not", async () => {
       const { db, e } = await synced();
       const base = e.todosChanged.count;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       const r = await e.service.kick();
       expect(r!.todos).toMatchObject({ outcome: "done", confirmed: 1 });
       expect(r!.pull).toMatchObject({ outcome: "done", localWrites: 0 });
@@ -570,7 +570,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
     it("no loop: the reads the screen makes on the event queue no op and write no todo, so the next passes stay silent", async () => {
       const { db, deal, e, s } = await synced();
       const base = e.todosChanged.count;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       await e.service.kick();
       expect(e.todosChanged.count).toBe(base + 1);
       const todoRows = () => db.prepare("SELECT * FROM transaction_checklist_items ORDER BY id").all();
@@ -607,7 +607,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const gone = onlineItem(e, I1);
       gone.removed = true;
       gone.purged = true;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("too late", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("too late", I1));
       const r = await e.service.kick();
       expect(r!.todos).toMatchObject({ confirmed: 1, retried: 0 });
       expect(r!.pull!.localWrites).toBe(0);
@@ -620,7 +620,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       const base = e.todosChanged.count;
       const t = onlineItem(e, I1);
       t.parts.note = { rev: t.parts.note.rev + 1, value: "from the phone", at: Date.now() + 60_000, by: "ai_app:conn-1", edit_seq: null };
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("desk", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("desk", I1));
       const r = await e.service.kick();
       expect(r!.todos).toMatchObject({ confirmed: 1 });
       expect(e.todosChanged.count).toBe(base + 1);
@@ -629,7 +629,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
     it("answers the server does not keep (not_found, every op): sent but not confirmed, no event on two passes", async () => {
       const { db, e } = await synced();
       const base = e.todosChanged.count;
-      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("mine", I1);
+      db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("mine", I1));
       // Answer shape as helpers/fakeServer.ts documents for a not-kept status ({op_id, status}); not_found reaches a desktop op.
       e.server.override = (fn, args) =>
         fn === "cloud_todo_push"
@@ -672,7 +672,7 @@ describe(`Keepr Cloud todo screens, main side [${DRIVER}]`, () => {
       ];
       it.each(cases)("%s", async (_name, c, events) => {
         const { db, e } = await synced();
-        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("shape", I1);
+        db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run(...noteItemArgs("shape", I1));
         const real = await pass(e);
         expect(real.todos).toBeDefined();
         expect(real.pull).toBeDefined();
