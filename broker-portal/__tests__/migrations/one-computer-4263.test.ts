@@ -462,10 +462,28 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect(read(join(cc, 'setup.sql')).length).toBeGreaterThan(0);
   });
 
-  it('harness refuses its rollback step unless it runs as one transaction', () => {
-    const i = HARNESS.indexOf("IF to_regclass('pg_temp.s1_out') IS NULL THEN");
-    expect(i).toBeGreaterThan(0);
-    expect(i).toBeLessThan(HARNESS.indexOf('DO $rb4263s1$'));
+  it('harness refuses its rollback step unless it runs as one transaction: first statement of the rollback block, outside its handler', () => {
+    const blk = HARNESS.indexOf('DO $rb4263s1$\nBEGIN\n');
+    const chk = HARNESS.indexOf("  IF to_regclass('pg_temp.s1_out') IS NULL THEN\n    RAISE EXCEPTION");
+    expect(blk).toBeGreaterThan(0);
+    expect(chk).toBe(blk + 'DO $rb4263s1$\nBEGIN\n'.length);
+    expect(HARNESS.indexOf('EXECUTE $rbq$', chk)).toBeGreaterThan(chk);
+    expect(HARNESS.indexOf('  BEGIN\n    EXECUTE $rbq$', chk)).toBeGreaterThan(chk);
+  });
+
+  it('two-session run.sh: verdict starts as ERROR, the mutant is proven applied and still present, verdict from verdict.py', () => {
+    const run = read(join(DIR, 'concurrency/run.sh'));
+    expect(run).toMatch(/\bVERDICT=ERROR\b/);
+    expect(run).not.toMatch(/\bVERDICT=FAIL\b/);
+    expect(run).toContain('applied="$(mutant_md5 applied.out)" || { VERDICT="ERROR: ${applied}"; exit 1; }');
+    expect(run).toContain('echo "$applied"');
+    expect(run).toContain('still="$(mutant_md5 still.out)" ||');
+    expect(run).toContain('python3 -I "$here/verdict.py" applied');
+    expect(run).toContain('case "$MODE:$VERDICT" in pristine:PASS|mutant:RED) ;; *) rc=1 ;; esac');
+    expect(run).toContain('VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MODE"');
+    const v = read(join(DIR, 'concurrency/verdict.py'));
+    expect(v).toContain("return f'MUTATION APPLIED {name} md5 {m}'");
+    expect(read(join(DIR, 'concurrency/setup.sql'))).toContain("IF EXISTS (SELECT 1 FROM auth.users u WHERE u.email LIKE 'p4263s1cc-%@example.test') THEN");
   });
 });
 

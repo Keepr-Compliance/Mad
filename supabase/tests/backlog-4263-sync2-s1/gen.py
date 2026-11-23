@@ -672,21 +672,20 @@ BEGIN
 END
 $controls4263s1$;
 -- ================================================================ the rollback file, verbatim
--- Refuse outright unless this file runs as ONE transaction: the temp tables are ON COMMIT DROP, so under a transport
--- that commits each statement they are already gone here and the rollback must not run.
-DO $one4263s1$
+-- The first statement of the block that runs the rollback refuses unless this file runs as ONE transaction: the temp
+-- tables are ON COMMIT DROP, so under a transport that commits each statement they are gone here, and the block raises
+-- before the EXECUTE (outside the handler below), so the rollback cannot run.
+DO $rb4263s1$
 BEGIN
   IF to_regclass('pg_temp.s1_out') IS NULL THEN
     RAISE EXCEPTION 'harness-s1.sql must run as one transaction (pg_temp.s1_out is gone); the rollback step did not run';
   END IF;
-END
-$one4263s1$;
-DO $rb4263s1$
-BEGIN
-  EXECUTE {dq(ROLLBACK, '$rbq$')};
-  PERFORM pg_temp.rec('rollback', to_jsonb('ok'::text));
-EXCEPTION WHEN OTHERS THEN
-  PERFORM pg_temp.rec('rollback', to_jsonb('ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 900)));
+  BEGIN
+    EXECUTE {dq(ROLLBACK, '$rbq$')};
+    PERFORM pg_temp.rec('rollback', to_jsonb('ok'::text));
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM pg_temp.rec('rollback', to_jsonb('ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 900)));
+  END;
 END
 $rb4263s1$;
 DO $end4263s1$

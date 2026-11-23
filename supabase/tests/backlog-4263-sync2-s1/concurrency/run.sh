@@ -30,11 +30,19 @@
 # R1 and R2 run with the switch either way. R3-R6 refuse to start unless public.cloud_release_switches.one_computer is
 # already true (they never flip it): on the test database that is after the coordinator's flip (after P2 merges).
 # --mutant creates ONE new function public.<name>_m4263 (granted to authenticated only); the live functions are never
-# replaced. The trap drops it (drop-mutants.sql) and checks that no *_m4263 function is left.
+# replaced. Right after the create the script reads md5(prosrc) of that function and prints MUTATION APPLIED <name> md5 <x>
+# (no body -> ERROR, stop); after the sessions it checks the function still exists; the trap drops it (drop-mutants.sql)
+# and checks that no *_m4263 function is left.
+# Verdict (verdict.py; offline self-test: python3 -I selftest.py): a run without --mutant prints PASS only on the case's
+# passing shape, a --mutant run prints RED only on the case's own red shape; anything else, including a session or state
+# call that returned no row (a gate timeout, a missing function, a deadlock), prints ERROR. The verdict starts as ERROR.
+# Exit status 0 only for PASS or RED.
+# ONE RUN AT A TIME: setup refuses while any p4263s1cc-*@example.test fixture user exists (a run in progress, or leftovers:
+# run.sh cleanup), and every run refuses while any *_m4263 function exists.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-usage() { sed -n '2,33p' "$0"; exit 2; }
+usage() { sed -n '2,44p' "$0"; exit 2; }
 CASE="${1:-}"; RUN="${2:-}"; MUT="${3:-}"
 umask 077
 tmp="$(mktemp -d)"
@@ -78,15 +86,23 @@ if [ "$MUT" = --mutant ]; then
   esac
 fi
 CLAIM_FN=cloud_claim_install; CONFIRM_FN=cloud_confirm_blob; OFF_FN=set_my_cloud_autosave; DEAL_FN=cloud_upsert_deal
+MUTANT_SIG=""
 case "$MUTANT_FILE" in
-  mutant-confirm-nolock.sql) CONFIRM_FN=cloud_confirm_blob_m4263 ;;
-  mutant-claim-nolock.sql) CLAIM_FN=cloud_claim_install_m4263 ;;
-  mutant-off-no-active-check.sql) OFF_FN=set_my_cloud_autosave_m4263 ;;
-  mutant-deal-gate-before-lock.sql) DEAL_FN=cloud_upsert_deal_m4263 ;;
+  mutant-confirm-nolock.sql) CONFIRM_FN=cloud_confirm_blob_m4263; MUTANT_SIG='cloud_confirm_blob_m4263(uuid,uuid,uuid)' ;;
+  mutant-claim-nolock.sql) CLAIM_FN=cloud_claim_install_m4263; MUTANT_SIG='cloud_claim_install_m4263(uuid,uuid,boolean)' ;;
+  mutant-off-no-active-check.sql) OFF_FN=set_my_cloud_autosave_m4263; MUTANT_SIG='set_my_cloud_autosave_m4263(uuid,boolean,integer,uuid)' ;;
+  mutant-deal-gate-before-lock.sql) DEAL_FN=cloud_upsert_deal_m4263; MUTANT_SIG='cloud_upsert_deal_m4263(uuid,jsonb)' ;;
 esac
+MODE=pristine; [ -n "$MUTANT_FILE" ] && MODE=mutant
+mutant_md5() {  # mutant_md5 <out>: md5(prosrc) of the mutant function, through verdict.py applied
+  printf '%s\n' "SELECT (SELECT md5(p.prosrc) FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure('public.${MUTANT_SIG}')) AS m;" > "$tmp/md5.tpl"
+  { cat "$here/guard.sql"; echo; cat "$tmp/md5.tpl"; } > "$tmp/md5.sql"
+  $K "$tmp/md5.sql" > "$tmp/$1" 2>&1 || true
+  python3 -I "$here/verdict.py" applied "${MUTANT_SIG%%(*}" "$tmp/$1"
+}
 
 uid() { python3 -c 'import uuid; print(uuid.uuid4())'; }
-A="$(uid)"; O="$(uid)"; M="$(uid)"; IA="$(uid)"; IB="$(uid)"; BLOB=""; SETUP_DONE=0; MUTANT_MADE=0; VERDICT=FAIL
+A="$(uid)"; O="$(uid)"; M="$(uid)"; IA="$(uid)"; IB="$(uid)"; BLOB=""; SETUP_DONE=0; MUTANT_MADE=0; VERDICT=ERROR
 case "$CASE" in R3) ACTIVE=none ;; *) ACTIVE=IA ;; esac
 echo "RUN ${RUN} case ${CASE}${MUTANT_FILE:+ mutant ${MUTANT_FILE}}: fixture email p4263s1cc-${RUN}@example.test, user ${A}"
 echo "  leftovers, if this run is killed: run.sh cleanup ${RUN}"
@@ -112,7 +128,7 @@ cleanup() {
   fi
   rm -rf "$tmp"
   echo "${CASE}${MUTANT_FILE:+ (mutant)}: ${VERDICT}"
-  [ "$VERDICT" = PASS ] || rc=1
+  case "$MODE:$VERDICT" in pristine:PASS|mutant:RED) ;; *) rc=1 ;; esac
   exit $rc
 }
 INTERRUPTED=0
@@ -121,7 +137,9 @@ trap 'INTERRUPTED=1; exit 130' INT TERM
 
 if [ -n "$MUTANT_FILE" ]; then
   MUTANT_MADE=1
-  guarded mutant.sql "$MUTANT_FILE"; $K "$tmp/mutant.sql" >/dev/null
+  guarded mutant.sql "$MUTANT_FILE"; $K "$tmp/mutant.sql" > "$tmp/mutant.out" 2>&1 || true
+  applied="$(mutant_md5 applied.out)" || { VERDICT="ERROR: ${applied}"; exit 1; }
+  echo "$applied"
 fi
 guarded setup.filled.sql setup.sql
 SETUP_DONE=1
@@ -149,47 +167,13 @@ case "$CASE" in
   R6) guarded a.sql as-user.sql r6-claim-ib-hold.sql; guarded b.sql gate.sql as-user.sql r6-write-ia.sql ;;
 esac
 pair a.sql b.sql
+if [ -n "$MUTANT_FILE" ]; then
+  still="$(mutant_md5 still.out)" || { VERDICT="ERROR: the mutant was gone by the end of the case (${still})"; exit 1; }
+  echo "mutant still present at the end of the case: ${still#MUTATION APPLIED }"
+fi
 guarded assert.filled.sql assert.sql
 $K "$tmp/assert.filled.sql" > "$tmp/state.out"
 echo "state:  $(cat "$tmp/state.out")"
 
-VERDICT="$(python3 - "$CASE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" "$IA" "$IB" <<'PY'
-import json, sys
-from datetime import datetime
-case, f1, f2, fs, ia, ib = sys.argv[1:7]
-def ts(x):
-    try:
-        return datetime.fromisoformat(str(x).replace('Z', '+00:00'))
-    except Exception:
-        return None
-def waited(a, b):
-    t0, t1 = ts(a.get('t_write')), ts(b.get('t_end'))
-    return t0 is not None and t1 is not None and (t1 - t0).total_seconds() >= 3.5
-def last_row(p):
-    t = open(p).read()
-    try:
-        r = json.loads(t.split('\nkt-sql:')[0])
-        return r[-1] if isinstance(r, list) and r else {}
-    except Exception:
-        return {}
-a, b, st = last_row(f1), last_row(f2), last_row(fs).get('j', {})
-ra, rb = a.get('r') or {}, b.get('r') or {}
-raw = open(f1).read() + open(f2).read()
-ok = '40P01' not in raw
-if case == 'R1':
-    ok = ok and (ra.get('results') or [{}])[0].get('status') == 'applied' and rb.get('ok') is True \
-        and waited(a, b) and st.get('active') == ib and st.get('deal_r1') == 1
-elif case == 'R2':
-    ok = ok and ra.get('error') == 'object_missing' and rb.get('ok') is True and waited(a, b) and st.get('active') == ib
-elif case == 'R3':
-    ok = ok and ra.get('ok') is True and rb.get('error') == 'computer_not_active' and st.get('active') == ia and st.get('moves') == 0
-elif case == 'R4':
-    ok = ok and ra.get('ok') is True and rb.get('error') == 'computer_not_active' and st.get('deals') == 2 \
-        and st.get('enabled') is True and st.get('active') == ib
-elif case == 'R5':
-    ok = ok and ra.get('success') is True and rb.get('error') == 'not_entitled' and st.get('moves') == 0 and st.get('deals') == 0
-elif case == 'R6':
-    ok = ok and ra.get('ok') is True and rb.get('error') == 'computer_not_active' and st.get('deal_r6') == 0 and st.get('active') == ib
-print('PASS' if ok else 'FAIL')
-PY
-)"
+VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MODE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" "$IA" "$IB" || true)"
+[ -n "$VERDICT" ] || VERDICT="ERROR: no verdict"

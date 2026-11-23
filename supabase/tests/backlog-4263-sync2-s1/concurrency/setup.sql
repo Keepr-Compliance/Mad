@@ -6,6 +6,10 @@
 DO $s1cc$
 DECLARE A uuid := '__A__'::uuid; O uuid := '__O__'::uuid; r jsonb;
 BEGIN
+  -- one run at a time: refuse while another run's fixture user (or a leftover) exists
+  IF EXISTS (SELECT 1 FROM auth.users u WHERE u.email LIKE 'p4263s1cc-%@example.test') THEN
+    RAISE EXCEPTION 'another run is in progress or left fixtures behind (p4263s1cc-*@example.test): run.sh cleanup';
+  END IF;
   SET LOCAL session_replication_role = replica;
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   VALUES (A, 'p4263s1cc-__RUN__@example.test', 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());

@@ -96,3 +96,4 @@ run.sh cleanup <run-id>|all       # leftovers of one run, or of every run, and a
 | `concurrency/run.sh` | Two-session controls R1–R6, `--mutant`, `cleanup` |
 | `concurrency/guard.sql`, `drop-mutants.sql`, `mutant-*.sql` | Generated: the guard every sent file starts with; the mutant drop and check; the four own-name mutants |
 | `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `sweep.sql`, `gate.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql` | Hand-written fixtures, teardown, checks and session statements |
+| `concurrency/verdict.py`, `selftest.py` | Hand-written verdict of a case, and its offline self-test (26 canned outputs) |
