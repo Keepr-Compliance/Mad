@@ -29,8 +29,10 @@
 --    message rows of deals whose source_install_id is not the owner's active_install_id, while
 --    cloud_release_switches.one_computer is on, are removed and scrubbed as cloud_tombstone does, and their blobs
 --    fenced through _cloud_fence_unreferenced. Lock order: the owner's settings row FOR SHARE SKIP LOCKED (a claim or
---    turn-off holding it skips this owner), then file rows, then message rows (FOR UPDATE, id order), then blobs.
---    The active computer and the switch are read under that lock and re-checked in each UPDATE.
+--    turn-off holding it skips this owner), then the cloud_release_switches row FOR SHARE (a change of the switch
+--    waits for the batch), then file rows, then message rows (FOR UPDATE, id order), then blobs. The active computer
+--    is read under the settings lock and re-checked in each UPDATE; the switch is read under its own row lock.
+--    A dry run takes none of these locks.
 -- 7. cloud_blob_erase_invoke()   pg_net POST to the Edge Function, called by the cron job. No API role.
 --
 -- Requires 20261123100000 (cloud_autosave_settings.active_install_id and active_since,
@@ -352,7 +354,12 @@ BEGIN
     END IF;
     RETURN jsonb_build_object('state', 'none', 'scrubbed', 0, 'more', false);
   END IF;
-  v_on := coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false);   /*SCRUB:switch*/
+  IF p_dry_run THEN
+    v_on := coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false);
+  ELSE
+    v_on := coalesce((SELECT bool_or(x.one_computer)
+                        FROM (SELECT w.one_computer FROM public.cloud_release_switches w FOR SHARE) x), false);   /*SCRUB:switch*/
+  END IF;
   IF NOT v_on OR v_active IS NULL THEN                                                       /*SCRUB:applies*/
     RETURN jsonb_build_object('state', 'not_applicable', 'scrubbed', 0, 'more', false);
   END IF;

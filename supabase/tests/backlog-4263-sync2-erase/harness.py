@@ -150,8 +150,8 @@ def mutants():
         ("     AND EXISTS (SELECT 1 FROM public.cloud_deals d WHERE d.id = f.cloud_deal_id\n"
          "                  AND d.source_install_id IS DISTINCT FROM v_active);                        /*SCRUB:recheck_files*/", ";")], P('p_c6f()')))
     m.append(fn_mutant('C6f_switch_ignored', S, [(
-        "  v_on := coalesce((SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w), false);   /*SCRUB:switch*/",
-        "  v_on := true;")], P('p_scrub_off()')))
+        "    v_on := coalesce((SELECT bool_or(x.one_computer)\n                        FROM (SELECT w.one_computer FROM public.cloud_release_switches w FOR SHARE) x), false);   /*SCRUB:switch*/",
+        "    v_on := true;")], P('p_scrub_off()')))
     m.append(fn_mutant('C6f_null_active_scrubs', S, [("  IF NOT v_on OR v_active IS NULL THEN                                                       /*SCRUB:applies*/",
                                                       "  IF NOT v_on THEN")], P('p_scrub_off()')))
     m.append(fn_mutant('C6f_batch_cap_raised', S, [("p_limit NOT BETWEEN 1 AND 1000 THEN", "p_limit NOT BETWEEN 1 AND 100000 THEN")], P('p_c6f()')))

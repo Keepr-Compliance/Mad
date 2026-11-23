@@ -43,7 +43,7 @@
     },
     "20261123110000": {
       "file": "supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql",
-      "file_md5": "ebc9f204a55695c8bc72a575b7772e6c"
+      "file_md5": "88906ace6fe8283c43aa424990575566"
     },
     "20261123120000": {
       "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",

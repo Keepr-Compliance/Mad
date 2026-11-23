@@ -152,7 +152,7 @@ describe('BACKLOG-4263 cloud blob erase migration (E1)', () => {
     const body = fnBody('cloud_blob_erase_scrub');
     expect(body).toContain('p_limit NOT BETWEEN 1 AND 1000');
     const lock = body.indexOf('FOR SHARE SKIP LOCKED;');
-    const sw = body.indexOf('SELECT bool_or(w.one_computer) FROM public.cloud_release_switches w');
+    const sw = body.indexOf('FROM (SELECT w.one_computer FROM public.cloud_release_switches w FOR SHARE) x), false);');
     const files = body.indexOf('FOR UPDATE OF f');
     const msgs = body.indexOf('FOR UPDATE OF m');
     const fence = body.indexOf('public._cloud_fence_unreferenced(p_owner, v_blobs)');
@@ -162,6 +162,7 @@ describe('BACKLOG-4263 cloud blob erase migration (E1)', () => {
     expect(msgs).toBeGreaterThan(files);
     expect(fence).toBeGreaterThan(msgs);
     expect(body).toContain('IF NOT v_on OR v_active IS NULL THEN');
+    expect(count(body, 'FROM public.cloud_release_switches w FOR SHARE')).toBe(1);
     expect(count(body, 'ORDER BY f.id LIMIT p_limit FOR UPDATE OF f')).toBe(1);
     expect(count(body, 'ORDER BY m.id LIMIT p_limit - v_nf FOR UPDATE OF m')).toBe(1);
     expect(count(body, 'AND d.source_install_id IS DISTINCT FROM v_active);')).toBe(2);
