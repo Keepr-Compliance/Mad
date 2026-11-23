@@ -10,7 +10,9 @@
 
 `python3 gen.py`         writes these files
 `python3 gen.py check`   fails when a written file differs from what the migrations give now
-`python3 gen.py report <kt-sql output>`  reads the harness result and prints PASS / FAIL per control and RED / GREEN per mutant
+`python3 gen.py report <kt-sql output>`  reads the harness result (kt-sql's JSON body or plain text) and prints PASS / FAIL
+                                          per control and RED / GREEN per mutant; exit 0 only when all is as expected
+`python3 gen.py selftest`  report() on canned outputs in both shapes; `selftest --control-green-ok` is its control (must fail)
 """
 import hashlib
 import json
@@ -171,6 +173,9 @@ MUTANTS += [
      mutant('cloud_tombstone', TOMB_FILES, TOMB_FILES.replace('f.cloud_message_id = v_row_id AND ', '')), 'c_cascade'),
     ('M_tomb_cascade_no_fence', 'cloud_tombstone',
      mutant('cloud_tombstone', 'FILTER (WHERE x.blob_id IS NOT NULL)', 'FILTER (WHERE false)'), 'c7c_off_tombstone'),
+    ('M_tomb_cascade_rewrites_removed', 'cloud_tombstone',  # the cascade also re-removes a file row that is already removed
+     mutant('cloud_tombstone', "\n         AND f.removed_at IS NULL;                                                              /*TOMB:msgfiles*/",
+            ";                                                              /*TOMB:msgfiles*/"), 'c_cascade_keeps_removed'),
     ('M_noqueue_dropped', 'cloud_upsert_messages', mutant('cloud_upsert_messages', NOQUEUE, ''), 'c_review_queue'),
     ('M_noqueue_after_insert', 'cloud_upsert_messages',
      sub1(mutant('cloud_upsert_messages', NOQUEUE, ''), INSERT_LINE, INSERT_LINE + NOQUEUE), 'c_review_queue'),
@@ -276,6 +281,16 @@ CASES['c_cascade'] = """
     AND (rb -> 'results' -> 0 ->> 'status') = 'unchanged' AND (v -> 'results' -> 0 ->> 'status') = 'unchanged'
     AND (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f1')) = x_n,
     jsonb_build_object('first', ra, 'again', rb, 'file', v, 'files', pg_temp.files_state())::text);"""
+CASES['c_cascade_keeps_removed'] = """
+  PERFORM pg_temp.upload(true);
+  ra := pg_temp.call('cloud_tombstone', '%L::uuid, %L::uuid, %L::text, %L::uuid[]', pg_temp.s('A'), pg_temp.s('IA'), 'file', ARRAY[pg_temp.f('f2')]::text);
+  x_n := (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2'));
+  rb := pg_temp.call('cloud_tombstone', '%L::uuid, %L::uuid, %L::text, %L::uuid[]', pg_temp.s('A'), pg_temp.s('IA'), 'message', ARRAY[pg_temp.f('m1')]::text);
+  RETURN pg_temp.pass((ra -> 'results' -> 0 ->> 'status') = 'removed' AND (rb -> 'results' -> 0 ->> 'status') = 'removed'
+                      AND (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2')) = x_n
+                      AND (SELECT f.removed_at IS NOT NULL AND f.version > 0 FROM public.cloud_deal_files f WHERE f.id = pg_temp.f('f1')),
+                      jsonb_build_object('file', ra, 'message', rb, 'f2_version_before', x_n,
+                                         'f2_version_after', (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2')))::text);"""
 CASES['c_review_queue'] = """
   PERFORM pg_temp.upload(true);
   x_n := pg_temp.msgs();
@@ -673,26 +688,116 @@ OUTS = {os.path.join(HERE, f'apply-{S2_VERSION}.sql'): APPLY,
         os.path.join(HERE, f'rollback-{S2_VERSION}.sql'): ROLLBACK,
         os.path.join(HERE, 'harness-s2.sql'): HARNESS}
 
-if len(sys.argv) > 2 and sys.argv[1] == 'report':
-    raw = open(sys.argv[2]).read()
-    msg = raw[raw.index('S2_RESULT ') + 10:]
-    res = json.loads(msg[:msg.rindex('}') + 1])
-    bad = 0
+GREEN_OK = False  # selftest's own control flips this to make report() count GREEN mutants as ok; it must then go red
+
+
+def unwrap(raw):
+    """The harness's RAISE text from kt-sql's output: drop its 'kt-sql: ...' status lines; when what is left is the
+    Management API's JSON body {"message": "..."}, take the message; otherwise (plain psql-style text) keep it."""
+    text = '\n'.join(l for l in raw.replace('\r\n', '\n').split('\n') if not l.startswith('kt-sql: ')).strip()
+    try:
+        body = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(body, dict) and isinstance(body.get('message'), str):
+        return body['message']
+    return text
+
+
+def report(raw):
+    """(printed lines, ok). ok only when every control is PASS, every mutant is applied and RED on its primary control
+    (FAIL:, not ERROR), no mutant carries an error, and the rollback step is ok. Anything unreadable is not ok.
+    S2 has no mutant that is expected to stay green."""
+    msg = unwrap(raw)
+    i = msg.find('S2_RESULT ')
+    if i < 0:
+        return ['NOT OK: no S2_RESULT in the output: ' + msg[:300].replace('\n', ' ')], False
+    try:
+        res, _ = json.JSONDecoder().raw_decode(msg[i + len('S2_RESULT '):])
+    except ValueError as e:
+        return [f'NOT OK: S2_RESULT is not complete JSON ({e})'], False
+    if not isinstance(res, dict) or not isinstance(res.get('controls'), dict):
+        return ['NOT OK: S2_RESULT has no controls object'], False
+    out, bad = [], 0
     for c in ORDER:
-        r = res.get('controls', {}).get(c, 'missing')
+        r = res['controls'].get(c, 'missing')
         bad += r != 'PASS'
-        print(('PASS ' if r == 'PASS' else 'FAIL ') + c + ('' if r == 'PASS' else ': ' + str(r)[:600]))
+        out.append(('PASS ' if r == 'PASS' else 'FAIL ') + c + ('' if r == 'PASS' else ': ' + str(r)[:600]))
     for mid, _, _, primary in MUTANTS:
-        o = res.get('mutant:' + mid, {})
+        o = res.get('mutant:' + mid)
+        o = o if isinstance(o, dict) else {}
         red = sorted(c for c in ORDER if o.get(c, 'PASS') != 'PASS')
-        # RED only when the mutant was applied and its own control reads FAIL: (an ERROR is not a caught mutant)
         ok = o.get('applied') is True and str(o.get(primary, '')).startswith('FAIL:') and 'error' not in o
-        bad += not ok
-        print(('RED  ' if ok else 'GREEN') + f' {mid}: applied={o.get("applied")} primary={primary} red={red}' + (f' error={o.get("error")}' if 'error' in o else ''))
-    print('rollback: ' + str(res.get('rollback')))
+        bad += not (ok or GREEN_OK)
+        out.append(('RED  ' if ok else 'GREEN') + f' {mid}: applied={o.get("applied")} primary={primary} red={red}' + (f' error={o.get("error")}' if 'error' in o else ''))
+    out.append('rollback: ' + str(res.get('rollback')))
     bad += res.get('rollback') != 'ok'
-    print(f"time: {res.get('t_start')} -> {res.get('t_end')}")
-    sys.exit(1 if bad else 0)
+    out.append(f"time: {res.get('t_start')} -> {res.get('t_end')}")
+    out.append(f'controls {len(ORDER)} mutants {len(MUTANTS)}: ' + ('OK' if not bad else f'NOT OK ({bad} not as expected)'))
+    return out, not bad
+
+
+def selftest():
+    """Offline: report() on canned outputs in kt-sql's two shapes (verdict lines only, no row data), built from ORDER and
+    MUTANTS so they cannot go stale. Returns the failing case labels."""
+    def result(controls=None, mutants=None, rollback='ok'):
+        r = {'t_start': '2026-11-23T07:21:22.908979+00:00', 't_end': '2026-11-23T07:21:26.300032+00:00', 'rollback': rollback,
+             'controls': {c: 'PASS' for c in ORDER}}
+        r['controls'].update(controls or {})
+        for mid, _, _, primary in MUTANTS:
+            r['mutant:' + mid] = {**{c: 'PASS' for c in ORDER}, 'applied': True, primary: 'FAIL: {"x": 1}'}
+        for mid, o in (mutants or {}).items():
+            r['mutant:' + mid].update(o)
+        return 'ERROR:  P0001: S2_RESULT ' + json.dumps(r) + '\nCONTEXT:  PL/pgSQL function inline_code_block line 4 at RAISE\n'
+    plain = lambda m: m
+    api = lambda m: json.dumps({'message': 'Failed to run sql query: ' + m}) + '\nkt-sql: HTTP 400\n'
+    cases = [('all PASS / RED', result(), True, f'controls {len(ORDER)} mutants {len(MUTANTS)}: OK')]
+    for mid, _, _, primary in MUTANTS:  # every mutant, green on its own primary control
+        cases.append((f'GREEN {mid}', result(mutants={mid: {primary: 'PASS'}}), False, f'GREEN {mid}'))
+    first_mid, first_primary = MUTANTS[0][0], MUTANTS[0][3]
+    cases += [
+        ('mutant not applied', result(mutants={first_mid: {'applied': False}}), False, f'GREEN {first_mid}: applied=False'),
+        ('primary ERROR is not RED', result(mutants={first_mid: {first_primary: 'ERROR 42883 x'}}), False, f'GREEN {first_mid}'),
+        ('mutant error key', result(mutants={first_mid: {'error': 'MUTATION NOT APPLIED'}}), False, 'error=MUTATION NOT APPLIED'),
+        ('control ERROR', result(controls={ORDER[0]: 'ERROR P0001 boom'}), False, f'FAIL {ORDER[0]}: ERROR'),
+        ('control FAIL', result(controls={ORDER[-1]: 'FAIL: {}'}), False, f'FAIL {ORDER[-1]}'),
+        ('rollback ERROR', result(rollback='ERROR 55P03 lock'), False, 'rollback: ERROR'),
+        ('crash before result', 'ERROR:  P0001: harness-s2.sql refuses to run: TEST DATABASE ONLY\n', False, 'no S2_RESULT'),
+        ('truncated result', result()[:4000], False, 'not complete JSON'),
+        ('empty', '', False, 'no S2_RESULT'),
+    ]
+    fails = []
+    for label, text, want, needle in cases:
+        for shape, wrap in (('plain', plain), ('kt-sql json', api)):
+            raw = wrap(text) if text else ('' if shape == 'plain' else '\nkt-sql: HTTP 400\n')
+            try:
+                lines, ok = report(raw)
+            except Exception as e:  # a crash is a failure of the parser
+                lines, ok = [f'CRASH {type(e).__name__}: {e}'], None
+            got = '\n'.join(lines)
+            good = ok is want and needle in got
+            print(('ok   ' if good else 'FAIL ') + f'{label} [{shape}]: ok={ok}' + ('' if good else ' | ' + got[-300:]))
+            fails += [] if good else [f'{label} [{shape}]']
+    for label, raw in (('success-shaped array', '[{"x": 1}]'), ('API body without S2_RESULT', api('ERROR:  42P01: relation x does not exist')),
+                       ('S1 result is not S2', api(result().replace('S2_RESULT', 'S1_RESULT')))):
+        lines, ok = report(raw)
+        good = ok is False
+        print(('ok   ' if good else 'FAIL ') + f'{label}: ok={ok}')
+        fails += [] if good else [label]
+    return fails
+
+
+if len(sys.argv) > 2 and sys.argv[1] == 'report':
+    lines, ok = report(open(sys.argv[2], encoding='utf-8').read())
+    print('\n'.join(lines))
+    sys.exit(0 if ok else 1)
+if len(sys.argv) > 1 and sys.argv[1] == 'selftest':
+    if len(sys.argv) > 2 and sys.argv[2] == '--control-green-ok':  # the selftest's own control: must exit non-zero
+        GREEN_OK = True
+        print('MUTATION APPLIED report() counts GREEN mutants as ok')
+    f = selftest()
+    print(f'selftest: {"all cases as expected" if not f else "FAILED: " + ", ".join(f)}')
+    sys.exit(1 if f else 0)
 if len(sys.argv) > 1 and sys.argv[1] == 'check':
     diff = [os.path.relpath(k, REPO) for k, v in OUTS.items() if not os.path.exists(k) or open(k, encoding='utf-8').read() != v]
     print('differs: ' + ', '.join(diff) if diff else 'all generated files match')

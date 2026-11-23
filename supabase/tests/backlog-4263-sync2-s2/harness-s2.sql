@@ -2,8 +2,8 @@
 -- TEST DATABASE ONLY. This file ends in a rollback and must never be run on production.
 -- BACKLOG-4263 sync 2.49, P4: run AFTER supabase/migrations/20261123130000_backlog_4263_messages_up_server.sql is applied (file md5 3747c63326ab1d99d6942b07bb8c491d).
 -- ONE call (~/.claude/bin/kt-sql harness-s2.sql) that ends in RAISE, so nothing persists. Order: guard (refuses any database
--- that is not the test database) -> applied check -> helpers and fixtures -> 15 controls, each in a subtransaction
--- that is undone -> 22 mutants, each proven installed (md5 of the mutated body) before every control runs again
+-- that is not the test database) -> applied check -> helpers and fixtures -> 16 controls, each in a subtransaction
+-- that is undone -> 23 mutants, each proven installed (md5 of the mutated body) before every control runs again
 -- under it -> the rollback file and its post-check -> RAISE 'S2_RESULT <json>'.
 -- Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()".
 -- Rows it touches: only rows it inserts for its own fixture user (auth.users, public.users, organizations,
@@ -298,6 +298,19 @@ BEGIN
     AND (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f1')) = x_n,
     jsonb_build_object('first', ra, 'again', rb, 'file', v, 'files', pg_temp.files_state())::text);
 END $c$;
+CREATE FUNCTION pg_temp.c_cascade_keeps_removed() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE v jsonb; ra jsonb; rb jsonb; x_j jsonb; before text; after text; x_n bigint;
+BEGIN
+  PERFORM pg_temp.upload(true);
+  ra := pg_temp.call('cloud_tombstone', '%L::uuid, %L::uuid, %L::text, %L::uuid[]', pg_temp.s('A'), pg_temp.s('IA'), 'file', ARRAY[pg_temp.f('f2')]::text);
+  x_n := (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2'));
+  rb := pg_temp.call('cloud_tombstone', '%L::uuid, %L::uuid, %L::text, %L::uuid[]', pg_temp.s('A'), pg_temp.s('IA'), 'message', ARRAY[pg_temp.f('m1')]::text);
+  RETURN pg_temp.pass((ra -> 'results' -> 0 ->> 'status') = 'removed' AND (rb -> 'results' -> 0 ->> 'status') = 'removed'
+                      AND (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2')) = x_n
+                      AND (SELECT f.removed_at IS NOT NULL AND f.version > 0 FROM public.cloud_deal_files f WHERE f.id = pg_temp.f('f1')),
+                      jsonb_build_object('file', ra, 'message', rb, 'f2_version_before', x_n,
+                                         'f2_version_after', (SELECT version FROM public.cloud_deal_files WHERE id = pg_temp.f('f2')))::text);
+END $c$;
 CREATE FUNCTION pg_temp.c_review_queue() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE v jsonb; ra jsonb; rb jsonb; x_j jsonb; before text; after text; x_n bigint;
 BEGIN
@@ -482,6 +495,13 @@ BEGIN
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     base := base || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    base := base || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -684,6 +704,13 @@ $mu0$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -907,6 +934,13 @@ $mu1$;
     END;
     o := o || jsonb_build_object('c_cascade', res);
     BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
+    BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
@@ -1051,6 +1085,13 @@ $mu2$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -1250,6 +1291,13 @@ $mu3$;
     END;
     o := o || jsonb_build_object('c_cascade', res);
     BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
+    BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
@@ -1411,6 +1459,13 @@ $mu4$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -1595,6 +1650,13 @@ $mu5$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -1791,6 +1853,13 @@ $mu6$;
     END;
     o := o || jsonb_build_object('c_cascade', res);
     BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
+    BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
@@ -1986,6 +2055,13 @@ $mu7$;
     END;
     o := o || jsonb_build_object('c_cascade', res);
     BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
+    BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
@@ -2053,10 +2129,211 @@ $mu7$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:M_tomb_cascade_no_fence', o || jsonb_build_object('applied', applied, 'primary', 'c7c_off_tombstone'));
-  -- M_noqueue_dropped (primary control c_review_queue)
+  -- M_tomb_cascade_rewrites_removed (primary control c_cascade_keeps_removed)
   BEGIN
     o := '{}';
     EXECUTE $mu8$
+CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_cloud_ids uuid[]) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+/*BODY:4263-4a*/
+DECLARE v_uid uuid := auth.uid(); v_tab text; v_id uuid; out jsonb := '[]'::jsonb;
+        v_row_id uuid; v_row_deal uuid; v_row_removed timestamptz; v_row_version bigint; v_blob uuid; v_deals uuid[];
+        v_fence uuid[] := '{}'; v_now timestamptz;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:tombstone*/
+  -- checklists and items are todo changes (cloud_todo_push) since 20261118120000: no arm for them here
+  v_tab := CASE p_kind WHEN 'party' THEN 'cloud_deal_parties' WHEN 'message' THEN 'cloud_deal_messages'
+                       WHEN 'file' THEN 'cloud_deal_files' END;
+  IF v_tab IS NULL OR p_source_install_id IS NULL OR p_cloud_ids IS NULL OR cardinality(p_cloud_ids) > 1000 THEN   /*CAP:tombstone*/
+    RETURN jsonb_build_object('ok', false, 'error', 'invalid_input');
+  END IF;
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                       /*GATE:install:tombstone*/
+    RETURN jsonb_build_object('ok', false, 'error', 'install_removed');
+  END IF;
+  IF public._cloud_install_inactive(v_uid, p_source_install_id) THEN                         /*GATE:active:tombstone*/
+    RETURN jsonb_build_object('ok', false, 'error', 'computer_not_active');
+  END IF;
+  EXECUTE format(
+    'SELECT array_agg(x.id) FROM (SELECT d.id FROM public.cloud_deals d
+       WHERE d.owner_user_id = $1 AND d.source_install_id = $2
+         AND d.id IN (SELECT t.cloud_deal_id FROM public.%I t WHERE t.id = ANY ($3) AND t.owner_user_id = $1)
+       ORDER BY d.id FOR NO KEY UPDATE) x', v_tab)
+    INTO v_deals USING v_uid, p_source_install_id, p_cloud_ids;                              /*TOMB:lockdeals*/
+  v_now := clock_timestamp();                                                                /*CLOCK:tombstone*/
+  FOREACH v_id IN ARRAY p_cloud_ids LOOP
+    v_row_id := NULL;
+    EXECUTE format(
+      'SELECT t.id, t.cloud_deal_id, t.removed_at, t.version FROM public.%I t
+         JOIN public.cloud_deals d ON d.id = t.cloud_deal_id
+        WHERE t.id = $1 AND t.owner_user_id = $2 /*OWNER:tombstone*/
+          AND d.source_install_id = $3 /*INSTALL:tombstone*/
+        FOR UPDATE OF t', v_tab)
+      INTO v_row_id, v_row_deal, v_row_removed, v_row_version USING v_id, v_uid, p_source_install_id;
+    IF v_row_id IS NULL THEN
+      out := out || jsonb_build_object('cloud_id', v_id, 'status', 'not_found');
+      CONTINUE;
+    END IF;
+    IF v_row_removed IS NOT NULL THEN
+      out := out || jsonb_build_object('cloud_id', v_id, 'status', 'unchanged', 'version', v_row_version);
+      CONTINUE;
+    END IF;
+    IF p_kind = 'party' THEN
+      UPDATE public.cloud_deal_parties SET removed_at = now(), version = version + 1, updated_at = now(),
+             display_name = NULL, company = NULL, emails = NULL, phones = NULL, notes = NULL
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+    ELSIF p_kind = 'message' THEN
+      UPDATE public.cloud_deal_messages SET removed_at = now(), version = version + 1, updated_at = now(),
+             subject = NULL, body_text = NULL, body_truncated = false, participants = NULL          /*TOMB:scrub*/
+       WHERE id = v_row_id RETURNING version INTO v_row_version;
+      -- the message's live file rows are removed in the same call, as kind 'file' removes them; their blobs are fenced below
+      SELECT v_fence || coalesce(array_agg(x.blob_id ORDER BY x.id) FILTER (WHERE x.blob_id IS NOT NULL), '{}')
+        INTO v_fence
+        FROM (SELECT f.id, f.blob_id FROM public.cloud_deal_files f
+               WHERE f.cloud_message_id = v_row_id AND f.cloud_deal_id = v_row_deal AND f.owner_user_id = v_uid
+                 AND f.removed_at IS NULL
+               ORDER BY f.id FOR UPDATE) x;                                                     /*TOMB:msgfiles:lock*/
+      UPDATE public.cloud_deal_files f SET removed_at = now(), version = f.version + 1, updated_at = now(),
+             filename = NULL, blob_id = NULL
+       WHERE f.cloud_message_id = v_row_id AND f.cloud_deal_id = v_row_deal AND f.owner_user_id = v_uid;                                                              /*TOMB:msgfiles*/
+    ELSE
+      SELECT f.blob_id INTO v_blob FROM public.cloud_deal_files f WHERE f.id = v_row_id;
+      UPDATE public.cloud_deal_files f SET removed_at = now(), version = version + 1, updated_at = now(),
+             filename = NULL, blob_id = NULL
+       WHERE f.id = v_row_id RETURNING f.version INTO v_row_version;
+      v_fence := v_fence || v_blob;
+    END IF;
+    UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, v_now) WHERE id = v_row_deal;
+    out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);
+  END LOOP;
+  PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
+  RETURN jsonb_build_object('ok', true, 'results', out);
+END $f$;
+$mu8$;
+    applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_tombstone(uuid,uuid,text,uuid[])')) IS NOT DISTINCT FROM 'b4751ed52d1d94b110d486ac13380ef2';
+    IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
+    BEGIN
+      res := pg_temp.c7a_messages();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7a_messages', res);
+    BEGIN
+      res := pg_temp.c7a_files();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7a_files', res);
+    BEGIN
+      res := pg_temp.c7a_register();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7a_register', res);
+    BEGIN
+      res := pg_temp.c7a_not_gated();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7a_not_gated', res);
+    BEGIN
+      res := pg_temp.c7c_off_tombstone();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7c_off_tombstone', res);
+    BEGIN
+      res := pg_temp.c_cascade();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
+    BEGIN
+      res := pg_temp.c_review_queue();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_review_queue', res);
+    BEGIN
+      res := pg_temp.c_link_state();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_link_state', res);
+    BEGIN
+      res := pg_temp.c_hidden();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_hidden', res);
+    BEGIN
+      res := pg_temp.c_caps();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_caps', res);
+    BEGIN
+      res := pg_temp.c7b_list_message();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7b_list_message', res);
+    BEGIN
+      res := pg_temp.c7b_list_file();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c7b_list_file', res);
+    BEGIN
+      res := pg_temp.c_list_empty();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_list_empty', res);
+    BEGIN
+      res := pg_temp.c_list_shape();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_list_shape', res);
+    BEGIN
+      res := pg_temp.c_active_gates();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_active_gates', res);
+    RAISE EXCEPTION 'undo-mutant';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+  END;
+  PERFORM pg_temp.rec('mutant:M_tomb_cascade_rewrites_removed', o || jsonb_build_object('applied', applied, 'primary', 'c_cascade_keeps_removed'));
+  -- M_noqueue_dropped (primary control c_review_queue)
+  BEGIN
+    o := '{}';
+    EXECUTE $mu9$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -2145,7 +2422,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu8$;
+$mu9$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM '9c9b346cf1747d05af2caab5fb4338c7';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -2190,6 +2467,13 @@ $mu8$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -2261,7 +2545,7 @@ $mu8$;
   -- M_noqueue_after_insert (primary control c_review_queue)
   BEGIN
     o := '{}';
-    EXECUTE $mu9$
+    EXECUTE $mu10$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -2354,7 +2638,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu9$;
+$mu10$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM '9b542a1b51a18c88282dab55590b758d';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -2399,6 +2683,13 @@ $mu9$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -2470,7 +2761,7 @@ $mu9$;
   -- M_linkstate_no_review (primary control c_link_state)
   BEGIN
     o := '{}';
-    EXECUTE $mu10$
+    EXECUTE $mu11$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -2562,7 +2853,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu10$;
+$mu11$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM '7493c8e95618c28218482edd459a17f5';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -2607,6 +2898,13 @@ $mu10$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -2678,7 +2976,7 @@ $mu10$;
   -- M_hidden_dropped (primary control c_hidden)
   BEGIN
     o := '{}';
-    EXECUTE $mu11$
+    EXECUTE $mu12$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -2771,7 +3069,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu11$;
+$mu12$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM '781d5064f9ab3ffb85c2ede484ec749b';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -2816,6 +3114,13 @@ $mu11$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -2887,7 +3192,7 @@ $mu11$;
   -- M_list_message_deal_removed (primary control c7b_list_message)
   BEGIN
     o := '{}';
-    EXECUTE $mu12$
+    EXECUTE $mu13$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -2930,7 +3235,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu12$;
+$mu13$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM 'fb1c6c85ac0a28ac6716db0bcb48547c';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -2975,6 +3280,13 @@ $mu12$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3046,7 +3358,7 @@ $mu12$;
   -- M_list_file_deal_removed (primary control c7b_list_file)
   BEGIN
     o := '{}';
-    EXECUTE $mu13$
+    EXECUTE $mu14$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -3089,7 +3401,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu13$;
+$mu14$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM 'ad291ec24c08ae2970f0d8090f7233e2';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3134,6 +3446,13 @@ $mu13$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3205,7 +3524,7 @@ $mu13$;
   -- M_list_no_channel (primary control c7b_list_message)
   BEGIN
     o := '{}';
-    EXECUTE $mu14$
+    EXECUTE $mu15$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -3242,7 +3561,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu14$;
+$mu15$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM 'a955c96c7e8a3a47549143b305541690';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3287,6 +3606,13 @@ $mu14$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3358,7 +3684,7 @@ $mu14$;
   -- M_list_channel_every_kind (primary control c_list_shape)
   BEGIN
     o := '{}';
-    EXECUTE $mu15$
+    EXECUTE $mu16$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -3401,7 +3727,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu15$;
+$mu16$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM '0f990765c4ab26edb0e7c2972f823633';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3446,6 +3772,13 @@ $mu15$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3517,7 +3850,7 @@ $mu15$;
   -- M_list_empty_null (primary control c_list_empty)
   BEGIN
     o := '{}';
-    EXECUTE $mu16$
+    EXECUTE $mu17$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -3560,7 +3893,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu16$;
+$mu17$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM '2514e3afacb52b0639e901280c6207b7';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3605,6 +3938,13 @@ $mu16$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3676,7 +4016,7 @@ $mu16$;
   -- M_list_order_reversed (primary control c7b_list_message)
   BEGIN
     o := '{}';
-    EXECUTE $mu17$
+    EXECUTE $mu18$
 CREATE OR REPLACE FUNCTION public.cloud_list_install_rows(
   p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_after uuid, p_limit integer
 ) RETURNS jsonb
@@ -3719,7 +4059,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'rows', v_rows,
                             'next_after', CASE WHEN v_n = v_limit THEN v_last END);
 END $f$;
-$mu17$;
+$mu18$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_list_install_rows(uuid,uuid,text,uuid,integer)')) IS NOT DISTINCT FROM '41cac5d270d112bbd5054df4b95a9ec8';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3764,6 +4104,13 @@ $mu17$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -3835,7 +4182,7 @@ $mu17$;
   -- M_active_messages (primary control c_active_gates)
   BEGIN
     o := '{}';
-    EXECUTE $mu18$
+    EXECUTE $mu19$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -3925,7 +4272,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu18$;
+$mu19$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM 'e92a5a3887397a7650162a4a2742d65b';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -3970,6 +4317,13 @@ $mu18$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -4041,7 +4395,7 @@ $mu18$;
   -- M_active_files (primary control c_active_gates)
   BEGIN
     o := '{}';
-    EXECUTE $mu19$
+    EXECUTE $mu20$
 CREATE OR REPLACE FUNCTION public.cloud_upsert_files(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263*/
@@ -4147,7 +4501,7 @@ BEGIN
   UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:files*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu19$;
+$mu20$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_files(uuid,uuid,uuid,jsonb)')) IS NOT DISTINCT FROM '64777f98a19a56c370298e0f3b47a763';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -4192,6 +4546,13 @@ $mu19$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -4263,7 +4624,7 @@ $mu19$;
   -- M_active_register (primary control c_active_gates)
   BEGIN
     o := '{}';
-    EXECUTE $mu20$
+    EXECUTE $mu21$
 CREATE OR REPLACE FUNCTION public.cloud_register_blob(p_expected_user_id uuid, p_source_install_id uuid, p_sha256 text, p_size_bytes bigint,
                                                       p_mime_type text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
@@ -4292,7 +4653,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'blob_id', b.id, 'storage_path', b.storage_path,
     'state', CASE WHEN b.id = v_id THEN 'new' WHEN b.uploaded_at IS NULL THEN 'pending' ELSE 'uploaded' END);
 END $f$;
-$mu20$;
+$mu21$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_register_blob(uuid,uuid,text,bigint,text)')) IS NOT DISTINCT FROM 'f45cac642ab49dff205b2e105c6d7e14';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -4337,6 +4698,13 @@ $mu20$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
@@ -4408,7 +4776,7 @@ $mu20$;
   -- M_active_tombstone (primary control c_active_gates)
   BEGIN
     o := '{}';
-    EXECUTE $mu21$
+    EXECUTE $mu22$
 CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_cloud_ids uuid[]) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 /*BODY:4263-4a*/
@@ -4484,7 +4852,7 @@ BEGIN
   PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-$mu21$;
+$mu22$;
     applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_tombstone(uuid,uuid,text,uuid[])')) IS NOT DISTINCT FROM '19ea4abdfa219cb6287eac286f2b251b';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
@@ -4529,6 +4897,13 @@ $mu21$;
       IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
     END;
     o := o || jsonb_build_object('c_cascade', res);
+    BEGIN
+      res := pg_temp.c_cascade_keeps_removed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_cascade_keeps_removed', res);
     BEGIN
       res := pg_temp.c_review_queue();
       RAISE EXCEPTION 'undo-case';
