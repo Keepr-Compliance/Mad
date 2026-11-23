@@ -6,7 +6,9 @@ written file is stale or a mutant fragment does not match exactly once; it print
 `broker-portal/__tests__/migrations/mcp-message-tools-4263.test.ts` checks the files' text in CI (no database there).
 
 Status: T-S is applied on the test project and its post-check passed. Harness run 1 stopped in the fixture (a
-fixture literal, fixed since). The fixtures-only call and the full or split run have not yet passed on any database.
+fixture literal, fixed since). The fixtures-only call passed (decision FULL). Harness run 2 stopped when the call created
+`pg_temp.fingerprint()` (42725, `text || "char"`; every operand is cast to text since, and `casts.py` checks the class);
+no control or mutant ran. The full or split run has not yet passed on any database.
 
 ## Order on the test project (one engineer at a time; a before-note to the coordinator for each apply)
 
@@ -39,9 +41,18 @@ fixture literal, fixed since). The fixtures-only call and the full or split run 
    1,000,000-character body, the frame size and part count) and one decision line:
    - `NOT OK` / `decision: STOP` (exit 1): the fixtures failed, a count differs, the timing probe failed or a value is
      missing, the part count is outside 55 to 70, or no call fits the rule. Do not run the harness; report the output.
-   - `decision: FULL`: the full call's estimate is at most 45 s → step 6a.
+   - `decision: FULL`: the full call's estimate is at most 45 s → step 5b, then 6a.
    - `decision: SPLIT`: the full estimate is over 45 s and the controls and mutants estimates are both at most 200 s →
-     step 6b.
+     step 5b, then 6b.
+5b. Structure call, **only if the coordinator allows it as a stage that does not count as the run**:
+   `~/.claude/bin/kt-sql harness-t-structure.sql > st.txt; python3 gen.py report-structure st.txt`. Every statement in
+   it is byte-identical to harness-t.sql's (`gen.py check` asserts it): all helper and control definitions, the
+   fixture, the fingerprint twice, `c_strip` and `c_catalogue` once without a mutant, the negative control,
+   `body_not_stripped` and `reader_granted_anon` end to end, the rollback step. OK only when the fingerprints are
+   equal, both controls PASS without a mutant, the negative control reads NOT_APPLIED, both mutants are applied and
+   caught by a FAIL (not an ERROR), the rollback step is ok and the transport shape holds. Last line
+   `structure: OK`. NOT OK for any reason: stop, report the output, no main call. Estimate about the fixtures call plus
+   under 2 s; the same minute 15 to 30 rule.
 6a. Full call: `~/.claude/bin/kt-sql harness-t.sql > out.txt; python3 gen.py report out.txt full`.
 6b. Split: `harness-t-controls.sql > c.txt` and check `python3 gen.py report c.txt controls`. If that report is NOT OK
     for any reason (a control, the rollback step, the transport shape, a timeout), stop: no mutants call. Otherwise, at least 2 minutes later and outside minutes 15 to 30,
@@ -57,7 +68,8 @@ fixture literal, fixed since). The fixtures-only call and the full or split run 
 
 Rules: never start a call between minute 15 and minute 30 of the hour (each call holds the `cloud_release_switches`
 row until it ends; the erase job's scrub takes that row `FOR SHARE` at minute 23). **The cap for this harness is ONE
-run**: the full call, or the split pair (controls and mutants) together. The fixtures-only call does not count. **No
+run**: the full call, or the split pair (controls and mutants) together. The fixtures-only call does not count; the structure call counts
+only as the coordinator rules. **No
 re-send**: a call is not sent again, whatever its output. Stop on SQLSTATE `57014` or `55P03` anywhere in any output
 (the reporters also refuse both). `gen.py check` must pass first; it also checks every key and code the harness
 reads from a product answer (`answers.py`, result in `answers-report.txt`; its limits are listed below).
@@ -124,5 +136,7 @@ JSON text literal, and expected answers kept in jsonb variables.
 | `harness-t-controls.sql` | The same call without the mutants |
 | `harness-t-mutants.sql` | The same call without the plain controls pass (its own fixtures, the 57 mutants and the negative control, the rollback step) |
 | `harness-t-fixtures.sql` | The fixture section alone, then RAISE with the rows it made |
+| `harness-t-structure.sql` | The structure call (step 5b): the full call's statements without the other 18 controls' plain pass and the other 55 mutants |
+| `casts.py` | Cast check: a non-text catalogue column (`"char"`, boolean, oid, name, aclitem[]) is never an operand of `\|\|` or a direct argument of concat / concat_ws / string_agg / format without an explicit cast; run by `gen.py check` |
 | `answers.py`, `answers-report.txt` | Answer check of the harness against the migrations, and its pinned result |
 | `roles.py`, `roles-report.txt` | Role check: every statement on an object another role owns, in every .sql file of the hosted-MCP and Keepr Cloud test folders, with the role in force; pinned result |

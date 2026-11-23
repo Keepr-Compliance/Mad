@@ -707,17 +707,17 @@ DECLARE v jsonb := '{}';
                        'public.mcp_message_access(text,bytea,text)', 'public.mcp_list_my_message_reads(text,integer)', 'public._mcp_prune_message_reads()'];
 BEGIN
   v := v || jsonb_build_object(
-    'anon', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('anon', s, 'EXECUTE'))
+    'anon', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('anon', pg_catalog.to_regprocedure(s), 'EXECUTE'))
             = ARRAY['public.mcp_get_message(text,bytea,text,text,integer)', 'public.mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text)',
                     'public.mcp_message_access(text,bytea,text)'],
-    'authenticated', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('authenticated', s, 'EXECUTE'))
+    'authenticated', (SELECT array_agg(s ORDER BY s) FROM unnest(mine) s WHERE has_function_privilege('authenticated', pg_catalog.to_regprocedure(s), 'EXECUTE'))
             = ARRAY['public.mcp_list_my_message_reads(text,integer)'],
-    'service_role', NOT EXISTS (SELECT 1 FROM unnest(mine) s WHERE has_function_privilege('service_role', s, 'EXECUTE')),
+    'service_role', NOT EXISTS (SELECT 1 FROM unnest(mine) s WHERE has_function_privilege('service_role', pg_catalog.to_regprocedure(s), 'EXECUTE')),
     'public', NOT EXISTS (SELECT 1 FROM unnest(mine) s, pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
-                           WHERE p.oid = to_regprocedure(s) AND a.grantee = 0),
+                           WHERE p.oid = to_regprocedure(s) AND a.grantee = 0::oid),
     'readers', (SELECT bool_and(public._mcp_reader_ok(to_regprocedure(s))) FROM unnest(mine[3:4]) s),
     'table_privs', NOT EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r, unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES']) p
-                                WHERE has_table_privilege(r, 'public.mcp_message_reads', p)),
+                                WHERE has_table_privilege(r::name, 'public.mcp_message_reads'::regclass::oid, p)),
     'rls', (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.mcp_message_reads'::regclass),
     'no_policy', NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.mcp_message_reads'::regclass),
     'fk_only_users', (SELECT array_agg(confrelid::regclass::text) FROM pg_constraint WHERE conrelid = 'public.mcp_message_reads'::regclass AND contype = 'f') = ARRAY['auth.users'],
@@ -769,15 +769,23 @@ BEGIN
 END $c$;
 
 -- catalogue fingerprint of what the mutants change: the nine functions (body md5, ACL, volatility, security definer,
--- owner), the read log's ACL, and the constraint names of mcp_message_reads and mcp_call_log
+-- owner), the read log's ACL, and the constraint names of mcp_message_reads and mcp_call_log. Every operand is cast to
+-- text explicitly ("char", boolean, oid, name and aclitem are not text); ACL items are sorted, so their order in the
+-- catalogue array does not change the result; a NULL ACL (default privileges) reads 'acl:default'.
 CREATE FUNCTION pg_temp.fingerprint() RETURNS text LANGUAGE sql STABLE AS $h$
   SELECT md5(concat_ws('|',
-    (SELECT string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text, '') || ':' || p.provolatile
-                       || ':' || p.prosecdef || ':' || p.proowner::regrole::text, ';' ORDER BY p.oid::regprocedure::text)
-       FROM pg_catalog.pg_proc p WHERE p.oid IN (SELECT to_regprocedure(s) FROM unnest(ARRAY['public._mcp_conn_reads_messages(uuid)', 'public._mcp_msg_people(jsonb, boolean)', 'public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid)', 'public._mcp_r_get_message(uuid, integer)', 'public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text)', 'public.mcp_get_message(text, bytea, text, text, integer)', 'public.mcp_message_access(text, bytea, text)', 'public.mcp_list_my_message_reads(text, integer)', 'public._mcp_prune_message_reads()']) s)),
-    (SELECT coalesce(c.relacl::text, '') FROM pg_catalog.pg_class c WHERE c.oid = 'public.mcp_message_reads'::regclass),
-    (SELECT string_agg(k.conname, ',' ORDER BY k.conname) FROM pg_catalog.pg_constraint k
-      WHERE k.conrelid IN ('public.mcp_message_reads'::regclass, 'public.mcp_call_log'::regclass))))
+    (SELECT string_agg(concat_ws(':', p.oid::regprocedure::text, md5(p.prosrc), pa.acl, p.provolatile::text, p.prosecdef::text,
+                                 pg_catalog.pg_get_userbyid(p.proowner)::text), ';' ORDER BY p.oid::regprocedure::text)
+       FROM pg_catalog.pg_proc p
+       CROSS JOIN LATERAL (SELECT CASE WHEN p.proacl IS NULL THEN 'acl:default'
+                                       ELSE coalesce(string_agg(x.item::text, ',' ORDER BY x.item::text), '') END AS acl
+                             FROM unnest(p.proacl) AS x(item)) pa
+      WHERE p.oid IN (SELECT pg_catalog.to_regprocedure(s.sig)::oid FROM unnest(ARRAY['public._mcp_conn_reads_messages(uuid)', 'public._mcp_msg_people(jsonb, boolean)', 'public._mcp_r_list_deal_messages(uuid, text, boolean, integer, timestamptz, uuid)', 'public._mcp_r_get_message(uuid, integer)', 'public.mcp_list_deal_messages(text, bytea, text, text, text, text, integer, text)', 'public.mcp_get_message(text, bytea, text, text, integer)', 'public.mcp_message_access(text, bytea, text)', 'public.mcp_list_my_message_reads(text, integer)', 'public._mcp_prune_message_reads()']::text[]) AS s(sig))),
+    (SELECT CASE WHEN c.relacl IS NULL THEN 'acl:default'
+                 ELSE coalesce((SELECT string_agg(x.item::text, ',' ORDER BY x.item::text) FROM unnest(c.relacl) AS x(item)), '') END
+       FROM pg_catalog.pg_class c WHERE c.oid = 'public.mcp_message_reads'::regclass::oid),
+    (SELECT string_agg(k.conname::text, ',' ORDER BY k.conname::text) FROM pg_catalog.pg_constraint k
+      WHERE k.conrelid IN ('public.mcp_message_reads'::regclass::oid, 'public.mcp_call_log'::regclass::oid))))
 $h$;
 DO $controls4263t$
 DECLARE res text; base jsonb := '{}'; o jsonb; applied boolean;
@@ -6496,7 +6504,7 @@ $mu52$;
     EXECUTE $mu53$
 GRANT EXECUTE ON FUNCTION public._mcp_prune_message_reads() TO service_role
 $mu53$;
-    applied := has_function_privilege('service_role', 'public._mcp_prune_message_reads()', 'EXECUTE');
+    applied := has_function_privilege('service_role', pg_catalog.to_regprocedure('public._mcp_prune_message_reads()'), 'EXECUTE');
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     BEGIN
       res := pg_temp.c_catalogue();
@@ -6520,7 +6528,7 @@ $mu53$;
     EXECUTE $mu54$
 GRANT SELECT ON TABLE public.mcp_message_reads TO authenticated
 $mu54$;
-    applied := has_table_privilege('authenticated', 'public.mcp_message_reads', 'SELECT');
+    applied := has_table_privilege('authenticated', 'public.mcp_message_reads'::regclass::oid, 'SELECT');
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     BEGIN
       res := pg_temp.c_catalogue();
@@ -6544,7 +6552,7 @@ $mu54$;
     PERFORM pg_temp.as_reader($mu55$
 GRANT EXECUTE ON FUNCTION public._mcp_r_get_message(uuid, integer) TO anon
 $mu55$);
-    applied := has_function_privilege('anon', 'public._mcp_r_get_message(uuid,integer)', 'EXECUTE');
+    applied := has_function_privilege('anon', pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)'), 'EXECUTE');
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     BEGIN
       res := pg_temp.c_catalogue();
@@ -6568,7 +6576,7 @@ $mu55$);
     PERFORM pg_temp.as_reader($mu56$
 ALTER FUNCTION public._mcp_r_get_message(uuid, integer) VOLATILE
 $mu56$);
-    applied := (SELECT provolatile FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public._mcp_r_get_message(uuid,integer)')) = 'v';
+    applied := (SELECT p.provolatile::text FROM pg_catalog.pg_proc p WHERE p.oid = pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)')) = 'v';
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     BEGIN
       res := pg_temp.c_catalogue();
@@ -6592,7 +6600,7 @@ $mu56$);
     EXECUTE $neg0$
 SELECT 1
 $neg0$;
-    applied := has_function_privilege('anon', 'public._mcp_r_get_message(uuid,integer)', 'EXECUTE');
+    applied := has_function_privilege('anon', pg_catalog.to_regprocedure('public._mcp_r_get_message(uuid,integer)'), 'EXECUTE');
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     RAISE EXCEPTION 'undo-mutant';
   EXCEPTION WHEN OTHERS THEN
