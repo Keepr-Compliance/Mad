@@ -136,7 +136,11 @@ interface Slot<T> {
 interface SlotOptions {
   /** Re-ask on window focus and past the TTL (default true). */
   periodic?: boolean;
-  /** A failed ask keeps the stored answer for the same user (default false). */
+  /**
+   * A failed ask stores nothing (default false): the last answer for the same user stays, and with no answer for
+   * this user the slot stays unanswered (BACKLOG-4263: the Keepr Cloud slot then falls back to the remembered
+   * answer or the first-answer bound, instead of storing the failure value over a remembered "1").
+   */
   keepLastOnFailure?: boolean;
 }
 
@@ -158,8 +162,6 @@ function useSessionSlot<T>(
   const periodic = options.periodic !== false;
   const keepLastOnFailure = options.keepLastOnFailure === true;
   const [answer, setAnswer] = useState<StoredAnswer<T> | null>(null);
-  const answerRef = useRef(answer);
-  answerRef.current = answer;
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
   const questionRef = useRef(question);
@@ -199,8 +201,7 @@ function useSessionSlot<T>(
       try {
         land(await questionRef.current());
       } catch {
-        const last = answerRef.current;
-        if (keepLastOnFailure && last && last.forUserId === forUserId) return;
+        if (keepLastOnFailure) return;
         land(onFailureRef.current);
       }
     })();

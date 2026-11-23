@@ -80,6 +80,7 @@ const HERE = {
 function fakeCloud(view: CloudSyncView, busy = false): UseKeeprCloudSettings {
   return {
     view,
+    viewRead: true,
     busy,
     message: null,
     refresh: jest.fn(),

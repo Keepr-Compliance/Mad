@@ -28,6 +28,7 @@ const VIEW: CloudSyncView = {
 function fakeCloud(view: CloudSyncView | null): UseKeeprCloudSettings {
   return {
     view,
+    viewRead: true,
     busy: false,
     message: null,
     refresh: jest.fn(),

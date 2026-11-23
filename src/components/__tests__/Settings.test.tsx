@@ -2541,6 +2541,21 @@ describe("Settings tab strip reads Keepr Cloud visibility from the session store
       expect(screen.getByRole("switch", { name: "Keepr Cloud" })).toBeInTheDocument();
     });
 
+    it.each([
+      ["resolves null", () => Promise.resolve(null)],
+      ["rejects (the service turns it into null)", () => Promise.reject(new Error("unreachable"))],
+    ])("Settings' own view read %s: the loading line goes and the section shows nothing", async (_n, failedRead) => {
+      getView.mockResolvedValueOnce(OFF_VIEW).mockImplementationOnce(failedRead).mockImplementation(() => new Promise(() => undefined));
+      const { rerender } = render(<Root settings={false} />);
+      await act(async () => {});
+      renderAt(rerender);
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+      await act(async () => {});
+      expect(getView).toHaveBeenCalledTimes(2); // the session read, then Settings' own (failed)
+      expect(screen.queryByTestId("cloud-loading")).toBeNull();
+      expect(document.getElementById("settings-cloud")).toBeNull();
+    });
+
     it("the view arrives as hidden: the placeholder and the tab both go", async () => {
       getView.mockResolvedValueOnce(OFF_VIEW).mockImplementation(() => new Promise((r) => held.push(r)));
       const { rerender } = render(<Root settings={false} />);

@@ -334,6 +334,25 @@ describe("History reads again when the deal's todos change (C4, addition F)", ()
     expect(more()).toBeNull();
   });
 
+  it("the panel stays open with Show more expanded when the checklists answer arrives later, as a new object (as over IPC)", async () => {
+    await show();
+    const panel = await openHistory({ success: true, rows: rowsOf(12) });
+    fireEvent.click(more()!);
+    let release: () => void = () => undefined;
+    checklists().get.mockImplementation(
+      () => new Promise((r) => (release = () => r({ success: true, checklists: fixtureChecklistsWithMyItems() }))),
+    );
+    cloud.getForDeal.mockImplementation(async () => ({ ...ON, notices: [], markers: {} }));
+    cloud.history.mockResolvedValueOnce({ success: true, rows: rowsOf(8) });
+    await fireChanged();
+    await act(async () => undefined);
+    await act(async () => release());
+    await act(async () => undefined);
+    expect(screen.getByTestId(`checklist-history-${T1.id}`)).toBe(panel);
+    await waitFor(() => expect(rowsIn(panel)).toHaveLength(8));
+    expect(more()).toBeNull();
+  });
+
   it("offline at first open still shows the offline line", async () => {
     await show();
     const panel = await openHistory({ success: false, error: "offline", rows: [] });

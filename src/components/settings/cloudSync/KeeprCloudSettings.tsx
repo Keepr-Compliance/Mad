@@ -66,7 +66,8 @@ const SOLID_BUTTON =
 
 /**
  * @param listed BACKLOG-4263: the session lists the Keepr Cloud tab. While this view is still loading, the
- *   section's heading and anchor render with a loading line, so the tab and the panel row land on it.
+ *   section's heading and anchor render with a loading line, so the tab and the panel row land on it. Once a read
+ *   has finished without a view (main could not be reached), the section renders nothing, as for a hidden view.
  */
 export function KeeprCloudSettings({
   cloud,
@@ -80,7 +81,7 @@ export function KeeprCloudSettings({
   const isOn = !!view && (view.status === "on" || view.status === "error" || view.status === "paused");
   // BACKLOG-4263 PR-6: Settings › Keepr Cloud › Removed (Keepr Cloud users only; the online list only when on and online)
   const removed = useKeeprCloudRemoved(isOn, view?.status === "on" || view?.status === "error");
-  if (!view && listed) {
+  if (!view && listed && !cloud.viewRead) {
     return (
       <div id="settings-cloud" className="mb-8" data-testid="settings-cloud">
         <div className="flex flex-col gap-1">

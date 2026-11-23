@@ -1,7 +1,8 @@
 /**
  * The Checklist tab's Keepr Cloud parts — BACKLOG-4263 PR-6 (plan §7).
  *
- * `CloudTodosProvider` (TransactionChecklistTab) asks main once per deal and again on `cloud-todos:changed`; each
+ * `CloudTodosProvider` (TransactionChecklistTab) asks main once per deal and again on `cloud-todos:changed` (a pass
+ * changed todos here, or the server answered this computer's todo changes); each
  * row reads what it needs from the context. Without a provider, or for a user without Keepr Cloud on (main answers
  * `on: false`), every consumer renders nothing, so the tab is exactly as before.
  *

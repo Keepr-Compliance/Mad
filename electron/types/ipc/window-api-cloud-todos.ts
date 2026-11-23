@@ -93,6 +93,9 @@ export interface WindowApiCloudTodos {
   history: (args: { itemId: string }) => Promise<CloudTodoHistoryResult>;
   listRemoved: (args: { transactionId: string }) => Promise<CloudTodoRemovedResult>;
   restore: (args: { transactionId: string; entity: "item" | "checklist"; cloudId: string }) => Promise<CloudTodoResult>;
-  /** main -> renderer `cloud-todos:changed` (a pull changed todos on this computer). Returns the unsubscribe. */
+  /**
+   * main -> renderer `cloud-todos:changed` (a pass changed todos on this computer, or the server answered this
+   * computer's todo changes). Returns the unsubscribe.
+   */
   onChanged: (callback: () => void) => () => void;
 }

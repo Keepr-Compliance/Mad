@@ -8,7 +8,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { KeeprCloudSettings } from "../KeeprCloudSettings";
 import { KEEPR_CLOUD_COPY as C } from "../keeprCloudCopy";
-import type { UseKeeprCloudSettings } from "../useKeeprCloudSettings";
+import { useKeeprCloudSettings, type UseKeeprCloudSettings } from "../useKeeprCloudSettings";
 import type { CloudSyncView } from "../../../../../electron/types/ipc/window-api-cloud-sync";
 
 jest.mock("@/services/cloudSyncService", () => ({
@@ -19,6 +19,8 @@ jest.mock("@/services/cloudSyncService", () => ({
     restoreDeal: jest.fn(),
     deleteDealForGood: jest.fn(),
     restoreOnlineDeal: jest.fn(),
+    getView: jest.fn(),
+    retry: jest.fn(),
   },
 }));
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -40,6 +42,7 @@ const ON: CloudSyncView = {
 function fakeCloud(view: CloudSyncView | null, message: UseKeeprCloudSettings["message"] = null): UseKeeprCloudSettings {
   return {
     view,
+    viewRead: true,
     busy: false,
     message,
     refresh: jest.fn(),
@@ -68,6 +71,28 @@ async function renderOn(view: CloudSyncView = ON, cloud = fakeCloud(view)) {
   await waitFor(() => expect(svc.listRemovedDeals).toHaveBeenCalled());
   return { ...r, cloud };
 }
+
+describe("Settings › Keepr Cloud — a view read that fails after an action (fix 7)", () => {
+  function RealSection() {
+    const cloud = useKeeprCloudSettings();
+    return <KeeprCloudSettings cloud={cloud} listed />;
+  }
+
+  it("Try again, then the re-read gets no view: no Loading line, the section shows nothing", async () => {
+    svc.getView.mockResolvedValueOnce({ ...ON, status: "error" }).mockResolvedValue(null);
+    svc.retry.mockResolvedValue({ success: true });
+    render(<RealSection />);
+    const retry = await screen.findByRole("button", { name: C.tryAgain });
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    await waitFor(() => expect(svc.getView).toHaveBeenCalledTimes(2));
+    await act(async () => undefined);
+    expect(svc.retry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("cloud-loading")).toBeNull();
+    expect(document.getElementById("settings-cloud")).toBeNull();
+  });
+});
 
 describe("Settings › Keepr Cloud — PR-6", () => {
   it("never turned on: no Removed list, no reclaim line, no waiting lines, and the removed lists are never asked for", async () => {

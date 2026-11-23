@@ -305,7 +305,8 @@ describe("C4 sign-out and account switch clear the answer", () => {
     expect(frames.every((f) => f.length === 0)).toBe(true);
   });
 
-  it("A visible, switch to B whose read fails: B settles with no Keepr Cloud row", async () => {
+  it("A visible, switch to B whose read fails: nothing from A; B stores nothing and settles at the bound with no Keepr Cloud row", async () => {
+    jest.useFakeTimers();
     getView.mockResolvedValue(ON);
     render(<Root initial="a" />);
     await flush();
@@ -320,7 +321,12 @@ describe("C4 sign-out and account switch clear the answer", () => {
     await flush();
     openPanel();
     await flush();
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS);
+    });
     expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
+    expect(stored("b")).toBeNull();
   });
 });
 
@@ -382,6 +388,29 @@ describe("C8 a restart uses the remembered answer on the first frame", () => {
   });
 });
 
+describe("C8d a failed first read keeps the remembered answer", () => {
+  it.each([
+    ["resolves null", () => Promise.resolve(null)],
+    ["rejects", () => Promise.reject(new Error("unreachable"))],
+  ])("remembered visible, the first read %s: the row stays, the stored value stays 1, no repeated reads", async (_n, failed) => {
+    remember("a", "1");
+    getView.mockImplementation(failed);
+    render(<Root initial="a" />);
+    await flush();
+    expect(getView).toHaveBeenCalledTimes(1);
+    expect(stored("a")).toBe("1");
+    openPanel();
+    await flush();
+    await flush();
+    expect(rowsInDom()).toEqual(WITH_CLOUD);
+    expect(stored("a")).toBe("1");
+    const reads = getView.mock.calls.length;
+    await flush();
+    await flush();
+    expect(getView.mock.calls.length).toBe(reads);
+  });
+});
+
 describe("C9 nothing remembered: the rows wait at most the bound", () => {
   it("1499 ms: no rows; 1500 ms: rows without Keepr Cloud; main's late answer then adds the row", async () => {
     jest.useFakeTimers();
@@ -404,6 +433,39 @@ describe("C9 nothing remembered: the rows wait at most the bound", () => {
     await flush();
     expect(rowsInDom()).toEqual(WITH_CLOUD);
     expect(stored("a")).toBe("1");
+  });
+});
+
+describe("C9b the bound belongs to the user it ran for", () => {
+  it("A times out; B signs in in the same run with nothing remembered and its read pending: B still waits the bound", async () => {
+    jest.useFakeTimers();
+    getView.mockImplementation(never);
+    render(<Root initial="a" />);
+    await flush();
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS);
+    });
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD); // A timed out
+    closePanel();
+    act(() => setWho(null));
+    await flush();
+    act(() => setWho("b"));
+    await flush();
+    expect(stored("b")).toBeNull();
+    frames = [];
+    openPanel();
+    await flush();
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_FIRST_ANSWER_BOUND_MS - 1);
+    });
+    expect(rowsInDom()).toEqual([]);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(rowsInDom()).toEqual(WITHOUT_CLOUD);
   });
 });
 
