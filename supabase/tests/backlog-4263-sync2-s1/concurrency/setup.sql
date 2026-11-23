@@ -1,4 +1,4 @@
--- BACKLOG-4263 S1 two-session fixtures. Needs 20261123100000 APPLIED (committed) on the test project.
+-- /*t:setup*/ BACKLOG-4263 S1 two-session fixtures. Needs 20261123100000 APPLIED (committed) on the test project.
 -- run.sh fills __A__ (user), __O__ (organization), __M__ (membership), __IA__ / __IB__ (installs), __RUN__ and __ACTIVE__
 -- ('IA' to make IA the active computer, 'none' to leave no active computer). COMMITS: one user, one organization on the
 -- team plan with cloud_autosave_assignable on, one active membership, the assignment, Keepr Cloud on, deal r-a (IA),
