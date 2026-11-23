@@ -52,6 +52,10 @@
     "20261123120000": {
       "file": "supabase/migrations/20261123120000_backlog_4263_cloud_blob_erase_schedule.sql",
       "file_md5": "5cd6dfc36798f747a7ed620eab3417d2"
+    },
+    "20261123140000": {
+      "file": "supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql",
+      "file_md5": "3759b61c298a7233b71d94dd0af8d9bd"
     }
   },
   "labels": {
@@ -340,6 +344,28 @@
       "mcp_restore_todo(text,bytea,text,text,text)",
       "mcp_update_todo(text,bytea,text,text,jsonb,text)",
       "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123140000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_message(text,bytea,text,text,integer)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_message_access(text,bytea,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
     ]
   },
   "authenticated_callable_mcp_by_stage": {
@@ -454,6 +480,15 @@
       "mcp_disconnect(uuid)",
       "mcp_disconnect_all_mine()",
       "mcp_list_my_connections()"
+    ],
+    "20261123140000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()",
+      "mcp_list_my_message_reads(text,integer)"
     ]
   },
   "postchecks": {
@@ -17594,20 +17629,983 @@
         }
       }
     },
+    "20261123140000": {
+      "file": "postcheck-20261123140000.sql",
+      "counts": {
+        "functions": 9,
+        "functions_absent": 0,
+        "tables_or_sequences": 1,
+        "pre_lane_tables": 1,
+        "columns_added": 0,
+        "constraints": 6,
+        "indexes": 2,
+        "cron_jobs": 1,
+        "ledger_rows": 1,
+        "must_hold": 173,
+        "report_only": 16
+      },
+      "pins": {
+        "function _mcp_conn_reads_messages(uuid) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_conn_reads_messages(uuid) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "1906af9a3b208f2bb779e092bcc93fa4"
+        },
+        "function _mcp_conn_reads_messages(uuid) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_conn_reads_messages(uuid) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_conn_reads_messages(uuid) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "sql"
+        },
+        "function _mcp_conn_reads_messages(uuid) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_conn_reads_messages(uuid) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "boolean"
+        },
+        "function _mcp_conn_reads_messages(uuid) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_msg_people(jsonb,boolean) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_msg_people(jsonb,boolean) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "24a1f1504541371c0e2635983df7c69c"
+        },
+        "function _mcp_msg_people(jsonb,boolean) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_msg_people(jsonb,boolean) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "i"
+        },
+        "function _mcp_msg_people(jsonb,boolean) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "sql"
+        },
+        "function _mcp_msg_people(jsonb,boolean) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_msg_people(jsonb,boolean) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_msg_people(jsonb,boolean) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "6606924cab924acb101df88e99f75aab"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "mcp_reader"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": "postgres"
+        },
+        "function _mcp_r_get_message(uuid,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "61de437a47fe819c569c363be6ce010b"
+        },
+        "function _mcp_r_get_message(uuid,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "mcp_reader"
+        },
+        "function _mcp_r_get_message(uuid,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_r_get_message(uuid,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_r_get_message(uuid,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_r_get_message(uuid,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_r_get_message(uuid,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": "postgres"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "f3c855e6faa5ced6f26f039216a9ebd2"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "8452eddc439a1d26a9eed94f820a3124"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_message_access(text,bytea,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "1fb7181cbb05c85dd38819d814949b4d"
+        },
+        "function mcp_message_access(text,bytea,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_message_access(text,bytea,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function mcp_message_access(text,bytea,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_message_access(text,bytea,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_message_access(text,bytea,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_message_access(text,bytea,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_message_access(text,bytea,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_list_my_message_reads(text,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "98591cf030d80fe8742b00c231d65f76"
+        },
+        "function mcp_list_my_message_reads(text,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_list_my_message_reads(text,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function mcp_list_my_message_reads(text,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_list_my_message_reads(text,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_list_my_message_reads(text,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_list_my_message_reads(text,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_prune_message_reads() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_prune_message_reads() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "ff949d09e708b9a67062c2f4ac1ebbb4"
+        },
+        "function _mcp_prune_message_reads() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_prune_message_reads() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function _mcp_prune_message_reads() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_prune_message_reads() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_prune_message_reads() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "integer"
+        },
+        "function _mcp_prune_message_reads() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_prune_message_reads() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation mcp_message_reads kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation mcp_message_reads owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation mcp_message_reads grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation mcp_message_reads rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation mcp_message_reads force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation mcp_message_reads triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation mcp_message_reads policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation mcp_message_reads columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "id uuid not null, user_id uuid not null, connection_id uuid, provider text not null, client_name text not null, call_id bigint, tool text not null, cloud_deal_id uuid not null, cloud_message_id uuid not null, channel text not null, sent_at timestamp with time zone, part integer, read_at timestamp with time zone not null"
+        },
+        "table mcp_call_log grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants service_role": {
+          "label": "REPORT ONLY",
+          "kind": "pre-lane table grants to service_role",
+          "want": ""
+        },
+        "table mcp_call_log grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "constraint mcp_message_reads.mcp_message_reads_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (id)"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_user_id_fkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "f (user_id) auth.users(id) on delete c"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_tool_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (tool) [get_message,list_deal_messages]"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_tool_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK ((tool = ANY (ARRAY['list_deal_messages'::text, 'get_message'::text])))"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_channel_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (channel) [email,text]"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_channel_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK ((channel = ANY (ARRAY['email'::text, 'text'::text])))"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_part_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (part) []"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_part_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK (((part IS NULL) OR (part >= 1)))"
+        },
+        "constraint mcp_call_log.mcp_call_log_tool_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (tool) [add_todo,find_people,get_deal,get_deal_checklists,get_message,get_status,list_all_deals,list_deal_messages,list_deals,list_todos,remove_todo,restore_todo,update_todo]"
+        },
+        "constraint mcp_call_log.mcp_call_log_tool_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK (((tool IS NULL) OR (tool = ANY (ARRAY['get_status'::text, 'list_deals'::text, 'get_deal'::text, 'get_deal_checklists'::text, 'list_all_deals'::text, 'update_todo'::text, 'add_todo'::text, 'remove_todo'::text, 'restore_todo'::text, 'find_people'::text, 'list_todos'::text, 'list_deal_messages'::text, 'get_message'::text]))))"
+        },
+        "index mcp_message_reads_user_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "mcp_message_reads unique=false (user_id,read_at) partial=false"
+        },
+        "index mcp_message_reads_read_at_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "mcp_message_reads unique=false (read_at) partial=false"
+        },
+        "cron job mcp-message-reads-prune": {
+          "label": "MUST HOLD",
+          "kind": "cron job",
+          "want": "41 3 * * * | SELECT public._mcp_prune_message_reads() | postgres | active | this database"
+        },
+        "ledger row 20261123140000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "anon-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "anon-callable list",
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_message(text,bytea,text,text,integer), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_message_access(text,bytea,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+        },
+        "authenticated-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "authenticated-callable list",
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections(), mcp_list_my_message_reads(text,integer)"
+        },
+        "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
+          "label": "MUST HOLD",
+          "kind": "internal-prefix sweep",
+          "want": ""
+        }
+      }
+    },
     "final-249": {
       "file": "postcheck-final-249.sql",
       "counts": {
-        "functions": 78,
+        "functions": 87,
         "functions_absent": 5,
-        "tables_or_sequences": 12,
+        "tables_or_sequences": 13,
         "pre_lane_tables": 7,
         "columns_added": 50,
-        "constraints": 41,
-        "indexes": 13,
-        "cron_jobs": 3,
-        "ledger_rows": 13,
-        "must_hold": 1544,
-        "report_only": 127
+        "constraints": 46,
+        "indexes": 15,
+        "cron_jobs": 4,
+        "ledger_rows": 14,
+        "must_hold": 1709,
+        "report_only": 140
       },
       "pins": {
         "function _mcp_r_list_all_deals(text,date,date,uuid) exists": {
@@ -24240,6 +25238,771 @@
           "kind": "grants to other roles",
           "want": ""
         },
+        "function _mcp_conn_reads_messages(uuid) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_conn_reads_messages(uuid) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "1906af9a3b208f2bb779e092bcc93fa4"
+        },
+        "function _mcp_conn_reads_messages(uuid) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_conn_reads_messages(uuid) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_conn_reads_messages(uuid) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "sql"
+        },
+        "function _mcp_conn_reads_messages(uuid) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_conn_reads_messages(uuid) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "boolean"
+        },
+        "function _mcp_conn_reads_messages(uuid) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_conn_reads_messages(uuid) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_msg_people(jsonb,boolean) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_msg_people(jsonb,boolean) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "24a1f1504541371c0e2635983df7c69c"
+        },
+        "function _mcp_msg_people(jsonb,boolean) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_msg_people(jsonb,boolean) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "i"
+        },
+        "function _mcp_msg_people(jsonb,boolean) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "sql"
+        },
+        "function _mcp_msg_people(jsonb,boolean) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_msg_people(jsonb,boolean) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_msg_people(jsonb,boolean) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_msg_people(jsonb,boolean) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "6606924cab924acb101df88e99f75aab"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "mcp_reader"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_r_list_deal_messages(uuid,text,boolean,integer,timestamp with time zone,uuid) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": "postgres"
+        },
+        "function _mcp_r_get_message(uuid,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "61de437a47fe819c569c363be6ce010b"
+        },
+        "function _mcp_r_get_message(uuid,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "mcp_reader"
+        },
+        "function _mcp_r_get_message(uuid,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function _mcp_r_get_message(uuid,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_r_get_message(uuid,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_r_get_message(uuid,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function _mcp_r_get_message(uuid,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function _mcp_r_get_message(uuid,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": "postgres"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "f3c855e6faa5ced6f26f039216a9ebd2"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "8452eddc439a1d26a9eed94f820a3124"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_get_message(text,bytea,text,text,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_message_access(text,bytea,text) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "1fb7181cbb05c85dd38819d814949b4d"
+        },
+        "function mcp_message_access(text,bytea,text) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_message_access(text,bytea,text) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function mcp_message_access(text,bytea,text) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_message_access(text,bytea,text) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_message_access(text,bytea,text) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_message_access(text,bytea,text) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_message_access(text,bytea,text) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_message_access(text,bytea,text) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_message_access(text,bytea,text) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function mcp_list_my_message_reads(text,integer) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "98591cf030d80fe8742b00c231d65f76"
+        },
+        "function mcp_list_my_message_reads(text,integer) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_list_my_message_reads(text,integer) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "s"
+        },
+        "function mcp_list_my_message_reads(text,integer) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_list_my_message_reads(text,integer) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_list_my_message_reads(text,integer) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_list_my_message_reads(text,integer) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_list_my_message_reads(text,integer) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "function _mcp_prune_message_reads() exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function _mcp_prune_message_reads() md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "ff949d09e708b9a67062c2f4ac1ebbb4"
+        },
+        "function _mcp_prune_message_reads() owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function _mcp_prune_message_reads() security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function _mcp_prune_message_reads() language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function _mcp_prune_message_reads() config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function _mcp_prune_message_reads() returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "integer"
+        },
+        "function _mcp_prune_message_reads() strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function _mcp_prune_message_reads() execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function _mcp_prune_message_reads() execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
         "function set_my_cloud_autosave(uuid,boolean,integer) exists": {
           "label": "MUST HOLD",
           "kind": "function exists",
@@ -25025,6 +26788,71 @@
           "kind": "relation columns",
           "want": "blob_id uuid not null, run_id uuid not null, leased_until timestamp with time zone not null"
         },
+        "relation mcp_message_reads kind": {
+          "label": "MUST HOLD",
+          "kind": "relation kind",
+          "want": "r"
+        },
+        "relation mcp_message_reads owner": {
+          "label": "MUST HOLD",
+          "kind": "relation owner",
+          "want": "postgres"
+        },
+        "relation mcp_message_reads grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants anon": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "relation grants api role",
+          "want": ""
+        },
+        "relation mcp_message_reads grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "relation mcp_message_reads rls": {
+          "label": "MUST HOLD",
+          "kind": "relation rls",
+          "want": "true"
+        },
+        "relation mcp_message_reads force_rls": {
+          "label": "MUST HOLD",
+          "kind": "relation force_rls",
+          "want": "false"
+        },
+        "relation mcp_message_reads triggers": {
+          "label": "MUST HOLD",
+          "kind": "relation triggers",
+          "want": ""
+        },
+        "relation mcp_message_reads policies": {
+          "label": "MUST HOLD",
+          "kind": "relation policies",
+          "want": ""
+        },
+        "relation mcp_message_reads columns": {
+          "label": "MUST HOLD",
+          "kind": "relation columns",
+          "want": "id uuid not null, user_id uuid not null, connection_id uuid, provider text not null, client_name text not null, call_id bigint, tool text not null, cloud_deal_id uuid not null, cloud_message_id uuid not null, channel text not null, sent_at timestamp with time zone, part integer, read_at timestamp with time zone not null"
+        },
         "table mcp_call_log grants PUBLIC": {
           "label": "MUST HOLD",
           "kind": "pre-lane table grants api role",
@@ -25488,12 +27316,12 @@
         "constraint mcp_call_log.mcp_call_log_tool_check": {
           "label": "MUST HOLD",
           "kind": "constraint",
-          "want": "c (tool) [add_todo,find_people,get_deal,get_deal_checklists,get_status,list_all_deals,list_deals,list_todos,remove_todo,restore_todo,update_todo]"
+          "want": "c (tool) [add_todo,find_people,get_deal,get_deal_checklists,get_message,get_status,list_all_deals,list_deal_messages,list_deals,list_todos,remove_todo,restore_todo,update_todo]"
         },
         "constraint mcp_call_log.mcp_call_log_tool_check definition": {
           "label": "REPORT ONLY",
           "kind": "check definition text",
-          "want": "CHECK (((tool IS NULL) OR (tool = ANY (ARRAY['get_status'::text, 'list_deals'::text, 'get_deal'::text, 'get_deal_checklists'::text, 'list_all_deals'::text, 'update_todo'::text, 'add_todo'::text, 'remove_todo'::text, 'restore_todo'::text, 'find_people'::text, 'list_todos'::text]))))"
+          "want": "CHECK (((tool IS NULL) OR (tool = ANY (ARRAY['get_status'::text, 'list_deals'::text, 'get_deal'::text, 'get_deal_checklists'::text, 'list_all_deals'::text, 'update_todo'::text, 'add_todo'::text, 'remove_todo'::text, 'restore_todo'::text, 'find_people'::text, 'list_todos'::text, 'list_deal_messages'::text, 'get_message'::text]))))"
         },
         "constraint cloud_deals.cloud_deals_removed_kind_ck": {
           "label": "MUST HOLD",
@@ -25790,6 +27618,46 @@
           "kind": "constraint",
           "want": "p (blob_id)"
         },
+        "constraint mcp_message_reads.mcp_message_reads_pkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "p (id)"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_user_id_fkey": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "f (user_id) auth.users(id) on delete c"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_tool_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (tool) [get_message,list_deal_messages]"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_tool_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK ((tool = ANY (ARRAY['list_deal_messages'::text, 'get_message'::text])))"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_channel_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (channel) [email,text]"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_channel_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK ((channel = ANY (ARRAY['email'::text, 'text'::text])))"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_part_check": {
+          "label": "MUST HOLD",
+          "kind": "constraint",
+          "want": "c (part) []"
+        },
+        "constraint mcp_message_reads.mcp_message_reads_part_check definition": {
+          "label": "REPORT ONLY",
+          "kind": "check definition text",
+          "want": "CHECK (((part IS NULL) OR (part >= 1)))"
+        },
         "index cloud_deals_change_seq_uq": {
           "label": "MUST HOLD",
           "kind": "index",
@@ -25870,6 +27738,16 @@
           "kind": "index",
           "want": "cloud_blob_erase_runs unique=false (started_at) partial=false"
         },
+        "index mcp_message_reads_user_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "mcp_message_reads unique=false (user_id,read_at) partial=false"
+        },
+        "index mcp_message_reads_read_at_idx": {
+          "label": "MUST HOLD",
+          "kind": "index",
+          "want": "mcp_message_reads unique=false (read_at) partial=false"
+        },
         "cron job cloud-todo-purge": {
           "label": "MUST HOLD",
           "kind": "cron job",
@@ -25884,6 +27762,11 @@
           "label": "MUST HOLD",
           "kind": "cron job",
           "want": "23 * * * * | SELECT public.cloud_blob_erase_invoke() | postgres | active | this database"
+        },
+        "cron job mcp-message-reads-prune": {
+          "label": "MUST HOLD",
+          "kind": "cron job",
+          "want": "41 3 * * * | SELECT public._mcp_prune_message_reads() | postgres | active | this database"
         },
         "ledger row 20261118100000": {
           "label": "MUST HOLD",
@@ -25950,15 +27833,20 @@
           "kind": "ledger row",
           "want": "true"
         },
+        "ledger row 20261123140000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
         "anon-callable mcp_ functions": {
           "label": "MUST HOLD",
           "kind": "anon-callable list",
-          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_message(text,bytea,text,text,integer), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_message_access(text,bytea,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
         },
         "authenticated-callable mcp_ functions": {
           "label": "MUST HOLD",
           "kind": "authenticated-callable list",
-          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections()"
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections(), mcp_list_my_message_reads(text,integer)"
         },
         "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
           "label": "MUST HOLD",
@@ -26025,6 +27913,12 @@
         "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
+      ],
+      "20261123140000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118110000": {
@@ -26141,6 +28035,23 @@
         "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
         "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
         "anon-callable mcp_ functions"
+      ],
+      "20261123140000": [
+        "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
+        "function cloud_upsert_deal(uuid,jsonb) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function set_my_cloud_autosave(uuid,boolean,integer) exists",
+        "function cloud_upsert_parties(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_mark_deal_synced(uuid,uuid,uuid) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118120000": {
@@ -26176,6 +28087,11 @@
       "20261123120000": [
         "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
         "anon-callable mcp_ functions"
+      ],
+      "20261123140000": [
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118130000": {
@@ -26225,6 +28141,14 @@
         "function mcp_authorize_view(text,bytea) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions"
+      ],
+      "20261123140000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118140000": {
@@ -26251,16 +28175,62 @@
       ],
       "20261123120000": [
         "anon-callable mcp_ functions"
+      ],
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
-    "20261118150000": {},
-    "20261118160000": {},
-    "20261118170000": {},
-    "20261118180000": {},
-    "20261118190000": {},
-    "20261123100000": {},
-    "20261123110000": {},
-    "20261123120000": {}
+    "20261118150000": {
+      "20261123140000": [
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261118160000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261118170000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261118180000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261118190000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261123100000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261123110000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261123120000": {
+      "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ]
+    },
+    "20261123140000": {}
   },
   "expected_at_final_state": {
     "20261118100000": [
@@ -26300,7 +28270,8 @@
     "20261118100000": [
       "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
       "constraint mcp_call_log.mcp_call_log_tool_check",
-      "anon-callable mcp_ functions"
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
     ],
     "20261118110000": [
       "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
@@ -26316,30 +28287,60 @@
       "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
       "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
       "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
-      "anon-callable mcp_ functions"
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
     ],
     "20261118120000": [
       "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
-      "anon-callable mcp_ functions"
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
     ],
     "20261118130000": [
       "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
       "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
       "function mcp_authorize_view(text,bytea) md5",
       "constraint mcp_call_log.mcp_call_log_tool_check",
-      "anon-callable mcp_ functions"
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
     ],
     "20261118140000": [
-      "anon-callable mcp_ functions"
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
     ],
-    "20261118150000": "ok",
-    "20261118160000": "ok",
-    "20261118170000": "ok",
-    "20261118180000": "ok",
-    "20261118190000": "ok",
-    "20261123100000": "ok",
-    "20261123110000": "ok",
-    "20261123120000": "ok"
+    "20261118150000": [
+      "constraint mcp_call_log.mcp_call_log_tool_check",
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261118160000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261118170000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261118180000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261118190000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261123100000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261123110000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261123120000": [
+      "anon-callable mcp_ functions",
+      "authenticated-callable mcp_ functions"
+    ],
+    "20261123140000": "ok"
   },
   "report_only_expected_on_keepr_test": {
     "final": [
@@ -26379,6 +28380,9 @@
     ],
     "20261123110000": [],
     "20261123120000": [],
+    "20261123140000": [
+      "table mcp_call_log grants service_role"
+    ],
     "final-249": [
       "table cloud_autosave_settings grants service_role",
       "table cloud_deal_checklist_items grants service_role",
