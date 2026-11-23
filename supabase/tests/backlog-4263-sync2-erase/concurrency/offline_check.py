@@ -115,6 +115,7 @@ for case, mut in CASES:
     in_session = [t for t in texts if 'CREATE' in t and 'FUNCTION' in t and ('P_A' in t or 'P_B' in t)]
     want = bool(mut) or case == 'c6g_wait'
     check(f'copies {label}: created {created or "none"}', not any(LIVE.search(t) for t in texts)
+          and not any('CREATE OR REPLACE FUNCTION' in t for t in texts)
           and all(n.endswith('_m4263') for n in created) and not in_session and bool(created) == want)
     w = [t for t in texts if WRITES.search(t)]
     sw = [t for t in texts if 'cloud_release_switches SET' in t]
