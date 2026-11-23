@@ -213,11 +213,24 @@ MUTANTS += [
              ' THEN')], 'c3c_unlicensed'),
     ('M_state_no_active_key', 'get_my_cloud_autosave_state',
      [mutant('get_my_cloud_autosave_state', "    'active_install_id', s.active_install_id,", "    'active_install_idX', s.active_install_id,")], 'c_state_keys'),
-    ('M_backfill_least_recent', None, [], 'c2b_backfill'),
+    # wrong implementation: the push answers computer_not_active only after its ops were applied (c1_push's write clause)
+    ('M_push_gate_after_write', 'cloud_todo_push',
+     [sub1(sub1(mutant('cloud_todo_push', gate_lines('cloud_todo_push', 'push'), ''), 'v_unk boolean;', 'v_unk boolean; v_res jsonb;'),
+           "  RETURN public._cloud_todo_apply(v_uid, jsonb_build_object('kind', 'desktop', 'ref', p_source_install_id::text,\n"
+           "           'install_id', p_source_install_id, 'label', 'Keepr desktop'), v_ops);\n",
+           "  v_res := public._cloud_todo_apply(v_uid, jsonb_build_object('kind', 'desktop', 'ref', p_source_install_id::text,\n"
+           "           'install_id', p_source_install_id, 'label', 'Keepr desktop'), v_ops);\n"
+           + gate_lines('cloud_todo_push', 'push') + "  RETURN v_res;\n")], 'c1_push'),
+    # the backfill rule (fn None): (old, new) replacements of the statement the case reads from s1_sql
+    ('M_backfill_least_recent', None, [('max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC')], 'c2b_backfill'),
+    ('M_backfill_tie_highest', None, [('d.source_install_id) w', 'd.source_install_id DESC) w')], 'c2b_backfill'),
 ]
 for mid, fn, stmts, _ in MUTANTS:
-    for s in stmts:
-        assert s != create(S1, fn)[0], mid
+    for st_ in stmts:
+        if fn is None:
+            assert BACKFILL_FIXTURE.count(st_[0]) == 1 and st_[1] not in BACKFILL_FIXTURE, mid
+        else:
+            assert st_ != create(S1, fn)[0], mid
 
 CASES = {}
 # fixture names: A (the licensed test user), IA / IB / IC (installs), dA / dB / dC (deals), pA / pB (parties), bA (blob of IA)
@@ -229,7 +242,7 @@ CASES['c_state_keys'] = """
 
 
 C1_CALL = {  # {I} install key, {D} deal key, {P} party key
-    'push': "pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.nowt(), '[]')",
+    'push': "pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.nowt(), pg_temp.clop(pg_temp.f('{D}'), 'c1-cl-{I}'))",
     'deal': "pg_temp.call('cloud_upsert_deal', '%L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.dp(pg_temp.s('{I}'), 'c1-deal-{I}'))",
     'parties': "pg_temp.call('cloud_upsert_parties', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.s('{D}'), pg_temp.rows('c1-p-{I}'))",
     'messages': "pg_temp.call('cloud_upsert_messages', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('{I}'), pg_temp.s('{D}'), pg_temp.mrows('c1-m-{I}'))",
@@ -246,11 +259,19 @@ def c1call(p, inst, deal, party):
     return C1_CALL[p].replace('{I}', inst).replace('{D}', deal).replace('{P}', party)
 
 
+# c1_push sends one create_checklist op on the caller's own deal; c1_confirm gives the blob bA its storage object (right
+# size), so without the gate the inactive call would write: a checklist + todo op + history row, or bA's uploaded_at.
+C1_PRELUDE = {'confirm': """
+  INSERT INTO storage.objects (bucket_id, name, metadata)
+  SELECT 'cloud-deal-files', b.storage_path, jsonb_build_object('size', b.size_bytes::text) FROM public.cloud_blobs b WHERE b.id = pg_temp.f('bA');"""}
+C1_OK_A = {'confirm': "(ra ->> 'ok') = 'true' AND (ra ->> 'state') = 'uploaded'",
+           'push': "(ra ->> 'ok') = 'true' AND (ra -> 'results' -> 0 ->> 'status') = 'added'"}
+
+
 def c1(p):
-    ok_a = ("(ra ->> 'error') = 'object_missing'" if p == 'confirm'
-            else "(ra ->> 'ok') = 'true'" + (" AND (ra -> 'results' -> 0 ->> 'status') = 'applied'" if p in C1_APPLIED else ''))
+    ok_a = C1_OK_A.get(p) or ("(ra ->> 'ok') = 'true'" + (" AND (ra -> 'results' -> 0 ->> 'status') = 'applied'" if p in C1_APPLIED else ''))
     return f"""
-  PERFORM pg_temp.switch(true);
+  PERFORM pg_temp.switch(true);{C1_PRELUDE.get(p, '')}
   before := pg_temp.fp();
   rb := {c1call(p, 'IB', 'dB', 'pB')};
   after := pg_temp.fp();
@@ -312,7 +333,8 @@ CASES['c2_null_active'] = """
                       jsonb_build_object('deal', ra, 'register', rb, 'first_claim', v)::text);"""
 CASES['c2_same'] = """
   PERFORM pg_temp.switch(true);
-  x_t := (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A'));
+  UPDATE public.cloud_autosave_settings SET active_since = timestamptz '2026-01-01 00:00:00+00' WHERE user_id = pg_temp.f('A');
+  x_t := timestamptz '2026-01-01 00:00:00+00';
   v := pg_temp.claim('IA', true);
   RETURN pg_temp.pass((v ->> 'ok') = 'true' AND NOT v ? 'replaced' AND pg_temp.moves() = 0 AND pg_temp.notices() = 0
                       AND (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A')) = x_t, v::text);"""
@@ -504,6 +526,10 @@ $h$;
 CREATE FUNCTION pg_temp.dp(inst text, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_object('source_install_id', inst, 'local_id', lid, 'content_hash', pg_temp.h(lid))::text
 $h$;
+CREATE FUNCTION pg_temp.clop(deal uuid, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT jsonb_build_array(jsonb_build_object('op_id', md5('p4263:sync2-s1-op:' || lid)::uuid, 'kind', 'create_checklist',
+                                              'deal_id', deal, 'local_id', lid, 'template_id', 'c1-template'))::text
+$h$;
 CREATE FUNCTION pg_temp.rows(lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_array(jsonb_build_object('local_id', lid, 'content_hash', pg_temp.h(lid)))::text
 $h$;
@@ -613,8 +639,9 @@ def dq(s, tag):
 mut_blocks = []
 for i, (mid, fn, stmts, primary) in enumerate(MUTANTS):
     if fn is None:  # the backfill rule: the case reads its statement from s1_sql
-        apply_ = (f"    UPDATE pg_temp.s1_sql SET s = replace(s, 'max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC') WHERE k = 'backfill';\n"
-                  "    applied := (SELECT s LIKE '%min(d.last_synced_at) DESC%' FROM pg_temp.s1_sql WHERE k = 'backfill');\n")
+        (old_, new_), = stmts
+        apply_ = (f"    UPDATE pg_temp.s1_sql SET s = replace(s, '{old_}', '{new_}') WHERE k = 'backfill';\n"
+                  f"    applied := (SELECT strpos(s, '{new_}') > 0 FROM pg_temp.s1_sql WHERE k = 'backfill');\n")
     else:
         sig = 'public.' + fn + '(' + (HEAD.get(fn, (None, None))[1] if fn in HEAD else CREATED[fn]).replace(' ', '') + ')'
         apply_ = ''.join(f"    EXECUTE {dq(s, f'$mu{i}_{k}$')};\n" for k, s in enumerate(stmts)) + \
@@ -639,7 +666,8 @@ HARNESS = f"""-- harness-s1.sql (generated by {REL}/gen.py; do not hand-edit)
 -- its post-check -> RAISE 'S1_RESULT <json>'. Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()".
 -- Locks (every one is released by the final RAISE; lock_timeout 3s throughout):
 --   row locks on the rows it inserts or changes: the fixture users (auth.users, public.users, organizations,
---     organization_members, organization_plans, member_addons, cloud_* rows of those users) and the ONE row of
+--     organization_members, organization_plans, member_addons, cloud_* rows of those users, one storage.objects row
+--     inside c1_confirm, no file behind it) and the ONE row of
 --     cloud_release_switches (its UPDATE makes the coordinator's switch flip wait until this call ends);
 --   the mutants' CREATE OR REPLACE FUNCTION calls lock those pg_proc rows (only another replace of the same function
 --     waits; callers keep the committed body);

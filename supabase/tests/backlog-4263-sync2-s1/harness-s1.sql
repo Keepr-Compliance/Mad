@@ -3,11 +3,12 @@
 -- BACKLOG-4263 sync 2.49, P1: run AFTER supabase/migrations/20261123100000_backlog_4263_one_computer.sql is applied (file md5 2d518f0ef92a29b30faab48f648fc702).
 -- ONE call (~/.claude/bin/kt-sql harness-s1.sql) that ends in RAISE, so nothing persists. Order: guard (refuses any database
 -- that is not the test database) -> applied check -> helpers and fixtures -> 29 controls, each in a subtransaction
--- that is undone -> 20 mutants, each proven installed before every control runs again under it -> the rollback file and
+-- that is undone -> 22 mutants, each proven installed before every control runs again under it -> the rollback file and
 -- its post-check -> RAISE 'S1_RESULT <json>'. Afterwards: ~/.claude/bin/kt-sql -c "select extensions.pg_stat_statements_reset()".
 -- Locks (every one is released by the final RAISE; lock_timeout 3s throughout):
 --   row locks on the rows it inserts or changes: the fixture users (auth.users, public.users, organizations,
---     organization_members, organization_plans, member_addons, cloud_* rows of those users) and the ONE row of
+--     organization_members, organization_plans, member_addons, cloud_* rows of those users, one storage.objects row
+--     inside c1_confirm, no file behind it) and the ONE row of
 --     cloud_release_switches (its UPDATE makes the coordinator's switch flip wait until this call ends);
 --   the mutants' CREATE OR REPLACE FUNCTION calls lock those pg_proc rows (only another replace of the same function
 --     waits; callers keep the committed body);
@@ -139,6 +140,10 @@ $h$;
 CREATE FUNCTION pg_temp.dp(inst text, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_object('source_install_id', inst, 'local_id', lid, 'content_hash', pg_temp.h(lid))::text
 $h$;
+CREATE FUNCTION pg_temp.clop(deal uuid, lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT jsonb_build_array(jsonb_build_object('op_id', md5('p4263:sync2-s1-op:' || lid)::uuid, 'kind', 'create_checklist',
+                                              'deal_id', deal, 'local_id', lid, 'template_id', 'c1-template'))::text
+$h$;
 CREATE FUNCTION pg_temp.rows(lid text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_array(jsonb_build_object('local_id', lid, 'content_hash', pg_temp.h(lid)))::text
 $h$;
@@ -242,10 +247,10 @@ DECLARE v jsonb; ra jsonb; rb jsonb; before text; after text; x uuid; x_t timest
 BEGIN
   PERFORM pg_temp.switch(true);
   before := pg_temp.fp();
-  rb := pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.nowt(), '[]');
+  rb := pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.nowt(), pg_temp.clop(pg_temp.f('dB'), 'c1-cl-IB'));
   after := pg_temp.fp();
-  ra := pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IA'), pg_temp.nowt(), '[]');
-  RETURN pg_temp.pass((rb ->> 'error') = 'computer_not_active' AND (rb ->> 'ok') = 'false' AND before = after AND (ra ->> 'ok') = 'true',
+  ra := pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IA'), pg_temp.nowt(), pg_temp.clop(pg_temp.f('dA'), 'c1-cl-IA'));
+  RETURN pg_temp.pass((rb ->> 'error') = 'computer_not_active' AND (rb ->> 'ok') = 'false' AND before = after AND (ra ->> 'ok') = 'true' AND (ra -> 'results' -> 0 ->> 'status') = 'added',
                       jsonb_build_object('inactive', rb, 'active', ra, 'unchanged', before = after)::text);
 END $c$;
 CREATE FUNCTION pg_temp.c1_deal() RETURNS text LANGUAGE plpgsql AS $c$
@@ -329,11 +334,13 @@ CREATE FUNCTION pg_temp.c1_confirm() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE v jsonb; ra jsonb; rb jsonb; before text; after text; x uuid; x_t timestamptz;
 BEGIN
   PERFORM pg_temp.switch(true);
+  INSERT INTO storage.objects (bucket_id, name, metadata)
+  SELECT 'cloud-deal-files', b.storage_path, jsonb_build_object('size', b.size_bytes::text) FROM public.cloud_blobs b WHERE b.id = pg_temp.f('bA');
   before := pg_temp.fp();
   rb := pg_temp.call('cloud_confirm_blob', '%L::uuid, %L::uuid, %L::uuid', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.s('bA'));
   after := pg_temp.fp();
   ra := pg_temp.call('cloud_confirm_blob', '%L::uuid, %L::uuid, %L::uuid', pg_temp.s('A'), pg_temp.s('IA'), pg_temp.s('bA'));
-  RETURN pg_temp.pass((rb ->> 'error') = 'computer_not_active' AND (rb ->> 'ok') = 'false' AND before = after AND (ra ->> 'error') = 'object_missing',
+  RETURN pg_temp.pass((rb ->> 'error') = 'computer_not_active' AND (rb ->> 'ok') = 'false' AND before = after AND (ra ->> 'ok') = 'true' AND (ra ->> 'state') = 'uploaded',
                       jsonb_build_object('inactive', rb, 'active', ra, 'unchanged', before = after)::text);
 END $c$;
 CREATE FUNCTION pg_temp.c1_switch_off() RETURNS text LANGUAGE plpgsql AS $c$
@@ -341,7 +348,7 @@ DECLARE v jsonb; ra jsonb; rb jsonb; before text; after text; x uuid; x_t timest
 BEGIN
   PERFORM pg_temp.switch(false);
   v := jsonb_build_array(
-    pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.nowt(), '[]'),
+    pg_temp.call('cloud_todo_push', '%L::uuid, %L::uuid, %L::text, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.nowt(), pg_temp.clop(pg_temp.f('dB'), 'c1-cl-IB')),
     pg_temp.call('cloud_upsert_deal', '%L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.dp(pg_temp.s('IB'), 'c1-deal-IB')),
     pg_temp.call('cloud_upsert_parties', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.s('dB'), pg_temp.rows('c1-p-IB')),
     pg_temp.call('cloud_upsert_messages', '%L::uuid, %L::uuid, %L::uuid, %L::jsonb', pg_temp.s('A'), pg_temp.s('IB'), pg_temp.s('dB'), pg_temp.mrows('c1-m-IB')),
@@ -418,7 +425,8 @@ CREATE FUNCTION pg_temp.c2_same() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE v jsonb; ra jsonb; rb jsonb; before text; after text; x uuid; x_t timestamptz;
 BEGIN
   PERFORM pg_temp.switch(true);
-  x_t := (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A'));
+  UPDATE public.cloud_autosave_settings SET active_since = timestamptz '2026-01-01 00:00:00+00' WHERE user_id = pg_temp.f('A');
+  x_t := timestamptz '2026-01-01 00:00:00+00';
   v := pg_temp.claim('IA', true);
   RETURN pg_temp.pass((v ->> 'ok') = 'true' AND NOT v ? 'replaced' AND pg_temp.moves() = 0 AND pg_temp.notices() = 0
                       AND (SELECT active_since FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('A')) = x_t, v::text);
@@ -5801,11 +5809,260 @@ $mu18_0$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:M_state_no_active_key', o || jsonb_build_object('applied', applied, 'primary', 'c_state_keys'));
+  -- M_push_gate_after_write (primary control c1_push)
+  BEGIN
+    o := '{}';
+    EXECUTE $mu19_0$
+CREATE OR REPLACE FUNCTION public.cloud_todo_push(p_expected_user_id uuid, p_source_install_id uuid, p_sent_at text, p_ops jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
+DECLARE v_uid uuid := auth.uid(); v_recv timestamptz := clock_timestamp(); v_sent timestamptz; v_ed timestamptz;
+        v_age interval; op jsonb; v_ops jsonb := '[]'::jsonb; v_unk boolean; v_res jsonb;
+BEGIN
+  IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:push*/
+  IF p_source_install_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
+  IF public.cloud_autosave_entitled() IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF public._cloud_install_removed(v_uid, p_source_install_id) THEN                              /*GATE:install:push*/
+    RETURN jsonb_build_object('ok', false, 'error', 'install_removed');
+  END IF;
+  IF jsonb_typeof(p_ops) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
+  IF jsonb_array_length(p_ops) > 200 OR octet_length(p_ops::text) > 1048576 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;
+  v_sent := CASE WHEN pg_input_is_valid(p_sent_at, 'timestamptz') THEN p_sent_at::timestamptz END;
+  FOR op IN SELECT value FROM jsonb_array_elements(p_ops) LOOP
+    IF jsonb_typeof(op) = 'object' THEN
+      v_ed := CASE WHEN jsonb_typeof(op -> 'edited_at') = 'string' AND pg_input_is_valid(op ->> 'edited_at', 'timestamptz')
+                   THEN (op ->> 'edited_at')::timestamptz END;
+      v_age := v_sent - v_ed;                                                                       /*CLOCK:age*/
+      v_unk := v_sent IS NULL OR v_ed IS NULL OR v_age < interval '0' OR v_age > interval '365 days'   /*CLOCK:unknowable*/
+               OR isfinite(v_age) IS NOT TRUE OR (op ->> 'clock_stepped') = 'true';                /*CLOCK:stepped*/
+      op := (op - '_eff') || jsonb_build_object('_eff', CASE WHEN v_unk THEN '-infinity' ELSE (v_recv - v_age)::text END);
+    END IF;
+    v_ops := v_ops || jsonb_build_array(op);
+  END LOOP;
+  v_res := public._cloud_todo_apply(v_uid, jsonb_build_object('kind', 'desktop', 'ref', p_source_install_id::text,
+           'install_id', p_source_install_id, 'label', 'Keepr desktop'), v_ops);
+  IF public._cloud_install_inactive(v_uid, p_source_install_id) THEN                         /*GATE:active:push*/
+    RETURN jsonb_build_object('ok', false, 'error', 'computer_not_active');
+  END IF;
+  RETURN v_res;
+END $f$;
+$mu19_0$;
+    applied := (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = to_regprocedure('public.cloud_todo_push(uuid,uuid,text,jsonb)')) IS DISTINCT FROM '300de7ee13eeffb029773b1c41a900b7';
+    IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
+    BEGIN
+      res := pg_temp.c_state_keys();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_state_keys', res);
+    BEGIN
+      res := pg_temp.c1_push();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_push', res);
+    BEGIN
+      res := pg_temp.c1_deal();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_deal', res);
+    BEGIN
+      res := pg_temp.c1_parties();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_parties', res);
+    BEGIN
+      res := pg_temp.c1_messages();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_messages', res);
+    BEGIN
+      res := pg_temp.c1_files();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_files', res);
+    BEGIN
+      res := pg_temp.c1_mark_synced();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_mark_synced', res);
+    BEGIN
+      res := pg_temp.c1_tombstone();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_tombstone', res);
+    BEGIN
+      res := pg_temp.c1_register();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_register', res);
+    BEGIN
+      res := pg_temp.c1_confirm();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_confirm', res);
+    BEGIN
+      res := pg_temp.c1_switch_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_switch_off', res);
+    BEGIN
+      res := pg_temp.c2_refuse();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_refuse', res);
+    BEGIN
+      res := pg_temp.c2_replace();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_replace', res);
+    BEGIN
+      res := pg_temp.c2_rate();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_rate', res);
+    BEGIN
+      res := pg_temp.c2_reclaim();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_reclaim', res);
+    BEGIN
+      res := pg_temp.c2_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_off', res);
+    BEGIN
+      res := pg_temp.c2_null_active();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_null_active', res);
+    BEGIN
+      res := pg_temp.c2_same();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_same', res);
+    BEGIN
+      res := pg_temp.c2_not_entitled();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_not_entitled', res);
+    BEGIN
+      res := pg_temp.c2_scrubs_nothing();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_scrubs_nothing', res);
+    BEGIN
+      res := pg_temp.c2b_backfill();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2b_backfill', res);
+    BEGIN
+      res := pg_temp.c3_clear();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_clear', res);
+    BEGIN
+      res := pg_temp.c3_other_refused();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_other_refused', res);
+    BEGIN
+      res := pg_temp.c3_install_required();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_install_required', res);
+    BEGIN
+      res := pg_temp.c3_active_turns_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_active_turns_off', res);
+    BEGIN
+      res := pg_temp.c3_switch_off_any();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_switch_off_any', res);
+    BEGIN
+      res := pg_temp.c3c_unlicensed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3c_unlicensed', res);
+    BEGIN
+      res := pg_temp.c4_allowed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c4_allowed', res);
+    BEGIN
+      res := pg_temp.c_notice_jobs();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_notice_jobs', res);
+    RAISE EXCEPTION 'undo-mutant';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+  END;
+  PERFORM pg_temp.rec('mutant:M_push_gate_after_write', o || jsonb_build_object('applied', applied, 'primary', 'c1_push'));
   -- M_backfill_least_recent (primary control c2b_backfill)
   BEGIN
     o := '{}';
     UPDATE pg_temp.s1_sql SET s = replace(s, 'max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC') WHERE k = 'backfill';
-    applied := (SELECT s LIKE '%min(d.last_synced_at) DESC%' FROM pg_temp.s1_sql WHERE k = 'backfill');
+    applied := (SELECT strpos(s, 'min(d.last_synced_at) DESC') > 0 FROM pg_temp.s1_sql WHERE k = 'backfill');
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
     BEGIN
       res := pg_temp.c_state_keys();
@@ -6015,6 +6272,220 @@ $mu18_0$;
     IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
   END;
   PERFORM pg_temp.rec('mutant:M_backfill_least_recent', o || jsonb_build_object('applied', applied, 'primary', 'c2b_backfill'));
+  -- M_backfill_tie_highest (primary control c2b_backfill)
+  BEGIN
+    o := '{}';
+    UPDATE pg_temp.s1_sql SET s = replace(s, 'd.source_install_id) w', 'd.source_install_id DESC) w') WHERE k = 'backfill';
+    applied := (SELECT strpos(s, 'd.source_install_id DESC) w') > 0 FROM pg_temp.s1_sql WHERE k = 'backfill');
+    IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
+    BEGIN
+      res := pg_temp.c_state_keys();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_state_keys', res);
+    BEGIN
+      res := pg_temp.c1_push();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_push', res);
+    BEGIN
+      res := pg_temp.c1_deal();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_deal', res);
+    BEGIN
+      res := pg_temp.c1_parties();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_parties', res);
+    BEGIN
+      res := pg_temp.c1_messages();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_messages', res);
+    BEGIN
+      res := pg_temp.c1_files();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_files', res);
+    BEGIN
+      res := pg_temp.c1_mark_synced();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_mark_synced', res);
+    BEGIN
+      res := pg_temp.c1_tombstone();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_tombstone', res);
+    BEGIN
+      res := pg_temp.c1_register();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_register', res);
+    BEGIN
+      res := pg_temp.c1_confirm();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_confirm', res);
+    BEGIN
+      res := pg_temp.c1_switch_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c1_switch_off', res);
+    BEGIN
+      res := pg_temp.c2_refuse();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_refuse', res);
+    BEGIN
+      res := pg_temp.c2_replace();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_replace', res);
+    BEGIN
+      res := pg_temp.c2_rate();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_rate', res);
+    BEGIN
+      res := pg_temp.c2_reclaim();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_reclaim', res);
+    BEGIN
+      res := pg_temp.c2_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_off', res);
+    BEGIN
+      res := pg_temp.c2_null_active();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_null_active', res);
+    BEGIN
+      res := pg_temp.c2_same();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_same', res);
+    BEGIN
+      res := pg_temp.c2_not_entitled();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_not_entitled', res);
+    BEGIN
+      res := pg_temp.c2_scrubs_nothing();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2_scrubs_nothing', res);
+    BEGIN
+      res := pg_temp.c2b_backfill();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c2b_backfill', res);
+    BEGIN
+      res := pg_temp.c3_clear();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_clear', res);
+    BEGIN
+      res := pg_temp.c3_other_refused();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_other_refused', res);
+    BEGIN
+      res := pg_temp.c3_install_required();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_install_required', res);
+    BEGIN
+      res := pg_temp.c3_active_turns_off();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_active_turns_off', res);
+    BEGIN
+      res := pg_temp.c3_switch_off_any();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3_switch_off_any', res);
+    BEGIN
+      res := pg_temp.c3c_unlicensed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c3c_unlicensed', res);
+    BEGIN
+      res := pg_temp.c4_allowed();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c4_allowed', res);
+    BEGIN
+      res := pg_temp.c_notice_jobs();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    o := o || jsonb_build_object('c_notice_jobs', res);
+    RAISE EXCEPTION 'undo-mutant';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+  END;
+  PERFORM pg_temp.rec('mutant:M_backfill_tie_highest', o || jsonb_build_object('applied', applied, 'primary', 'c2b_backfill'));
   PERFORM pg_temp.rec('t_controls_end', to_jsonb(clock_timestamp()));
 END
 $controls4263s1$;
