@@ -66,9 +66,9 @@ BEGIN
     pg_temp.frow('f_deal', NULL, 'Deal level.pdf', 'application/pdf', 'too_large'),
     pg_temp.frow('f_tomb', 'm_tomb', 'Of removed message.pdf', 'application/pdf', 'too_large')));
   r := pg_temp.tomb('A', 'IA', 'message', ARRAY[pg_temp.f('m_tomb')]);
-  IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'FIXTURE tombstone message failed: %', r; END IF;
+  IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'removed' THEN RAISE EXCEPTION 'FIXTURE tombstone message failed: %', r; END IF;
   r := pg_temp.tomb('A', 'IA', 'file', ARRAY[pg_temp.f('f_lin3')]);
-  IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'FIXTURE tombstone file failed: %', r; END IF;
+  IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'removed' THEN RAISE EXCEPTION 'FIXTURE tombstone file failed: %', r; END IF;
   UPDATE public.cloud_deal_messages SET link_state = 'suggested' WHERE id = pg_temp.f('m_sug');
   PERFORM pg_temp.msgs('A', 'IA', 'dU', jsonb_build_array(pg_temp.mrow('m_unc', 'email', 'Unconfirmed deal', 'x', who, '2026-01-01T10:00:00.000Z', NULL, NULL, false, 't')));
   PERFORM pg_temp.msgs('A', 'IA', 'dR', jsonb_build_array(pg_temp.mrow('m_rem', 'email', 'Removed deal', 'x', who, '2026-01-01T10:00:00.000Z', NULL, NULL, false, 't')));
