@@ -3,8 +3,10 @@
 -- BACKLOG-4263 sync 2.49, P9: the structure call. Every statement in it is byte-identical to its counterpart in
 -- harness-t.sql (checked by gen.py check), so a pass proves those texts run: guard, timeouts, applied check, every helper
 -- and control definition, the fixture, the fingerprint twice, the negative control, ONE function-body mutant
--- (body_not_stripped -> c_strip) and ONE ACL mutant (reader_granted_anon -> c_catalogue) end to end, the rollback step,
--- then RAISE 'T4263_STRUCTURE_OK <json>'. Not in it: the plain controls pass, the other 55 mutants, the 100,001-row loop.
+-- (body_not_stripped -> c_strip) and ONE ACL mutant (reader_granted_anon -> c_catalogue) end to end, after running those two
+-- controls once without a mutant (they must PASS), the rollback step,
+-- then RAISE 'T4263_STRUCTURE_OK <json>'. Not in it: the other 18 controls' plain pass, the other 55 mutants, the 100,001-row
+-- loop.
 -- Statement texts of harness-t.sql keep that file's name in their messages (byte-identical).
 -- Locks: the fixture's row locks (as harness-t.sql: the fixture users' rows, the ONE row of cloud_release_switches
 --   and of mcp_settings) until the RAISE; inside the undone mutant subtransactions the pg_proc row of
@@ -778,7 +780,7 @@ CREATE FUNCTION pg_temp.fingerprint() RETURNS text LANGUAGE sql STABLE AS $h$
       WHERE k.conrelid IN ('public.mcp_message_reads'::regclass::oid, 'public.mcp_call_log'::regclass::oid))))
 $h$;
 DO $structure4263t$
-DECLARE res text; o jsonb; applied boolean; fp2 text;
+DECLARE res text; base jsonb := '{}'; o jsonb; applied boolean; fp2 text;
 BEGIN
   PERFORM pg_temp.rec('t_start', to_jsonb(clock_timestamp()));
   PERFORM pg_temp.rec('baseline_fp', to_jsonb(pg_temp.fingerprint()));
@@ -786,6 +788,21 @@ BEGIN
   fp2 := pg_temp.fingerprint();
   PERFORM pg_temp.rec('fingerprints', jsonb_build_object('first', (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp'), 'second', fp2,
     'equal', fp2 IS NOT NULL AND fp2 = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp')));
+    BEGIN
+      res := pg_temp.c_strip();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    base := base || jsonb_build_object('c_strip', res);
+    BEGIN
+      res := pg_temp.c_catalogue();
+      RAISE EXCEPTION 'undo-case';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+    END;
+    base := base || jsonb_build_object('c_catalogue', res);
+  PERFORM pg_temp.rec('controls_base', base);
   -- noop_probe
   BEGIN
     o := '{}';

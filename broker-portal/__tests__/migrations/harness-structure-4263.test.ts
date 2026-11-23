@@ -81,7 +81,14 @@ describe('BACKLOG-4263 T-S structure call and cast rule', () => {
     expect(driver).not.toContain('c_prune_loop()');
     expect(driver).toContain("res := pg_temp.c_strip();");
     expect(driver).toContain("res := pg_temp.c_catalogue();");
-    expect(driver.match(/res := pg_temp\.c_\w+\(\);/g)).toHaveLength(2);
+    // c_strip and c_catalogue once without a mutant (chunks of harness-t.sql's plain pass), then under their mutant
+    expect(driver.match(/res := pg_temp\.c_\w+\(\);/g)).toEqual(['res := pg_temp.c_strip();', 'res := pg_temp.c_catalogue();',
+      'res := pg_temp.c_strip();', 'res := pg_temp.c_catalogue();']);
+    expect(driver).toContain("PERFORM pg_temp.rec('controls_base', base);");
+    for (const c of ['c_strip', 'c_catalogue']) {
+      const chunk = `    BEGIN\n      res := pg_temp.${c}();\n      RAISE EXCEPTION 'undo-case';\n`;
+      expect(FULL).toContain(chunk);
+    }
     expect(ST.trimEnd().endsWith("RAISE EXCEPTION 'T4263_STRUCTURE_OK %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);\nEND\n$endstructure4263t$;")).toBe(true);
     expect(ST.split('\n')[1]).toContain('must never be run on production');
   });
