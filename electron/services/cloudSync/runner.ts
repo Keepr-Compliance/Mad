@@ -303,8 +303,9 @@ export class CloudSyncRunner {
   }
 
   /**
-   * BACKLOG-4263 P2 (plan §2.5, §13.1, §14 D1): "Use this computer instead", under the pass lock. Writes the move
-   * marker, then claims with p_replace = true, then:
+   * BACKLOG-4263 P2 (plan §2.5, §13.1, §14 D1): "Use this computer instead", under the pass lock. Reads whether this
+   * computer's online copy was removed (cloud_install_status, a read the rule allows; an unanswered read stops here
+   * with nothing done), writes the move marker with that answer, then claims with p_replace = true, then:
    * - ok: the move's local transaction (applyMoveHere: email, text and file records and the marker go, every deal is
    *   marked; or the reclaim path for a computer whose copy had been removed), whatever the local enabled flag;
    * - refused (computer_not_active cannot happen with p_replace; busy, not_entitled, wrong_account, ...): only the
@@ -320,10 +321,15 @@ export class CloudSyncRunner {
       const db = this.deps.db();
       try {
         this.guard(pinned);
-        store.writeMovePending(db, this.deps.projectRef, userId, this.now());
+        const st = await this.deps.client.installStatus(userId, installId);
+        if (st.kind === "refused" && st.code === "wrong_account") throw new StopPass("wrong_account");
+        if (st.kind !== "ok" || typeof st.body.removed !== "boolean") return { ok: false, code: st.kind === "ok" ? "unknown" : st.code };
+        const reclaim = st.body.removed;
+        this.guard(pinned);
+        store.writeMovePending(db, this.deps.projectRef, userId, this.now(), reclaim);
         const res = await this.deps.client.claimInstall(userId, installId, true);
         if (res.kind === "ok") {
-          store.applyMoveHere(db, this.deps.projectRef, userId, this.now());
+          store.applyMoveHere(db, this.deps.projectRef, userId, this.now(), reclaim);
           this.installStatusChecked.delete(userId);
           return { ok: true, code: "" };
         }
@@ -509,8 +515,9 @@ export class CloudSyncRunner {
 
     // BACKLOG-4263 P2 (plan §13.1): a move whose local transaction did not run (a crash after the claim, or the
     // claim's answer was lost). This computer is active now: run it. Anything else: the claim did not land.
-    if (store.hasMovePending(db, deps.projectRef, pinned.userId)) {
-      if (state.activeInstallId === installId) store.applyMoveHere(db, deps.projectRef, pinned.userId, this.now());
+    const pendingMove = store.movePending(db, deps.projectRef, pinned.userId);
+    if (pendingMove) {
+      if (state.activeInstallId === installId) store.applyMoveHere(db, deps.projectRef, pinned.userId, this.now(), pendingMove.reclaim);
       else store.clearMovePending(db, deps.projectRef, pinned.userId);
     }
 

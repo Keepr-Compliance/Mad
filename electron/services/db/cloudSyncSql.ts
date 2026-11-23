@@ -404,6 +404,8 @@ export const CLOUD_SYNC_ACTIVE_SQL = `SELECT 1 FROM cloud_sync_settings WHERE en
 // deal, party or todo reader matches (they filter on entity 'deal' / 'party' or on a real transaction id).
 //   'switch' / 'move_pending'      written before cloud_claim_install(p_replace = true); deleted by the move's local
 //                                  transaction, or when the server names another computer (plan §13.1).
+//                                  last_status 'reclaim': this computer's online copy had been removed ("Delete
+//                                  them" on the active computer), so the move forgets every record (reclaim path).
 //   'switch' / 'turn_off_dropped'  a turn-off made here while offline was dropped because another computer had
 //                                  become active (plan §2.5); the screen says nothing was deleted online. Cleared
 //                                  by the next fresh enable (DELETE_STATE_FOR_USER_SQL).
@@ -412,13 +414,14 @@ export const SWITCH_ENTITY = "switch";
 export const MOVE_PENDING_ID = "move_pending";
 export const TURN_OFF_DROPPED_ID = "turn_off_dropped";
 
-/** Writes one marker row of this user (or refreshes its time). */
+/** Writes one marker row of this user (or refreshes it): project_ref, owner, local_id, last_status, updated_at. */
 export const UPSERT_SWITCH_MARKER_SQL = `INSERT INTO cloud_sync_state
-  (project_ref, owner_user_id, entity, local_id, transaction_id, updated_at)
-VALUES (?, ?, '${SWITCH_ENTITY}', ?, '', ?)
-ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET updated_at = excluded.updated_at`;
+  (project_ref, owner_user_id, entity, local_id, transaction_id, last_status, updated_at)
+VALUES (?, ?, '${SWITCH_ENTITY}', ?, '', ?, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO UPDATE SET
+  last_status = excluded.last_status, updated_at = excluded.updated_at`;
 
-export const SELECT_SWITCH_MARKER_SQL = `SELECT 1 FROM cloud_sync_state
+export const SELECT_SWITCH_MARKER_SQL = `SELECT last_status FROM cloud_sync_state
  WHERE project_ref = ? AND owner_user_id = ? AND entity = '${SWITCH_ENTITY}' AND local_id = ?`;
 
 export const DELETE_SWITCH_MARKER_SQL = `DELETE FROM cloud_sync_state

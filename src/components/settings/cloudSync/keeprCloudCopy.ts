@@ -130,7 +130,7 @@ export const KEEPR_CLOUD_COPY = {
   // deals stay online and stop updating.
   moveConfirm:
     "Keepr Cloud will save this computer's deals instead, and your other computer stops saving. " +
-    "The emails, texts and files saved from your other computer are removed from Keepr Cloud: AI apps can no longer read them, and an hourly cleanup erases them. " +
+    "The emails, texts and files saved from your other computer are removed from Keepr Cloud: AI apps stop reading them at once, and an hourly cleanup erases them. " +
     "Deals saved from your other computer stay online and stop updating.",
   moveConfirmButton: "Use this computer",
   moveBusy: "Keepr Cloud moved a moment ago. Try again in a minute.",

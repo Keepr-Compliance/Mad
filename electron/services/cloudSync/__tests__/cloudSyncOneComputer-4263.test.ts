@@ -365,6 +365,52 @@ describe(`Keepr Cloud one computer per account [${DRIVER}]`, () => {
       expect(server.activeInstall).toBe(installOf(b.db));
     });
 
+    it("moving back after the active computer deleted this computer's online copy (Delete them): every record is forgotten, so the next pass saves the deals again", async () => {
+      const { server, clock } = account({ oneComputer: true });
+      const b = computer(server, { on: true, deals: 2 });
+      await startAndPass(b.e);
+      const a = computer(server);
+      await moveTo(a, clock);
+      expect(await a.e.service.deleteOldInstalls()).toEqual({ success: true });
+      expect(server.softRemovedDeals.filter((d) => d.install === installOf(b.db))).toHaveLength(2);
+      expect((await pass(b.e)).outcome).toBe("other_computer");
+      clock.t += 61_000;
+      expect(await b.e.service.useThisComputer()).toEqual({ success: true });
+      await b.e.service.runner!.whenIdle();
+      await pass(b.e);
+      expect(server.softRemovedDeals.filter((d) => d.install === installOf(b.db))).toHaveLength(0);
+      expect(server.deals.filter((d) => d.install === installOf(b.db))).toHaveLength(2);
+    });
+
+    it("the removed-copy answer is kept on the move marker: a crash after the claim still takes the forget-everything path", async () => {
+      const { server, clock } = account({ oneComputer: true });
+      const b = computer(server, { on: true, deals: 2 });
+      await startAndPass(b.e);
+      const a = computer(server);
+      await moveTo(a, clock);
+      await a.e.service.deleteOldInstalls();
+      expect((await pass(b.e)).outcome).toBe("other_computer");
+      writeMovePending(b.db, PROJECT, USER_A, new Date(), true);
+      clock.t += 61_000;
+      server.respond("cloud_claim_install", { p_expected_user_id: USER_A, p_source_install_id: installOf(b.db), p_replace: true });
+      await pass(b.e);
+      expect(server.softRemovedDeals.filter((d) => d.install === installOf(b.db))).toHaveLength(0);
+      expect(server.deals.filter((d) => d.install === installOf(b.db))).toHaveLength(2);
+    });
+
+    it("the removed-copy read unanswered: the move stops before the marker and the claim", async () => {
+      const { server, clock } = account({ oneComputer: true });
+      const a = computer(server, { on: true });
+      await startAndPass(a.e);
+      const b = computer(server);
+      await moveTo(b, clock);
+      clock.t += 61_000;
+      server.override = (fn) => (fn === "cloud_install_status" ? new Error("timeout") : undefined);
+      expect(await a.e.service.useThisComputer()).toEqual({ success: false, error: "network" });
+      expect(stateRows(a.db)).not.toContain("switch:move_pending");
+      expect(server.activeInstall).toBe(installOf(b.db));
+    });
+
     it("refused before any call on the active computer, and with the switch off", async () => {
       const { server } = account({ oneComputer: true });
       const a = computer(server, { on: true });

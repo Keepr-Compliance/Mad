@@ -720,13 +720,18 @@ export function setOrphanCount(
 
 // ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
 
-/** Plan §13.1 step 1: written before cloud_claim_install(p_replace = true) is called. */
-export function writeMovePending(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
-  db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID, nowIso(now));
+/**
+ * Plan §13.1 step 1: written before cloud_claim_install(p_replace = true) is called. `reclaim`: this computer's online
+ * copy was found removed before the claim (the claim deletes that register row, so it is recorded here first).
+ */
+export function writeMovePending(db: SqlDb, projectRef: string, userId: string, now: Date = new Date(), reclaim = false): void {
+  db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, MOVE_PENDING_ID, reclaim ? "reclaim" : null, nowIso(now));
 }
 
-export function hasMovePending(db: SqlDb, projectRef: string, userId: string): boolean {
-  return !!db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, MOVE_PENDING_ID);
+/** The move marker, or null: `reclaim` as written by writeMovePending. */
+export function movePending(db: SqlDb, projectRef: string, userId: string): { reclaim: boolean } | null {
+  const r = db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, MOVE_PENDING_ID) as { last_status: string | null } | undefined;
+  return r ? { reclaim: r.last_status === "reclaim" } : null;
 }
 
 /** The claim did not move the account here (refused, or the server names another computer): only the marker goes. */
@@ -740,14 +745,16 @@ export function clearMovePending(db: SqlDb, projectRef: string, userId: string):
  * marked, so the next pass sends again what the erase job may have scrubbed while this computer was not active.
  * Deal and party records and the messages_upload sentinel stay.
  *
- * A computer whose online copy had been removed ("Delete them" on another computer) takes the reclaim path instead:
- * the claim already deleted its register row on the server (migration 20261123100000 marker CLAIM:reclaim, :859-862),
- * and its deals were soft-removed online, so every record of what was saved is forgotten, as after
- * cloud_reclaim_install (reclaimInstallForUser), and the local stop is cleared, in the same transaction.
+ * A computer whose online copy had been removed ("Delete them" on the active computer: `reclaim`, read online before
+ * the claim; or a local stop already recorded) takes the reclaim path instead: the claim already deleted its register
+ * row on the server (migration 20261123100000 marker CLAIM:reclaim, :859-862), and its deals were soft-removed
+ * online, so every record of what was saved is forgotten, as after cloud_reclaim_install (reclaimInstallForUser), and
+ * the local stop is cleared, in the same transaction. Without this its deal records still say "synced" and the
+ * pass's shortcut would never send the removed deals again.
  */
-export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now: Date = new Date(), reclaim = false): void {
   db.transaction(() => {
-    if (installRemovedAt(db, projectRef, userId)) {
+    if (reclaim || installRemovedAt(db, projectRef, userId)) {
       reclaimInstallForUser(db, projectRef, userId, now);
       clearInstallRemoved(db, projectRef, userId);
       return;
@@ -765,7 +772,7 @@ export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now
 export function dropOwedTurnOff(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
   db.transaction(() => {
     db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(projectRef, userId);
-    db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, TURN_OFF_DROPPED_ID, nowIso(now));
+    db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, TURN_OFF_DROPPED_ID, null, nowIso(now));
     applyCloudSyncTriggerRule(db);
   })();
 }

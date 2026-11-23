@@ -71,7 +71,7 @@ describe("Settings › Keepr Cloud — a computer that is not the account's acti
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(C.moveConfirmTitle);
     expect(dialog).toHaveTextContent(/emails, texts and files saved from your other computer are removed from Keepr Cloud/);
-    expect(dialog).toHaveTextContent(/AI apps can no longer read them/);
+    expect(dialog).toHaveTextContent(/AI apps stop reading them at once/);
     expect(dialog).toHaveTextContent(/hourly cleanup erases them/);
     expect(dialog).toHaveTextContent(/Deals saved from your other computer stay online and stop updating/);
     await act(async () => {
