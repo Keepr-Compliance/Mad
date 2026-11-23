@@ -37,6 +37,14 @@ const LANE = readdirSync(MIGRATIONS)
   .filter((f) => f.slice(0, 14) <= LAST || LANE_OBJECT.test(readFileSync(join(MIGRATIONS, f), 'utf8')))
   .sort();
 const VERSIONS = LANE.map((f) => f.slice(0, 14));
+/**
+ * postcheck-final.sql is the state after the ten files FIRST .. LAST (production runs it before any later lane
+ * migration); postcheck-final-249.sql, present once a later lane migration exists, is the state after the last one.
+ */
+const FINALS: Array<[string, string[]]> = [
+  ['final', VERSIONS.filter((v) => v <= LAST)],
+  ...(VERSIONS.some((v) => v > LAST) ? [['final-249', VERSIONS] as [string, string[]]] : []),
+];
 
 /** name -> body (dollar-quoted text exactly as written) of each top-level CREATE FUNCTION, last definition wins. */
 function bodies(sql: string): Map<string, string> {
@@ -55,7 +63,18 @@ function bodies(sql: string): Map<string, string> {
   }
   return out;
 }
-const dropped = (sql: string): string[] => [...sql.matchAll(/^DROP FUNCTION (?:IF EXISTS )?public\.(\w+)\(/gm)].map((m) => m[1]);
+/** Signatures as the post-checks write them: name(type,type) with PostgreSQL's type names. */
+const TYPE: Record<string, string> = { timestamptz: 'timestamp with time zone', int: 'integer', int4: 'integer', int8: 'bigint', bool: 'boolean' };
+const types = (args: string[]): string => args.map((t) => t.trim().toLowerCase().replace(/\s+/g, ' ')).map((t) => TYPE[t] ?? t).join(',');
+/** Top-level comma split of an argument list (no nested parentheses in these migrations' argument types). */
+const splitArgs = (a: string): string[] => a.split(',').map((x) => x.trim()).filter(Boolean);
+const dropped = (sql: string): string[] =>
+  [...sql.matchAll(/^DROP FUNCTION (?:IF EXISTS )?public\.(\w+)\(([^)]*)\)/gm)].map((m) => `${m[1]}(${types(splitArgs(m[2]))})`);
+/** Signatures of the top-level CREATE FUNCTIONs (each argument: name type [DEFAULT ...]). */
+const created = (sql: string): string[] =>
+  [...sql.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(([^)]*)\)/gm)].map(
+    (m) => `${m[1]}(${types(splitArgs(m[2]).map((x) => x.replace(/\s+DEFAULT\s+.*$/is, '').trim().split(/\s+/).slice(1).join(' ')))})`,
+  );
 
 /** The function rows a post-check pins: name -> md5. */
 function pinned(pc: string): Map<string, string> {
@@ -67,7 +86,7 @@ function pinned(pc: string): Map<string, string> {
   return out;
 }
 const absent = (pc: string): string[] =>
-  [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+)\(/g)].map((m) => m[1]);
+  [...pc.slice(pc.indexOf('gone(sig)'), pc.indexOf('rel(name')).matchAll(/\('public\.(\w+\([^)]*\))'/g)].map((m) => m[1]);
 
 /**
  * The SQL with comments and string literals removed: `--` to end of line, `/* ... *\/` blocks and '...' literals (with
@@ -190,7 +209,7 @@ describe('BACKLOG-4263 production post-checks', () => {
       .map((f) => f.slice(10, 24))
       .sort();
     expect(files).toEqual(VERSIONS);
-    expect(existsSync(FILE('final'))).toBe(true);
+    for (const [k] of FINALS) expect(existsSync(FILE(k))).toBe(true);
   });
 
   it.each(VERSIONS)('postcheck-%s pins exactly the functions its migration defines, at the body md5 of the migration text', (v) => {
@@ -200,30 +219,36 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(defined.size).toBeGreaterThan(0);
     expect([...pins.keys()].sort()).toEqual([...defined.keys()].sort());
     for (const [name, body] of defined) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
-    expect(absent(pc).sort()).toEqual(dropped(MIG.get(v)!).filter((n) => !defined.has(n)).sort());
+    expect(absent(pc).sort()).toEqual(dropped(MIG.get(v)!).filter((s) => !created(MIG.get(v)!).includes(s)).sort());
     expect(pc).toContain(`(migration file md5 ${md5(MIG.get(v)!)})`);
   });
 
-  it('postcheck-final pins every function of the lane at its latest body, and the dropped ones as absent', () => {
+  it.each(FINALS)('postcheck-%s pins every function of its migrations at its latest body, and the dropped ones as absent', (k, versions) => {
     const latest = new Map<string, string>();
-    for (const v of VERSIONS) {
-      for (const n of dropped(MIG.get(v)!)) latest.delete(n);
+    const live = new Set<string>();
+    for (const v of versions) {
+      for (const s of dropped(MIG.get(v)!)) {
+        live.delete(s);
+        latest.delete(s.slice(0, s.indexOf('(')));
+      }
+      for (const s of created(MIG.get(v)!)) live.add(s);
       for (const [n, b] of bodies(MIG.get(v)!)) latest.set(n, b);
     }
-    const pc = read(FILE('final'));
+    const pc = read(FILE(k));
     const pins = pinned(pc);
     expect([...pins.keys()].sort()).toEqual([...latest.keys()].sort());
     for (const [name, body] of latest) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
-    const everDropped = VERSIONS.flatMap((v) => dropped(MIG.get(v)!)).filter((n) => !latest.has(n));
+    const everDropped = versions.flatMap((v) => dropped(MIG.get(v)!)).filter((s) => !live.has(s));
     expect(absent(pc).sort()).toEqual([...new Set(everDropped)].sort());
-    for (const v of VERSIONS) expect(pc).toContain(`('${v}')`);
+    for (const v of versions) expect(pc).toContain(`('${v}')`);
+    for (const v of VERSIONS.filter((x) => !versions.includes(x))) expect(pc).not.toContain(`('${v}')`);
   });
 
   it('the production folder holds only read-only files: no verify-* file, and no write statement in any .sql file', () => {
     const files = readdirSync(DIR);
     expect(files.filter((f) => f.startsWith('verify-'))).toEqual([]);
     const sql = files.filter((f) => f.endsWith('.sql')).sort();
-    expect(sql.length).toBe(VERSIONS.length + 1);
+    expect(sql.length).toBe(VERSIONS.length + FINALS.length);
     for (const f of sql) {
       const c = code(read(join(DIR, f)));
       expect(`${f}: ${(c.match(WRITE) || []).join(',')}`).toBe(`${f}: `);
@@ -254,7 +279,7 @@ describe('BACKLOG-4263 production post-checks', () => {
 
   it('the production folder holds no backslash (no E-string can shift the literal scan)', () => {
     const sql = readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
-    expect(sql.length).toBe(VERSIONS.length + 1);
+    expect(sql.length).toBe(VERSIONS.length + FINALS.length);
     for (const f of sql) expect(`${f}: ${read(join(DIR, f)).includes('\\')}`).toBe(`${f}: false`);
   });
 
@@ -282,7 +307,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(read(join(VERIFY_DIR, 'verify-run.sql')).split('\n')[0]).toContain('must never be run on production');
   });
 
-  it.each([...VERSIONS, 'final'])('postcheck-%s is one read-only SELECT', (k) => {
+  it.each([...VERSIONS, ...FINALS.map((f) => f[0])])('postcheck-%s is one read-only SELECT', (k) => {
     const pc = read(FILE(k));
     const c = code(pc);
     expect(c).not.toMatch(new RegExp(WRITE.source, 'i'));
@@ -297,7 +322,7 @@ describe('BACKLOG-4263 production post-checks', () => {
     expect(pc).toContain(`'POSTCHECK ${k} FAILED: '`);
   });
 
-  it.each([...VERSIONS, 'final'])('postcheck-%s labels: report-only only for the four named kinds, never for an API role', (k) => {
+  it.each([...VERSIONS, ...FINALS.map((f) => f[0])])('postcheck-%s labels: report-only only for the four named kinds, never for an API role', (k) => {
     const pc = read(FILE(k));
     const rules = [...pc.slice(pc.indexOf('rule(kind, must) AS (VALUES'), pc.indexOf('checks(id, kind')).matchAll(/\('([^']+)', (true|false)\)/g)];
     expect(rules.length).toBeGreaterThan(5);
