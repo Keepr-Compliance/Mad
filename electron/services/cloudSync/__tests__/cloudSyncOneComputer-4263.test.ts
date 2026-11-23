@@ -305,9 +305,8 @@ describe(`Keepr Cloud one computer per account [${DRIVER}]`, () => {
       await moveTo(b, clock);
       expect((await pass(a.e)).outcome).toBe("other_computer");
       a.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("queued while refused", a.item);
-      // The erase job scrubs A's emails, texts and files while A is not active (P3 condition 6; modelled).
-      server.runScrub([installOf(a.db) as string]);
-      expect(server.scrubbedInstalls.has(installOf(a.db) as string)).toBe(true);
+      // The erase job would scrub A's emails, texts and files online now (P3 condition 6). P2 proves only the local half:
+      // the records that say they are saved go and every deal is marked; P5 sends them again (end-to-end C-2e there).
       const dealRecords = stateRows(a.db).filter((r) => r.startsWith("deal:"));
       expect(dealRecords).toHaveLength(3);
 
@@ -523,21 +522,52 @@ describe(`Keepr Cloud one computer per account [${DRIVER}]`, () => {
       expect(server.callsTo("set_my_cloud_autosave").at(-1)!.args).toMatchObject({ p_enabled: false, p_source_install_id: mine });
       expect(s.outcome).toBe("other_computer");
       expect(settings(a.db)).toMatchObject({ enabled: 0, turn_off_owed_at: null });
-      expect(stateRows(a.db)).toEqual(["switch:turn_off_dropped"]);
+      expect(stateRows(a.db)).toEqual([]);
+      server.override = null;
+      expect(await a.e.service.getView()).toMatchObject({ status: "other_computer", turnOffDropped: true });
       expect(server.deals.length).toBeGreaterThan(0);
     });
 
-    it("turn off on a computer that lost its place since the screen was drawn: refused online, dropped here, nothing online deleted", async () => {
+    it("turn off on a computer whose last pull finds another computer active: refused, and nothing here or online is changed", async () => {
+      const { server, clock } = account({ oneComputer: true });
+      const a = computer(server, { on: true, todo: true });
+      await startAndPass(a.e);
+      const b = computer(server);
+      await moveTo(b, clock);
+      a.db.prepare(SET_CHECKLIST_ITEM_NOTE_SQL).run("queued while refused", a.item);
+      a.db.prepare("UPDATE transactions SET property_city = 'Elsewhere' WHERE id = ?").run(a.deals[0]);
+      const records = stateRows(a.db);
+      const offCalls = server.callsTo("set_my_cloud_autosave").length;
+      const r = await a.e.service.turnOff();
+      expect(r).toEqual({ success: false, error: "computer_not_active" });
+      expect(server.callsTo("set_my_cloud_autosave")).toHaveLength(offCalls);
+      expect(settings(a.db)).toMatchObject({ enabled: 1, turn_off_owed_at: null });
+      expect(stateRows(a.db)).toEqual(records);
+      expect(dirty(a.db).map((d) => d.transaction_id)).toEqual([a.deals[0]]);
+      expect(a.db.prepare("SELECT COUNT(*) AS n FROM cloud_sync_todo_outbox").get()).toEqual({ n: 1 });
+      expect(server.enabled).toBe(true);
+      expect(server.deals.filter((d) => d.install === installOf(b.db))).toHaveLength(1);
+    });
+
+    it("turn off racing a move (the last pull still saw this computer active): the server refuses, the turn-off is dropped here, nothing online deleted", async () => {
       const { server, clock } = account({ oneComputer: true });
       const a = computer(server, { on: true });
       await startAndPass(a.e);
       const b = computer(server);
       await moveTo(b, clock);
+      const mine = installOf(a.db);
+      server.override = (fn, args) =>
+        fn === "get_my_cloud_autosave_state"
+          ? { data: { ...(server.respond(fn, args) as Record<string, unknown>), active_install_id: mine }, error: null, status: 200 }
+          : undefined;
       const r = await a.e.service.turnOff();
       expect(r).toEqual({ success: false, error: "computer_not_active" });
+      expect(server.callsTo("set_my_cloud_autosave").at(-1)!.args).toMatchObject({ p_enabled: false, p_source_install_id: mine });
       expect(settings(a.db)).toMatchObject({ enabled: 0, turn_off_owed_at: null });
       expect(server.enabled).toBe(true);
       expect(server.deals.filter((d) => d.install === installOf(b.db))).toHaveLength(1);
+      server.override = null;
+      expect(await a.e.service.getView()).toMatchObject({ status: "other_computer", turnOffDropped: true });
     });
 
     it("from the active computer: the turn-off carries its install id, deletes the online copy and frees the account", async () => {

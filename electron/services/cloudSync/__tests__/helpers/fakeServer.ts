@@ -112,8 +112,8 @@
  *                                minute -> {ok:false, error:'busy'} (:853-856); else the move: active = caller, the
  *                                caller's removed-install row deleted when replace (:859-862), a move row only while
  *                                the switch is on (:863-867) -> {ok, active, replaced:<old id>} (:868).
- *   The erase job's scrub of a non-active computer's emails, texts and files (P3 condition 6) is modelled only as
- *   `scrubbedInstalls` (which installs' message and file rows it would have scrubbed); the fake stores no message rows.
+ *   The fake stores no message, file or blob rows, so the erase job's scrub of a non-active computer's emails, texts
+ *   and files (P3 condition 6) is not modelled; P5/P6 add those rows.
  */
 import type { RpcTransport, RpcResponse } from "../../cloudClient";
 import type { JsonValue } from "../../jcs";
@@ -343,18 +343,10 @@ export class FakeServer {
   activeSince: string | null = null;
   /** cloud_computer_moves rows (only while the switch is on). */
   moves: Array<{ from: string | null; to: string; at: number }> = [];
-  /** Installs whose message and file rows the erase job scrubbed (P3 condition 6; modelled, see the header). */
-  scrubbedInstalls = new Set<string>();
 
   /** _cloud_install_inactive (:146-152). */
   installInactive(install: unknown): boolean {
     return this.s1 && this.oneComputer && this.activeInstall !== install;
-  }
-
-  /** The erase job's batch over the non-active computers (modelled: only while the switch is on). */
-  runScrub(installs: string[]): void {
-    if (!this.oneComputer) return;
-    for (const i of installs) if (i !== this.activeInstall) this.scrubbedInstalls.add(i);
   }
 
   /** _cloud_todo_take_seq: the owner's next number. */

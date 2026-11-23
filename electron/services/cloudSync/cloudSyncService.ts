@@ -269,7 +269,7 @@ export class CloudSyncService {
     // BACKLOG-4263 P2: read only (no install is created or rebound by opening Settings).
     const mine = todoStore.currentInstallId(db, ref);
     const view = this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at, mine);
-    if (store.turnOffDropped(db, ref, session.userId) && !locallyOn) view.turnOffDropped = true;
+    if (view.status === "other_computer" && this.runner?.turnOffDropped.has(session.userId)) view.turnOffDropped = true;
     if (view.status === "on" || view.status === "error") {
       view.onlineNotHereDeals = this.onlineNotHere(db, ref, session.userId);
       const restored = this.restoredOnlineOnly(db, ref, session.userId);
@@ -446,6 +446,7 @@ export class CloudSyncService {
     const claimed = await this.claimBeforeEnable(userId, installId, read.state);
     if (claimed) return claimed;
     store.enableForUser(this.deps.db(), this.deps.projectRef as string, userId, { noticeVersion, acceptedAt }, this.now());
+    this.runner?.turnOffDropped.delete(userId);
     this.refreshSchedule();
     void this.kick();
     return { success: true };
@@ -470,6 +471,7 @@ export class CloudSyncService {
       { noticeVersion: read.state.currentNoticeVersion, acceptedAt: read.state.acceptedAt },
       this.now(),
     );
+    this.runner?.turnOffDropped.delete(userId);
     this.refreshSchedule();
     void this.kick();
     return { success: true };
@@ -515,6 +517,7 @@ export class CloudSyncService {
         this.now(),
       );
     }
+    this.runner.turnOffDropped.delete(userId);
     this.failedPasses = 0;
     this.refreshSchedule();
     void this.kick();
@@ -527,7 +530,10 @@ export class CloudSyncService {
     if (!userId) return { success: false, error: "signed_out" };
     // BACKLOG-4263 PR-6 (plan §7): a best-effort last pull, so changes from AI apps or other devices reach this
     // computer before the online copy goes. At most TURN_OFF_PULL_MS; it never blocks or fails the turn-off.
-    await this.lastPullBeforeTurnOff();
+    const pulled = await this.lastPullBeforeTurnOff();
+    // BACKLOG-4263 P2 (plan §2.5, §11.2): that pass found another computer active. This computer cannot turn the
+    // account off; nothing here is changed (its records, marks and queued todo changes stay).
+    if (pulled?.outcome === "other_computer") return { success: false, error: "computer_not_active" };
     const db = this.deps.db();
     const ref = this.deps.projectRef as string;
     store.disableForUser(db, ref, userId, true, this.now());
@@ -540,7 +546,8 @@ export class CloudSyncService {
     // BACKLOG-4263 P2 (plan §2.5): another computer became active first. Nothing online was deleted; the owed
     // turn-off is dropped and this computer stays off.
     if (res.kind === "refused" && res.code === "computer_not_active") {
-      store.dropOwedTurnOff(db, ref, userId, this.now());
+      store.dropOwedTurnOff(db, ref, userId);
+      this.runner?.turnOffDropped.add(userId);
       this.refreshSchedule();
       return { success: false, error: "computer_not_active" };
     }
@@ -549,15 +556,16 @@ export class CloudSyncService {
     return { success: false, error: res.code, pendingOnline: true };
   }
 
-  private async lastPullBeforeTurnOff(): Promise<void> {
-    if (!this.runner || this.timer === null || !this.deps.isOnline()) return;
+  /** The last pull's summary, or null (not run, failed, or past the time limit). */
+  private async lastPullBeforeTurnOff(): Promise<PassSummary | null> {
+    if (!this.runner || this.timer === null || !this.deps.isOnline()) return null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const limit = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, this.deps.turnOffPullMs ?? TURN_OFF_PULL_MS);
+    const limit = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.deps.turnOffPullMs ?? TURN_OFF_PULL_MS);
       (timer as { unref?: () => void }).unref?.();
     });
     try {
-      await Promise.race([this.kick().then(() => undefined, () => undefined), limit]);
+      return await Promise.race([this.kick().then((s) => s, () => null), limit]);
     } finally {
       if (timer) clearTimeout(timer);
     }

@@ -182,6 +182,11 @@ export class CloudSyncRunner {
    * null before any state read this launch. Decides whether a turn-off sends this computer's install id.
    */
   private serverHasOneComputer: boolean | null = null;
+  /**
+   * BACKLOG-4263 P2: users whose owed turn-off was dropped this launch because another computer became active (for
+   * the screen's line). In memory only; cleared when Keepr Cloud is turned on or moved here again.
+   */
+  readonly turnOffDropped = new Set<string>();
 
   constructor(private readonly deps: RunnerDeps) {
     deps.identity.onCleared(() => {
@@ -650,7 +655,8 @@ export class CloudSyncRunner {
    * this computer stays off.
    */
   private dropOwedTurnOff(userId: string, state: ServerState): PassSummary {
-    store.dropOwedTurnOff(this.deps.db(), this.deps.projectRef, userId, this.now());
+    store.dropOwedTurnOff(this.deps.db(), this.deps.projectRef, userId);
+    this.turnOffDropped.add(userId);
     this.log.warn("[CloudSync] Turn-off dropped: another computer is active", {});
     return this.finish({ outcome: "other_computer", done: 0, failed: 0, state });
   }

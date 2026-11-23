@@ -41,7 +41,6 @@ import {
   DELETE_SWITCH_MARKER_SQL,
   MOVE_PENDING_ID,
   SELECT_SWITCH_MARKER_SQL,
-  TURN_OFF_DROPPED_ID,
   UPSERT_SWITCH_MARKER_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
@@ -766,17 +765,13 @@ export function applyMoveHere(db: SqlDb, projectRef: string, userId: string, now
 
 /**
  * Plan §2.5: a turn-off made here while offline is dropped because another computer became active first. The owed
- * marker goes (this computer stays off; nothing online is deleted) and a marker records why, for the screen, in one
- * transaction with the trigger rule.
+ * marker goes (this computer stays off; nothing online is deleted), with the trigger rule, in one transaction. Why it
+ * was dropped is kept in memory only (CloudSyncRunner.turnOffDropped): a state row would outlive the turn-off and
+ * read as another project's data if this profile were later pointed at another project (otherProjectInUse).
  */
-export function dropOwedTurnOff(db: SqlDb, projectRef: string, userId: string, now: Date = new Date()): void {
+export function dropOwedTurnOff(db: SqlDb, projectRef: string, userId: string): void {
   db.transaction(() => {
     db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(projectRef, userId);
-    db.prepare(UPSERT_SWITCH_MARKER_SQL).run(projectRef, userId, TURN_OFF_DROPPED_ID, null, nowIso(now));
     applyCloudSyncTriggerRule(db);
   })();
-}
-
-export function turnOffDropped(db: SqlDb, projectRef: string, userId: string): boolean {
-  return !!db.prepare(SELECT_SWITCH_MARKER_SQL).get(projectRef, userId, TURN_OFF_DROPPED_ID);
 }

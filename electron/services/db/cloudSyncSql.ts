@@ -399,20 +399,17 @@ export const CLOUD_SYNC_ACTIVE_SQL = `SELECT 1 FROM cloud_sync_settings WHERE en
 
 // ---------------------------------------------------------------- one computer per account (BACKLOG-4263 P2)
 //
-// Two local marker rows in cloud_sync_state (no local migration: `entity` has no CHECK and `transaction_id` no
-// foreign key, schema.sql CREATE TABLE cloud_sync_state). Both use entity 'switch' and transaction_id '', which no
-// deal, party or todo reader matches (they filter on entity 'deal' / 'party' or on a real transaction id).
+// One local marker row in cloud_sync_state (no local migration: `entity` has no CHECK and `transaction_id` no
+// foreign key, schema.sql CREATE TABLE cloud_sync_state). It uses entity 'switch' and transaction_id '', which no
+// deal, party or todo reader matches (they filter on entity 'deal' / 'party' or on a real transaction id), and it
+// lives only while Keepr Cloud is on here (a turn-off's DELETE_STATE_FOR_USER_SQL removes it).
 //   'switch' / 'move_pending'      written before cloud_claim_install(p_replace = true); deleted by the move's local
 //                                  transaction, or when the server names another computer (plan §13.1).
 //                                  last_status 'reclaim': this computer's online copy had been removed ("Delete
 //                                  them" on the active computer), so the move forgets every record (reclaim path).
-//   'switch' / 'turn_off_dropped'  a turn-off made here while offline was dropped because another computer had
-//                                  become active (plan §2.5); the screen says nothing was deleted online. Cleared
-//                                  by the next fresh enable (DELETE_STATE_FOR_USER_SQL).
 
 export const SWITCH_ENTITY = "switch";
 export const MOVE_PENDING_ID = "move_pending";
-export const TURN_OFF_DROPPED_ID = "turn_off_dropped";
 
 /** Writes one marker row of this user (or refreshes it): project_ref, owner, local_id, last_status, updated_at. */
 export const UPSERT_SWITCH_MARKER_SQL = `INSERT INTO cloud_sync_state
