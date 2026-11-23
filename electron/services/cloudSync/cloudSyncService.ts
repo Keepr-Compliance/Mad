@@ -12,6 +12,7 @@
 import type { CloudClient } from "./cloudClient";
 import { CloudSyncRunner, type PassSummary, type RunnerDeps, type RunnerLog } from "./runner";
 import { isNoticeSupported } from "./notice";
+import { TodoOutboxWatcher } from "./todoOutboxWatcher";
 import { parseState, type ServerState } from "./stateReader";
 import { restoreEpoch } from "../db/cloudSyncTriggers";
 import type { SessionIdentity } from "./session";
@@ -75,6 +76,10 @@ export class CloudSyncService {
   private installId: string | null = null;
   private failedPasses = 0;
   engineInstalled = true;
+  /** BACKLOG-4263 P0: a pass shortly after the user's own todo change (reads the outbox, calls kick()). */
+  readonly todoWatcher: TodoOutboxWatcher | null;
+  /** The session epoch at the last sign-out: the watcher stays stopped until the next session event. */
+  private signedOutAtEpoch: number | null = null;
 
   constructor(private readonly deps: CloudSyncServiceDeps) {
     const projectRef = deps.projectRef;
@@ -98,6 +103,24 @@ export class CloudSyncService {
           }),
         })
       : null;
+    this.todoWatcher = projectRef
+      ? new TodoOutboxWatcher({
+          db: deps.db,
+          dbReady: deps.dbReady,
+          projectRef,
+          isOnline: deps.isOnline,
+          getAuthUserId: deps.getAuthUserId,
+          passRunning: () => this.runner?.isRunning() ?? false,
+          kick: () => void this.kick(),
+          setInterval: deps.setInterval,
+          clearInterval: deps.clearInterval,
+          now: () => this.now(),
+        })
+      : null;
+    deps.identity.onCleared(() => {
+      this.signedOutAtEpoch = deps.identity.epoch;
+      this.todoWatcher?.stop();
+    });
   }
 
   private now(): Date {
@@ -147,6 +170,8 @@ export class CloudSyncService {
       this.deps.clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.timer !== null && this.signedOutAtEpoch !== this.deps.identity.epoch) this.todoWatcher?.start();
+    else this.todoWatcher?.stop();
   }
 
   /** Runs a pass when Keepr Cloud is on here; otherwise nothing. */
@@ -159,16 +184,21 @@ export class CloudSyncService {
     } catch {
       /* the next tick or the next open retries */
     }
+    // BACKLOG-4263 P0: only a kick that starts a pass marks the outbox (a kick during a pass only queues one).
+    const starting = !this.runner.isRunning();
+    if (starting) this.todoWatcher?.passStarting();
     let summary: PassSummary;
     try {
       summary = await this.runner.runPass();
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       this.deps.log?.warn("[CloudSync] Pass failed", { code: typeof code === "string" ? code : error instanceof Error ? error.name : "unknown" });
+      if (starting) this.todoWatcher?.passEnded(null);
       return null;
     }
     if (summary.outcome !== "queued") {
       this.failedPasses = summary.failed > 0 ? this.failedPasses + 1 : summary.outcome === "done" ? 0 : this.failedPasses;
+      this.todoWatcher?.passEnded(summary);
     }
     if (summary.outcome === "not_enabled") this.refreshSchedule();
     // BACKLOG-4263: also after the server answered this computer's own todo changes (a kept or refused change, a
@@ -187,6 +217,7 @@ export class CloudSyncService {
   stop(): void {
     if (this.timer !== null) this.deps.clearInterval(this.timer);
     this.timer = null;
+    this.todoWatcher?.stop();
   }
 
   // ------------------------------------------------------------ view
