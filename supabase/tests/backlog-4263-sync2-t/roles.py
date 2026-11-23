@@ -293,13 +293,16 @@ def erase_harness_text():
     return '\n'.join(lines)
 
 
-def check(files, extra=None):
+def check(files, extra=None, texts=None):
+    """texts: file -> text to use instead of the file on disk (a generator checking what it is about to write)."""
     base = model_after_migrations()
     per = {}
     for f in files:
         m = Model()
         m.owner = dict(base.owner)
-        raw = open(os.path.join(REPO, f), encoding='utf-8').read()
+        raw = (texts or {}).get(f)
+        if raw is None:
+            raw = open(os.path.join(REPO, f), encoding='utf-8').read()
         m.run({'file': f, 'raw': raw}, raw, SESSION, top=True)
         per[f] = m.ops
     for name, raw in (extra or {}).items():
