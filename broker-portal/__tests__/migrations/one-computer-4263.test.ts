@@ -516,10 +516,10 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
   const MUTANTS: Array<[string, string, string]> = [
     ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
     ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],
-    ['mutant-off-no-active-check.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
+    ['mutant-off-check-before-lock.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
     ['mutant-deal-gate-before-lock.sql', 'cloud_upsert_deal', 'uuid, jsonb'],
   ];
-  it.each(MUTANTS)('two-session %s creates only %s_m4263, never replaces the live function, guard first', (file, name, sig) => {
+  it.each(MUTANTS)('two-session %s creates only %s_m4263, never replaces the live function, granted to no API role, guard first', (file, name, sig) => {
     const f = read(join(DIR, 'concurrency', file));
     const code = f.replace(/^--[^\n]*\n/gm, '');
     expect(code.startsWith('DO $guard4263s1cc$')).toBe(true);
@@ -527,9 +527,32 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect([...f.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(/gm)].map((m) => m[1])).toEqual([`${name}_m4263`]);
     expect(f).not.toMatch(/CREATE OR REPLACE FUNCTION/);
     expect(f).toContain(`REVOKE ALL ON FUNCTION public.${name}_m4263(${sig}) FROM PUBLIC, anon, authenticated, service_role;`);
-    expect([...f.matchAll(/^GRANT [^\n]*$/gm)].map((m) => m[0])).toEqual([`GRANT EXECUTE ON FUNCTION public.${name}_m4263(${sig}) TO authenticated;`]);
+    expect([...f.matchAll(/^GRANT [^\n]*$/gim)].map((m) => m[0])).toEqual([]);
     expect(read(join(DIR, 'concurrency/drop-mutants.sql'))).toContain(`DROP FUNCTION IF EXISTS public.${name}_m4263(${sig});`);
     expect(body(f.replace(`public.${name}_m4263(`, `public.${name}(`), name)).not.toBe(body(S1, name));
+  });
+
+  it('two-session R4 mutant keeps the refusal and reads the active computer before the settings lock (red only under the race)', () => {
+    const f = read(join(DIR, 'concurrency/mutant-off-check-before-lock.sql'));
+    const b = f.slice(f.indexOf('CREATE FUNCTION public.set_my_cloud_autosave_m4263('));
+    const check = b.indexOf("      RETURN jsonb_build_object('success', false, 'error', 'computer_not_active');");
+    const lock = b.indexOf('  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE;');
+    expect(check).toBeGreaterThan(0);
+    expect(lock).toBeGreaterThan(check);
+    expect(b.indexOf('/*SET:active:switch*/', lock)).toBe(-1);
+    expect(b).not.toMatch(/^\s*NULL;\s*$/m);
+  });
+
+  it('two-session hold marker is the first line of the session-1 call and no session file carries it inline', () => {
+    const cc = join(DIR, 'concurrency');
+    expect(read(join(cc, 'hold-marker.sql')).startsWith('/*p_hold:__RUN__*/\n')).toBe(true);
+    for (const f of readdirSync(cc).filter((x) => /^(r\d-|claim-|end)/.test(x))) {
+      expect(`${f}: ${read(join(cc, f)).includes('p_hold:')}`).toBe(`${f}: false`);
+    }
+    const run = read(join(cc, 'run.sh'));
+    expect(run).toContain('{ cat "$here/hold-marker.sql"; cat "$here/guard.sql"; echo;');
+    expect(readdirSync(cc)).not.toContain('sweep.sql');
+    expect(read(join(cc, 'as-user.sql'))).not.toMatch(/\bSET\s+(LOCAL\s+)?ROLE\b/i);
   });
 
   it('two-session session files call functions only through placeholders, and no pristine replacement file remains', () => {

@@ -1,2 +1,5 @@
 -- R3 session 1: IA claims (no active computer), then holds 4 s.
-SELECT public.__CLAIM_FN__('__A__'::uuid, '__IA__'::uuid, false) AS r, pg_sleep(4) /*p_hold:__RUN__*/ AS hold;
+SELECT set_config('p4263.t_start', clock_timestamp()::text, true);
+SELECT set_config('p4263.r', (public.__CLAIM_FN__('__A__'::uuid, '__IA__'::uuid, false))::text, true);
+SELECT set_config('p4263.t_hold', clock_timestamp()::text, true);
+SELECT pg_sleep(4);
