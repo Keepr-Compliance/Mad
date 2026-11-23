@@ -430,6 +430,32 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect(HARNESS).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{11}[1-9a-f]/i);
   });
 
+  it('harness backfill fixture: bf_7 tells the real ordering (greatest max save) apart from greatest min save', () => {
+    // the rule as the migration writes it
+    expect(S1).toContain('ORDER BY d.owner_user_id, max(d.last_synced_at) DESC, d.source_install_id) w');
+    // install ids exactly as the harness's pg_temp.fx() makes them; uuid order is byte order = hex text order
+    const fx = (k: string): string => md5(`p4263:sync2-s1-harness:${k}`);
+    const rowRe = /\(pg_temp\.f\('bf_7'\), pg_temp\.f\('(bf_7_i\d)'\), '[^']+', pg_temp\.h\('[^']+'\), now\(\) - interval '(\d+) hours', NULL\)/g;
+    const ago = new Map<string, number[]>();
+    for (const m of HARNESS.matchAll(rowRe)) ago.set(m[1], [...(ago.get(m[1]) ?? []), Number(m[2])]);
+    const installs = [...ago.keys()];
+    expect(installs.length).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...[...ago.values()].map((a) => a.length))).toBeGreaterThanOrEqual(2);
+    // fewer hours ago = saved later; ties to the lowest id
+    const pick = (score: (k: string) => number): string =>
+      [...installs].sort((a, b) => score(b) - score(a) || (fx(a) < fx(b) ? -1 : 1))[0];
+    const maxSave = (k: string): number => -Math.min(...ago.get(k)!);
+    const minSave = (k: string): number => -Math.max(...ago.get(k)!);
+    const real = pick(maxSave);
+    expect(pick(minSave)).not.toBe(real); // min(...) DESC, the harness's M_backfill_least_recent
+    expect(pick((k) => -maxSave(k))).not.toBe(real); // max(...) ASC
+    expect(pick((k) => -minSave(k))).not.toBe(real); // min(...) ASC
+    expect(pick(() => 0)).not.toBe(real); // install id only
+    const asserted = /'max_not_min', \(SELECT active_install_id FROM public\.cloud_autosave_settings WHERE user_id = pg_temp\.f\('bf_7'\)\) = pg_temp\.f\('(bf_7_i\d)'\)\)/.exec(HARNESS);
+    expect(asserted?.[1]).toBe(real);
+    expect(HARNESS).toContain("UPDATE pg_temp.s1_sql SET s = replace(s, 'max(d.last_synced_at) DESC', 'min(d.last_synced_at) DESC') WHERE k = 'backfill';");
+  });
+
   const MUTANTS: Array<[string, string, string]> = [
     ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
     ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],

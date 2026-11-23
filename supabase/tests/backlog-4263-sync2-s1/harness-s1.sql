@@ -169,7 +169,7 @@ BEGIN
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   SELECT pg_temp.fx(k), 'p4263-s1-' || substr(md5('s1-harness'), 1, 8) || '-' || lower(k) || '@example.test', 'authenticated', 'authenticated',
          '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-    FROM unnest(ARRAY['A', 'bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6']) k;
+    FROM unnest(ARRAY['A', 'bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6', 'bf_7']) k;
   INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
   VALUES (A, 'p4263-s1-' || substr(md5('s1-harness'), 1, 8) || '-a@example.test', 'email', A::text, 'Fixture s1') ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.organizations (id, name, slug) VALUES (O, 'Fixture s1', 'p4263-s1-' || substr(md5('s1-harness'), 1, 8));
@@ -202,12 +202,14 @@ BEGIN
   UPDATE public.cloud_autosave_settings SET active_install_id = NULL, active_since = NULL WHERE user_id = A;
   r := pg_temp.claim('IA', false);
   IF r ->> 'ok' IS DISTINCT FROM 'true' OR pg_temp.active() IS DISTINCT FROM pg_temp.f('IA') THEN RAISE EXCEPTION 'FIXTURE claim failed: %', r; END IF;
-  -- backfill users: settings and deals written directly (owner role); one deal per (user, install)
-  INSERT INTO pg_temp.s1_fx SELECT k, pg_temp.fx(k) FROM unnest(ARRAY['bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6',
-    'bf_1_i1', 'bf_1_i2', 'bf_1_i3', 'bf_2_i1', 'bf_2_i2', 'bf_3_i1', 'bf_3_i2', 'bf_4_i1', 'bf_6_i1', 'bf_6_i2']) k;
+  -- backfill users: settings and deals written directly (owner role); one deal per (user, install), except bf_7_i2 (two)
+  INSERT INTO pg_temp.s1_fx SELECT k, pg_temp.fx(k) FROM unnest(ARRAY['bf_1', 'bf_2', 'bf_3', 'bf_4', 'bf_5', 'bf_6', 'bf_7',
+    'bf_1_i1', 'bf_1_i2', 'bf_1_i3', 'bf_2_i1', 'bf_2_i2', 'bf_3_i1', 'bf_3_i2', 'bf_4_i1', 'bf_6_i1', 'bf_6_i2',
+    'bf_7_i1', 'bf_7_i2', 'bf_7_i3']) k;
   INSERT INTO public.cloud_autosave_settings (user_id, enabled, notice_version, accepted_at, active_install_id)
   VALUES (pg_temp.f('bf_1'), true, 1, now(), NULL), (pg_temp.f('bf_2'), true, 1, now(), NULL), (pg_temp.f('bf_3'), true, 1, now(), NULL),
-         (pg_temp.f('bf_4'), false, 1, now(), NULL), (pg_temp.f('bf_5'), true, 1, now(), NULL), (pg_temp.f('bf_6'), true, 1, now(), pg_temp.f('bf_6_i1'));
+         (pg_temp.f('bf_4'), false, 1, now(), NULL), (pg_temp.f('bf_5'), true, 1, now(), NULL), (pg_temp.f('bf_6'), true, 1, now(), pg_temp.f('bf_6_i1')),
+         (pg_temp.f('bf_7'), true, 1, now(), NULL);
   INSERT INTO public.cloud_deals (owner_user_id, source_install_id, local_transaction_id, content_hash, last_synced_at, removed_at)
   VALUES (pg_temp.f('bf_1'), pg_temp.f('bf_1_i1'), 'bf-1-1', pg_temp.h('a'), now() - interval '3 days', NULL),
          (pg_temp.f('bf_1'), pg_temp.f('bf_1_i2'), 'bf-1-2', pg_temp.h('b'), now() - interval '1 day', NULL),
@@ -217,7 +219,13 @@ BEGIN
          (pg_temp.f('bf_3'), pg_temp.f('bf_3_i1'), 'bf-3-1', pg_temp.h('f'), now() - interval '2 days', NULL),
          (pg_temp.f('bf_3'), pg_temp.f('bf_3_i2'), 'bf-3-2', pg_temp.h('g'), now() - interval '1 hour', now()),
          (pg_temp.f('bf_4'), pg_temp.f('bf_4_i1'), 'bf-4-1', pg_temp.h('h'), now(), NULL),
-         (pg_temp.f('bf_6'), pg_temp.f('bf_6_i2'), 'bf-6-2', pg_temp.h('i'), now(), NULL);
+         (pg_temp.f('bf_6'), pg_temp.f('bf_6_i2'), 'bf-6-2', pg_temp.h('i'), now(), NULL),
+         -- bf_7: bf_7_i2 holds both the newest deal and an older one; bf_7_i1 sits in between, bf_7_i3 is oldest.
+         -- greatest max(last_synced_at) picks bf_7_i2; greatest min(last_synced_at) would pick bf_7_i1.
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i1'), 'bf-7-1', pg_temp.h('j'), now() - interval '24 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i2'), 'bf-7-2a', pg_temp.h('k'), now() - interval '36 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i2'), 'bf-7-2b', pg_temp.h('l'), now() - interval '1 hours', NULL),
+         (pg_temp.f('bf_7'), pg_temp.f('bf_7_i3'), 'bf-7-3', pg_temp.h('m'), now() - interval '48 hours', NULL);
 END
 $fx$;
 
@@ -444,7 +452,8 @@ BEGIN
     'removed_ignored', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_3')) = pg_temp.f('bf_3_i1'),
     'disabled_null', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_4')) IS NULL,
     'no_deal_null', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_5')) IS NULL,
-    'set_kept', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_6')) = pg_temp.f('bf_6_i1'));
+    'set_kept', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_6')) = pg_temp.f('bf_6_i1'),
+    'max_not_min', (SELECT active_install_id FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('bf_7')) = pg_temp.f('bf_7_i2'));
   RETURN pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_each(v) e WHERE e.value <> 'true'::jsonb), v::text);
 END $c$;
 CREATE FUNCTION pg_temp.c3_clear() RETURNS text LANGUAGE plpgsql AS $c$
