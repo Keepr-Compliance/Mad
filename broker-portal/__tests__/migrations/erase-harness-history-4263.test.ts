@@ -42,6 +42,8 @@ describe('BACKLOG-4263 erase harness run history', () => {
 
   it('the two new mutants exist: the rollback check neutralised (control level) and the clearing left out (call level)', () => {
     expect(PY).toContain("m.append(rb_mutant('RB1_history_check_dropped', [(\"  IF n > 0 THEN\\n    RAISE EXCEPTION 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds % rows\",");
+    expect(PY).toMatch(/^ {4}m\.append\(rb_mutant\('RB1_history_check_dropped', /m);
+    expect(PY).toContain("'mutants': ['M_Invoke_without_url_check', 'M_Invoke_granted_service_role', 'M_RB1_history_check_dropped']}");
     expect(PY).toContain("v := pg_temp.p_rollback_refuses_history(%s, %s);");
     expect(PY).toContain("IF md5(%s) IS DISTINCT FROM %s THEN\\n      v := 'NOT APPLIED IN DB';");
     expect(PY).toContain('HISTORY_REFUSAL = "ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds "');

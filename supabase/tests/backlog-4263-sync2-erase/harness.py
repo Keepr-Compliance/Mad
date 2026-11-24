@@ -638,6 +638,9 @@ if __name__ == '__main__':
         blocks = re.findall(r"  v := NULL;\n  BEGIN\n.*?  INSERT INTO pg_temp\.p4263e_out VALUES \('[CM]_\w+', coalesce\(v, 'NULL \(body set nothing\)'\)\);\n", drv, re.S)
         if len(blocks) != len(STRUCTURE['controls']) + len(STRUCTURE['mutants']) or any(b not in full for b in blocks):
             probs.append('structure call: %d blocks, not all byte-identical to the full call' % len(blocks))
+        for stmt in ('DELETE FROM public.cloud_blob_erase_leases;', 'DELETE FROM public.cloud_blob_erase_runs;'):
+            if CLEAR_HISTORY.count(stmt) != 1:
+                probs.append('the history clearing lacks: ' + stmt)
         for st in STAGES:
             t = compose({'stage': st}, run='0' * 24)
             if st != 'history_mutant' and (t.count('DO $hist4263e$') != 1 or t.index('DO $hist4263e$') > t.index(RB1)):
