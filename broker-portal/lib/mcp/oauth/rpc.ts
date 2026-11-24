@@ -13,6 +13,8 @@ import {
   checkShape,
   FIND_PEOPLE_SHAPE,
   GET_DEAL_SHAPE,
+  GET_MESSAGE_SHAPE,
+  LIST_DEAL_MESSAGES_SHAPE,
   LIST_ALL_DEALS_SHAPE,
   LIST_DEALS_SHAPE,
   LIST_TODOS_SHAPE,
@@ -635,4 +637,70 @@ export async function removeOrRestoreTodoFor(
   });
   if ('kind' in res) return res;
   return checkDataToolEnvelope(res.data, TODO_CHANGE_SHAPE);
+}
+
+// ---------------------------------------------------------------------------
+// Message tools (BACKLOG-4263 P10), supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql
+// mcp_message_access(p_secret text, p_at_digest bytea, p_resource text)
+//   -> {ok:true, messages:boolean} | {ok:false, error:'not_connected'}
+// mcp_list_deal_messages(p_secret, p_at_digest, p_resource, p_deal_id text, p_channel text, p_review text,
+//                        p_limit integer, p_cursor text)
+// mcp_get_message(p_secret, p_at_digest, p_resource, p_message_id text, p_part integer)
+//   -> {ok:true, result:<keepr.list_deal_messages v1 | keepr.get_message v1>} | {ok:false, error:<DATA_TOOL_ERRORS>}
+// ---------------------------------------------------------------------------
+
+type MessageAccessResult = { kind: 'ok'; messages: boolean } | { kind: 'not_connected' } | Transport;
+
+/** Only exactly {ok:true, messages:<boolean>} is a success; anything else (an older database included) is not. */
+export function checkMessageAccessEnvelope(v: unknown): MessageAccessResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true && hasExactKeys(v, ['ok', 'messages']) && typeof v.messages === 'boolean') return { kind: 'ok', messages: v.messages };
+  if (hasExactKeys(v, ['ok', 'error']) && refusal(v, ['not_connected'] as const)) return { kind: 'not_connected' };
+  return transport(null);
+}
+
+export async function messageAccess(cfg: ClientConfig, a: AccessArgs): Promise<MessageAccessResult> {
+  const res = await call(cfg, 'mcp_message_access', { p_secret: a.secret, p_at_digest: a.atDigest, p_resource: a.resource });
+  if ('kind' in res) return res;
+  return checkMessageAccessEnvelope(res.data);
+}
+
+export interface ListDealMessagesArgs extends AccessArgs {
+  dealId: string;
+  channel: string | null;
+  review: string | null;
+  limit: number | null;
+  cursor: string | null;
+}
+
+export async function listDealMessagesFor(cfg: ClientConfig, a: ListDealMessagesArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_list_deal_messages', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_deal_id: a.dealId,
+    p_channel: a.channel,
+    p_review: a.review,
+    p_limit: a.limit,
+    p_cursor: a.cursor,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, LIST_DEAL_MESSAGES_SHAPE);
+}
+
+export interface GetMessageArgs extends AccessArgs {
+  messageId: string;
+  part: number | null;
+}
+
+export async function getMessageFor(cfg: ClientConfig, a: GetMessageArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_get_message', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_message_id: a.messageId,
+    p_part: a.part,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, GET_MESSAGE_SHAPE);
 }

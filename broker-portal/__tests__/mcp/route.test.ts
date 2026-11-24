@@ -442,7 +442,7 @@ describe('C33: resource, authInfo and order', () => {
       },
     } as typeof real);
     expect((await post(bearer(ACCESS_TOKEN))).status).toBe(200);
-    expect(seen).toEqual([{ token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest: KNOWN_DIGEST, canWrite: false } }]);
+    expect(seen).toEqual([{ token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest: KNOWN_DIGEST, canWrite: false, canReadMessages: false } }]);
     expect(JSON.stringify(seen)).not.toContain(ACCESS_TOKEN);
     expect(JSON.stringify(seen)).not.toContain('T'.repeat(43));
   });

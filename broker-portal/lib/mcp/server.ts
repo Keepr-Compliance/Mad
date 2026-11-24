@@ -19,9 +19,10 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { getPrompt, PROMPTS } from './prompts';
 import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
 import { getDeal, GET_DEAL_TOOL, listAllDeals, LIST_ALL_DEALS_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
+import { getMessage, listDealMessages, MESSAGE_TOOLS } from './tools/messages';
 import { findPeople, FIND_PEOPLE_TOOL } from './tools/people';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
-import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_WRITE, TOOL_MESSAGES } from './tools/text';
+import { instructionsFor, MESSAGE_TOOL_TEXT, TOOL_MESSAGES } from './tools/text';
 import { listTodos, LIST_TODOS_TOOL } from './tools/todoList';
 import { addTodo, removeTodo, restoreTodo, updateTodo, WRITE_TOOLS } from './tools/todos';
 
@@ -36,8 +37,16 @@ export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHEC
 export function canWriteOf(ctx: McpRequestContext): boolean {
   return ctx.authInfo?.extra?.canWrite === true;
 }
-export function toolsFor(canWrite: boolean) {
-  return canWrite ? [...TOOLS, ...WRITE_TOOLS] : TOOLS;
+/**
+ * BACKLOG-4263 P10: the route asks the database once per request whether this token's connection may read the emails
+ * and texts of its deals (mcp_message_access) and passes it as authInfo.extra.canReadMessages. Only exactly true lists
+ * the message tools and adds the messages paragraph to the instructions. Independent of canWrite.
+ */
+export function canReadMessagesOf(ctx: McpRequestContext): boolean {
+  return ctx.authInfo?.extra?.canReadMessages === true;
+}
+export function toolsFor(canWrite: boolean, canReadMessages = false) {
+  return [...TOOLS, ...(canReadMessages ? MESSAGE_TOOLS : []), ...(canWrite ? WRITE_TOOLS : [])];
 }
 
 export const MCP_SERVER_NAME = 'keepr';
@@ -59,10 +68,10 @@ export function createMcpServer(ctx: McpRequestContext): Server {
   // asks for the low-level one so tool registration stays explicit.
   const server = new Server(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
-    { capabilities: { tools: {}, prompts: {} }, instructions: canWriteOf(ctx) ? SERVER_INSTRUCTIONS_WRITE : SERVER_INSTRUCTIONS }
+    { capabilities: { tools: {}, prompts: {} }, instructions: instructionsFor(canWriteOf(ctx), canReadMessagesOf(ctx)) }
   );
 
-  server.setRequestHandler('tools/list', async () => ({ tools: toolsFor(canWriteOf(ctx)) }));
+  server.setRequestHandler('tools/list', async () => ({ tools: toolsFor(canWriteOf(ctx), canReadMessagesOf(ctx)) }));
 
   // Prompts are text only: no tool and no database call (lib/mcp/prompts.ts).
   server.setRequestHandler('prompts/list', async () => ({ prompts: PROMPTS }));
@@ -77,6 +86,9 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     [LIST_ALL_DEALS_TOOL.name, (args) => listAllDeals(atDigest(), args)],
     [FIND_PEOPLE_TOOL.name, (args) => findPeople(atDigest(), args)],
     [LIST_TODOS_TOOL.name, (args) => listTodos(atDigest(), args)],
+    // message tools: always called; without message access the database refuses and nothing it returns is shown
+    [MESSAGE_TOOL_TEXT.list_deal_messages.name, (args) => listDealMessages(atDigest(), args, canReadMessagesOf(ctx))],
+    [MESSAGE_TOOL_TEXT.get_message.name, (args) => getMessage(atDigest(), args, canReadMessagesOf(ctx))],
     // write tools: the database refuses them (read_only) unless this connection may write
     ['update_todo', (args) => updateTodo(atDigest(), args)],
     ['add_todo', (args) => addTodo(atDigest(), args)],
