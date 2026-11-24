@@ -108,8 +108,10 @@ BEGIN
   END LOOP;
   RETURN out;
 END $h$;
--- SELECT, INSERT, UPDATE and DELETE (each matching no row) as service_role on every table of the given blocks; the
--- statements that did not end in 42501, as table:statement=result
+-- SELECT, INSERT, UPDATE and DELETE as service_role on every table of the given blocks, each needing one privilege
+-- only and touching no row: SELECT 1 ... WHERE false (SELECT); INSERT (one column) SELECT NULL WHERE false (INSERT on
+-- that column); UPDATE ... SET <column> = NULL WHERE false (UPDATE on that column); DELETE ... WHERE false (DELETE).
+-- The statements that did not end in 42501, as table:statement=result
 CREATE FUNCTION pg_temp.sr_statements65(blocks text[]) RETURNS text[] LANGUAGE plpgsql VOLATILE AS $h$
 DECLARE r record; col text; q text; res text; out text[] := '{}';
 BEGIN
@@ -118,9 +120,9 @@ BEGIN
     col := (SELECT quote_ident(a.attname) FROM pg_catalog.pg_attribute a
              WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attidentity = '' AND a.attgenerated = ''
              ORDER BY a.attnum LIMIT 1);
-    FOREACH q IN ARRAY ARRAY[format('SELECT count(*) FROM public.%I', r.name),
-                             format('INSERT INTO public.%I OVERRIDING SYSTEM VALUE SELECT * FROM public.%I WHERE false', r.name, r.name),
-                             format('UPDATE public.%I SET %s = %s WHERE false', r.name, col, col),
+    FOREACH q IN ARRAY ARRAY[format('SELECT 1 FROM public.%I WHERE false', r.name),
+                             format('INSERT INTO public.%I (%s) SELECT NULL WHERE false', r.name, col),
+                             format('UPDATE public.%I SET %s = NULL WHERE false', r.name, col),
                              format('DELETE FROM public.%I WHERE false', r.name)] LOOP
       res := pg_temp.sr_exec65(q);
       IF res IS DISTINCT FROM 'ERR 42501' THEN
@@ -154,6 +156,7 @@ CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE s
   UNION ALL SELECT 'auth.users', md5(concat_ws('|', x.id::text, x.email::text, x.created_at::text)) FROM auth.users x
 $h$;
 CREATE TEMP TABLE t65_pre ON COMMIT DROP AS SELECT * FROM pg_temp.row_hashes65();
+-- per table: how many hashed rows are gone or changed, and whether at least one row was hashed (a boolean, never a count)
 CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS $h$
   WITH now_ AS (SELECT * FROM pg_temp.row_hashes65()),
        tbls(t) AS (VALUES ('cloud_deal_messages'), ('cloud_deal_files'), ('cloud_blobs'), ('mcp_redirect_allowlist'), ('mcp_oauth_clients'),
@@ -161,7 +164,8 @@ CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS 
                           ('cloud_deals'), ('cloud_deal_parties'), ('cloud_deal_checklists'), ('cloud_deal_checklist_items'),
                           ('cloud_autosave_settings'), ('member_addons'), ('auth.users'))
   SELECT jsonb_object_agg(b.t, jsonb_build_object(
-           'gone_or_changed', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h))))
+           'gone_or_changed', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h)),
+           'hashed', EXISTS (SELECT 1 FROM pg_temp.t65_pre p WHERE p.t = b.t)))
     FROM tbls b
 $h$;
 -- result reducers: a call_as answer is either a JSON value or 'ERR <sqlstate> <message>'; only the SQLSTATE is kept
