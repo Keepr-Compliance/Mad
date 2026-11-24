@@ -245,10 +245,44 @@ export function scrubEvent<E>(event: E, more?: (_e: E) => E | null, options: Scr
   }
 }
 
+/**
+ * BACKLOG-4263 P10: the only data kept on a span of an outgoing mcp_ RPC call (the database calls behind the MCP
+ * tools): its URL without query, method, status code and Sentry's own op and origin keys. Any other key (a request or
+ * response body, headers, attributes a later SDK version adds) is dropped.
+ */
+export const RPC_SPAN_DATA_KEYS: ReadonlySet<string> = new Set([
+  'url',
+  'url.full',
+  'url.path',
+  'url.scheme',
+  'http.url',
+  'http.target',
+  'server.address',
+  'server.port',
+  'http.method',
+  'http.request.method',
+  'http.status_code',
+  'http.response.status_code',
+  'sentry.op',
+  'sentry.origin',
+  'type',
+]);
+
+function mentionsRpc(v: unknown): boolean {
+  return typeof v === 'string' && v.toLowerCase().includes(RPC_PATH_MARKER);
+}
+
+function spanIsRpc(span: Rec): boolean {
+  if (mentionsRpc(span.description)) return true;
+  const data = span.data;
+  return !!data && typeof data === 'object' && Object.values(data as Rec).some(mentionsRpc);
+}
+
 function scrubSpanData(span: Rec, mcp: boolean): void {
   const data = span.data;
   if (data && typeof data === 'object') {
-    const stripped = mcp ? stripMcpQueries(data as Rec) : (data as Rec);
+    let stripped = mcp ? stripMcpQueries(data as Rec) : (data as Rec);
+    if (spanIsRpc(span)) stripped = Object.fromEntries(Object.entries(stripped).filter(([k]) => RPC_SPAN_DATA_KEYS.has(k)));
     span.data = redactDeep(stripped);
   }
   if (typeof span.description === 'string') {

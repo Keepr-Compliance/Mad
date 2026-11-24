@@ -32,7 +32,7 @@ import {
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { digest } from '@/lib/mcp/oauth/crypto';
 import { dbCode, errorNameTag, logOutcome, type Outcome } from '@/lib/mcp/oauth/log';
-import { checkAccess, writeAccess } from '@/lib/mcp/oauth/rpc';
+import { checkAccess, messageAccess, writeAccess } from '@/lib/mcp/oauth/rpc';
 import { isCredential } from '@/lib/mcp/oauth/validate';
 import { isOriginAllowed } from '@/lib/mcp/origin';
 import { admitKnownMcpRequest, admitMcpRequest, MCP_BATCH_LIMIT, type Refusal } from '@/lib/mcp/rateLimit';
@@ -115,21 +115,33 @@ export async function POST(req: Request): Promise<Response> {
   // BACKLOG-4263 PR-5: whether this token's connection can change todos (granted mcp:todos AND the database's write
   // switch on). Any other answer, an error or an older database included, is read-only: read tools, read-only texts.
   try {
-    const wa = await writeAccess(cfg, { secret: cfg.secret, atDigest, resource: cfg.resource });
+    // BACKLOG-4263 P10: whether it may read the emails and texts of its deals (mcp_message_access), asked on every
+    // request beside writeAccess. Only exactly {ok:true, messages:true} is true; anything else lists no message tools.
+    const args = { secret: cfg.secret, atDigest, resource: cfg.resource };
+    const [wa, ma] = await Promise.all([writeAccess(cfg, args), messageAccess(cfg, args)]);
     const canWrite = wa.kind === 'ok' && wa.write === true;
-    const authInfo = { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest, canWrite } };
+    const canReadMessages = ma.kind === 'ok' && ma.messages === true;
+    const authInfo = { token: '', clientId: '', scopes: ['mcp:read'], extra: { atDigest, canWrite, canReadMessages } };
     // The SDK answers with a streamed body while the tools still run, so the in-flight slot ends with that body,
     // not when fetch returns.
     const res =
       body.kind === 'parsed'
         ? await getMcpHandler().fetch(req, { authInfo, parsedBody: body.parsed })
         : await getMcpHandler().fetch(body.request, { authInfo });
-    return done(endSlotWithResponse(res, slot, req.signal), 'ok');
+    return done(noStore(endSlotWithResponse(res, slot, req.signal)), 'ok');
   } catch (err) {
     slot.release();
     console.error('[mcp] request failed:', (err as Error).name);
     return done(mcpUnavailable(), 'error', { error: errorNameTag(err) });
   }
+}
+
+/** BACKLOG-4263 P10: every answer from the SDK says it must not be stored (event streams keep no-transform). */
+function noStore(res: Response): Response {
+  const headers = new Headers(res.headers);
+  const stream = (headers.get('content-type') ?? '').toLowerCase().startsWith('text/event-stream');
+  headers.set('Cache-Control', stream ? 'no-store, no-transform' : 'no-store');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 function notPost(_req: Request): Response {

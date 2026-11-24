@@ -107,7 +107,7 @@ beforeEach(() => {
     const answer = dbAnswer(fn, args);
     if (deferAccess && fn === 'mcp_check_access') await new Promise<void>((resolve) => deferredAccess.push(resolve));
     if (deferWrite && fn === 'mcp_write_access') await new Promise<void>((resolve) => deferredWrite.push(resolve));
-    if (deferTools && fn !== 'mcp_check_access' && fn !== 'mcp_write_access') {
+    if (deferTools && fn !== 'mcp_check_access' && fn !== 'mcp_write_access' && fn !== 'mcp_message_access') {
       await new Promise<void>((resolve) => deferred.push(resolve));
     }
     return answer;

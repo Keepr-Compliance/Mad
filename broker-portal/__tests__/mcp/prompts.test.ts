@@ -225,8 +225,8 @@ describe('prompts/list', () => {
     const { prompts } = await client.listPrompts();
     expect(prompts).toEqual(PROMPT_LIST);
     await client.close();
-    // the two per-request access answers (BACKLOG-4263 PR-5 adds mcp_write_access); no tool, no data function
-    expect(rpcNames().every((n) => n === 'mcp_check_access' || n === 'mcp_write_access')).toBe(true);
+    // the per-request access answers (BACKLOG-4263 PR-5 adds mcp_write_access, P10 mcp_message_access); no tool, no data function
+    expect(rpcNames().every((n) => n === 'mcp_check_access' || n === 'mcp_write_access' || n === 'mcp_message_access')).toBe(true);
   });
 });
 
@@ -255,7 +255,7 @@ describe('prompts/get', () => {
     await client.getPrompt({ name: 'brief_me_on_a_deal', arguments: { address: 'Main St' } });
     await client.close();
     expect(rpcNames().length).toBeGreaterThan(0);
-    expect(new Set(rpcNames())).toEqual(new Set(['mcp_check_access', 'mcp_write_access']));
+    expect(new Set(rpcNames())).toEqual(new Set(['mcp_check_access', 'mcp_write_access', 'mcp_message_access']));
   });
 
   it.each(ERAS)('%s: an unknown prompt is -32602 with the fixed text', async (_l, mode) => {
@@ -400,7 +400,7 @@ describe('prompts requests are refused exactly like tools requests', () => {
     expect(build).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
     expect((await rpcBody(res)).result).toBeDefined();
-    expect(rpcNames()).toEqual(['mcp_check_access', 'mcp_write_access']);
+    expect(rpcNames()).toEqual(['mcp_check_access', 'mcp_write_access', 'mcp_message_access']);
   });
 });
 
