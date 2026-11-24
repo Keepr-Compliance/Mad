@@ -62,21 +62,42 @@ SELECT l.blob_id, l.run_id, l.leased_until
 ON CONFLICT (blob_id) DO NOTHING;
 ```
 
-Locks: the clearing takes row locks on every run and lease row. The embedded E1 rollback's DROP takes ACCESS EXCLUSIVE
-on both tables until the call ends. A scheduled job tick during the call waits for the call's length, up to its own
-timeouts.
+Locks: the clearing first takes ACCESS EXCLUSIVE on `cloud_blob_erase_runs`, then on `cloud_blob_erase_leases`
+(`LOCK TABLE`, lock_timeout 3 s), before any row lock; it is the lock the embedded E1 rollback's DROP takes moments
+later, held until the call ends. Order: every E1 function touches the run table before the lease table (the claim
+inserts its run row, then its leases; finish reads its run row, then deletes leases), so taking runs first cannot
+deadlock with a job tick: a tick that already holds runs finishes, and this call waits (or gets 55P03). A tick that
+starts during the call waits for the call's length, up to its own timeouts. The call records `history_lock` (both
+tables held) in its result. One collision remains from before this change, live mode only: a live scrub holds the
+`cloud_release_switches` row FOR SHARE while it waits on the run table, and a control's switch UPDATE then waits on
+that row (a deadlock, one side aborted with 40P01). The minute 15–30 rule (E3's job fires at minute 23) avoids it.
 
 ## STOP RULES
 
-- Stop on any call that does not end `kt-sql: HTTP 400`. **HTTP 200 means the call committed:** stop, repair the run
-  history from the saved file (above), report it.
-- Stop on SQLSTATE `57014` (statement timeout) or `55P03` (lock timeout) in any output. On the dry-run database a
-  `40P01` or `55P03` is a scheduling collision with another session: re-run once and say so.
+- Stop on any call that does not end `kt-sql: HTTP 400`. **HTTP 200 means the call committed**: stop and report. A
+  committed call changes, and needs repaired, all of this:
+
+  | What a committed call changed | Repair |
+  |---|---|
+  | run and lease rows deleted (the clearing, then the tables dropped and re-created empty by the rollback and E1) | the saved file (above) |
+  | the `cloud-blob-erase` cron job unscheduled (E3 rollback) | not from a file: re-apply E3 with its own note (it needs the URL secret first) |
+  | `cloud_blob_erase_url` deleted (E1 rollback) | not from a file: set it again per environment, as after E1 |
+  | `cloud_blob_erase_secret` deleted, then a NEW one created by E1 (a different value) | not from a file: the Edge Function's copy no longer matches; update it per E1's notes |
+  | ledger rows `20261123120000` and `20261123110000` deleted (E1 re-created its objects, but writes no ledger row) | `apply-20261123110000.sql` (re-runnable text plus the ledger row); E3's row with E3's re-apply |
+  | the six E1 functions dropped and re-created from the working tree | the same E1 text; nothing to do when the checkout is E1 as applied (`apply-20261123110000.sql` matches) |
+
+- Stop on SQLSTATE `57014` (statement timeout), `55P03` (lock timeout) or `40P01` (deadlock) in any output. On the
+  dry-run database a `40P01` or `55P03` is a scheduling collision with another session: re-run once and say so.
+- Stop on a result where a refusal is expected (`--stage=history_mutant` gave a result) and on a refusal where a result
+  is expected (any other stage).
+- Stop when `history_cleared` differs from the run and lease counts in the before-note (rows came or went between the
+  note and the call).
 - Stop when a stage is NOT OK; the next stage is not sent. No re-send of a stage on the test project without the
   coordinator's go.
 - Do not start a call between minute 15 and minute 30 of the hour (E3's job fires at minute 23).
 
-Prerequisite on the test project: S1 `20261123100000` applied (E1 refuses to apply without
+Prerequisite on the test project: S1 `20261123100000` and E1 `20261123110000` applied (every call runs the E1
+rollback first, whose pre-check refuses unless E1's six functions are at the bodies E1 wrote). S1 is needed first because E1 refuses to apply without
 `cloud_autosave_settings.active_install_id`, `active_since` and `cloud_release_switches.one_computer`).
 
 Applying E1 on the test project: send `apply-20261123110000.sql` as one call (not the bare migration). It holds the
@@ -204,10 +225,10 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 
 - `lock_timeout = 3s` on every harness statement; the concurrency scripts: 3 s on every call that writes and in session A, 8 s in session B; holds 4 s.
 - Every `harness.py` call deletes every run and lease row first (row locks), then runs both rollback files and then
-  E1, so once E1 is applied on the test project the call drops and recreates `cloud_blob_erase_runs` and
-  `cloud_blob_erase_leases` and holds ACCESS EXCLUSIVE on them for the whole call (rolled back at its end). No other existing table is locked. Run the harness before E1 is applied,
-  or with E3's cron job not due (it fires at minute 23): an erase run that starts during a harness call waits up to
-  its own timeouts on those two tables.
+  E1, so the call drops and recreates `cloud_blob_erase_runs` and `cloud_blob_erase_leases` and holds ACCESS
+  EXCLUSIVE on them for the whole call (rolled back at its end; taken first by the clearing, see "Run history"). No
+  other existing table is locked. Run it with E3's cron job not due (it fires at minute 23): an erase run that starts
+  during a harness call waits up to its own timeouts on those two tables.
 - A control that runs the live claim takes row locks (`FOR UPDATE SKIP LOCKED`) on any eligible row in the
   database for the length of that control (its subtransaction is rolled back, and the locks released, at its end),
   real rows included (message and file rows removed more than 24 h ago, unreferenced blobs older than
@@ -244,8 +265,11 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
   stops the wrong scrub, so the fixture cannot show it; equivalent for safety only), problems=0.
 - Preconditions on the shared database: fewer than 900 unreferenced blobs (`p_c6c` returns PRECONDITION otherwise);
   fewer than 900 unreferenced blobs and fewer than 900 rowless objects older than 24 h for `p_c6a`, `p_c6e` and `p_c6f`
-  (`pg_temp.room()`: they return PRECONDITION instead of a result, because their fixture rows would sort after real
-  ones). `--stage=fixtures` prints `room`.
+  (`pg_temp.room('listing')`: they return PRECONDITION instead of a result, because their fixture rows would sort after
+  real ones; `p_c6b` too, whose "not listed" proves nothing while the listing is full). The other bounded listings:
+  fewer than 19 000 message rows and 19 000 file rows removed more than 24 h ago (`room('rows')`, batch 20 000:
+  `p_c6d`, `p_dry_run`), fewer than 190 owners with an active computer (`room('owners')`, list 200: `p_c6f`,
+  `p_owners`). `--stage=fixtures` prints `room`.
 
 Counting: a mutant is caught only when its probe returns `FAIL`. `CRASH` (the mutated function or the probe raised),
 `PRECONDITION` and `NOT APPLIED IN DB` are printed as such and make the run not-ok.
