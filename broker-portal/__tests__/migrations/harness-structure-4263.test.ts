@@ -44,6 +44,15 @@ function castFindings(sql: string): string[] {
 }
 
 describe('BACKLOG-4263 T-S structure call and cast rule', () => {
+  it('a helper that reads a public table is VOLATILE (a STABLE one would not see rows a tool call in the same expression wrote)', () => {
+    const lib = read('lib/helpers.sql') + read('lib/controls.sql');
+    const fns = [...lib.matchAll(/CREATE FUNCTION pg_temp\.(\w+)\([^)]*\)[\s\S]*?LANGUAGE sql( STABLE| IMMUTABLE| VOLATILE)? AS \$h\$([\s\S]*?)\$h\$/g)];
+    expect(fns.length).toBeGreaterThan(20);
+    const readsPublic = fns.filter((m) => /\bFROM\s+public\./.test(m[3]));
+    expect(readsPublic.map((m) => m[1]).sort()).toEqual(['last_outcome', 'reads']);
+    for (const m of readsPublic) expect(`${m[1]}${m[2] ?? ''}`).toBe(`${m[1]} VOLATILE`);
+  });
+
   it('no non-text catalogue column is concatenated without a cast, in any generated harness file', () => {
     for (const f of ['harness-t.sql', 'harness-t-controls.sql', 'harness-t-mutants.sql', 'harness-t-fixtures.sql', 'harness-t-structure.sql',
       'rollback-20261123140000.sql', 'lib/controls.sql', 'lib/helpers.sql', 'lib/fixtures.sql']) {

@@ -132,10 +132,12 @@ $h$;
 CREATE FUNCTION pg_temp.access(k text) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.tool('mcp_message_access', k, ''))
 $h$;
-CREATE FUNCTION pg_temp.reads(u text) RETURNS bigint LANGUAGE sql STABLE AS $h$
+-- reads and last_outcome are VOLATILE: a STABLE function reads with the snapshot of the statement that calls it, so in
+-- an expression that also makes a tool call it would not see the rows that call wrote
+CREATE FUNCTION pg_temp.reads(u text) RETURNS bigint LANGUAGE sql VOLATILE AS $h$
   SELECT count(*) FROM public.mcp_message_reads WHERE user_id = pg_temp.f(u)
 $h$;
-CREATE FUNCTION pg_temp.last_outcome(k text) RETURNS text LANGUAGE sql STABLE AS $h$
+CREATE FUNCTION pg_temp.last_outcome(k text) RETURNS text LANGUAGE sql VOLATILE AS $h$
   SELECT outcome FROM public.mcp_call_log WHERE connection_id = pg_temp.f(k) ORDER BY id DESC LIMIT 1
 $h$;
 -- message ids of every page of list_deal_messages on one deal, walked with the cursor (at most 200 pages)

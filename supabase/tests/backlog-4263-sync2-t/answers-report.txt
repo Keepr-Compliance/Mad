@@ -46,4 +46,4 @@ input 0ca12e1e52d34001fe6ef644f17828d0 supabase/migrations/20261123140000_backlo
 input b4b31fbdc7bce3c620c8687f6e94b255 supabase/tests/backlog-4263-sync2-t/answers.py
 input 346ff967efd36e30d26c1a2acea8cae5 supabase/tests/backlog-4263-sync2-t/lib/controls.sql
 input aa730c67c67fe7a2209af7b5286838c9 supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql
-input 9861028daa22a8ba73b0899516f41ded supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
+input a0cae17c45c61bdcf1198c84f3c4dd61 supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
