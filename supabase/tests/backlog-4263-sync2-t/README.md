@@ -8,7 +8,10 @@ written file is stale or a mutant fragment does not match exactly once; it print
 Status: T-S is applied on the test project and its post-check passed. Harness run 1 stopped in the fixture (a
 fixture literal, fixed since). The fixtures-only call passed (decision FULL). Harness run 2 stopped when the call created
 `pg_temp.fingerprint()` (42725, `text || "char"`; every operand is cast to text since, and `casts.py` checks the class);
-no control or mutant ran. The full or split run has not yet passed on any database.
+no control or mutant ran. Since then, on the test project, the fixtures-only call and the structure call passed. The
+full or split run has not yet run on the test project. A dry run on a self-hosted database (step 0 below) found `c_c9g_no_read_no_row` failing:
+`last_outcome` and `reads` were STABLE, so inside an expression that also makes a tool call they read the statement's
+snapshot and missed the call's own rows; both are VOLATILE since.
 
 ## Order on the test project (one engineer at a time; a before-note to the coordinator for each apply)
 
@@ -36,6 +39,15 @@ no control or mutant ran. The full or split run has not yet passed on any databa
    Stop and ask if `can_set` is false, if `reader_owners` is not `{mcp_reader}`, or if either count is not 0. The
    harness changes the two reader functions only under `SET LOCAL ROLE mcp_reader` (`pg_temp.as_reader`); `roles.py`
    checks that statically for every file listed in its report (`roles-report.txt`).
+0. Dry run on a self-hosted dry-run database: **required before any stage is requested on the test project**, and
+   never cited as a result for the test project. Copies only: replace the guard's marker md5
+   `53a385187695375e2e8695625a20a77a` with the dry-run database's marker md5 by an exact-string replace that must match
+   once per file and prints `SUBSTITUTION APPLIED <file> 1`; record the repo and copy md5s. Send each copy with the
+   dry-run transport wrapper (kept outside the repository; one transaction; it prints kt-sql's envelope, so the
+   reporters work unchanged) and read the output with the same `gen.py report*` command as below. Every call must end
+   `kt-sql: HTTP 400`; HTTP 200 on a harness file means it committed: stop and report. The dry-run database is a
+   different database (migrations from the repo files, no real data), so a pass there shows the texts run; it is
+   never a result for the test project.
 5. Fixtures first: `~/.claude/bin/kt-sql harness-t-fixtures.sql > fx.txt; python3 gen.py report-fixtures fx.txt`. It
    prints the counts, the timings it measured (the fixtures, one `_mcp_strip` and one get_message of the
    1,000,000-character body, the frame size and part count) and one decision line:

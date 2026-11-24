@@ -152,96 +152,96 @@ ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:295 _mcp_r_list_
 ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:299 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:415 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:416 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:995 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:996 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:550 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:556 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6411 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6435 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6529 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6530 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:543 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:549 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:543 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:967 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1044 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1045 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6553 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6577 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6671 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6672 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1004 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1005 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6420 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6444 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6538 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6539 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:976 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1053 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1054 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6562 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6586 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6680 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6681 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql:48 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql:49 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263/apply-20261118100000.sql:63 _mcp_r_list_all_deals owner mcp_reader role mcp_reader
@@ -425,14 +425,14 @@ input a00d5f79e7b997d576b285226bf9aa38 supabase/tests/backlog-4263-sync2-s2/appl
 input 1dcc2594133d3dddefef5b156e60db17 supabase/tests/backlog-4263-sync2-s2/harness-s2.sql
 input b6b0e7767db4d5ec9a05419f2b60afad supabase/tests/backlog-4263-sync2-s2/rollback-20261123130000.sql
 input 86cf7ccdb84ceaa9ef27dad31721b27c supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql
-input 7991a33b1b34d3a7a06a28363e6bcb90 supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql
-input 912c3382bf7dd48776c052db5d983a73 supabase/tests/backlog-4263-sync2-t/harness-t-fixtures.sql
-input 8bad8ab82f6ccc8fc65daae3d28d28d7 supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql
-input 8a35059b47ec7b2cf5c2f6b4549ef808 supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql
-input 3ef34f21c7c3354261d3387732d87daf supabase/tests/backlog-4263-sync2-t/harness-t.sql
-input 346ff967efd36e30d26c1a2acea8cae5 supabase/tests/backlog-4263-sync2-t/lib/controls.sql
+input bba2e8217753eaa4af7ed302228bae90 supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql
+input 4730f7239a2c9eb83af61c740bab1f2b supabase/tests/backlog-4263-sync2-t/harness-t-fixtures.sql
+input 933aa6348ca36a1b45ff79c9adeac9ef supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql
+input 1a50c13b9f2b666a1ffba739fa3b4dcc supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql
+input 5d95349402bcba695c7c0e652f95fa75 supabase/tests/backlog-4263-sync2-t/harness-t.sql
+input f278a06c5086e8fef84bf187474702af supabase/tests/backlog-4263-sync2-t/lib/controls.sql
 input aa730c67c67fe7a2209af7b5286838c9 supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql
-input 9861028daa22a8ba73b0899516f41ded supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
+input a0cae17c45c61bdcf1198c84f3c4dd61 supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
 input a61948e4d59cac5f410a7e4fa5e064f6 supabase/tests/backlog-4263-sync2-t/roles.py
 input d6f228d5e7e68a4ac055fbab36fd26c6 supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql
 input 169933a6d7885f8b9795b2be5ebd7242 supabase/tests/backlog-4263/apply-20261118100000.sql

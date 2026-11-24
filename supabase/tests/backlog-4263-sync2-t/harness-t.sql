@@ -132,10 +132,12 @@ $h$;
 CREATE FUNCTION pg_temp.access(k text) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.tool('mcp_message_access', k, ''))
 $h$;
-CREATE FUNCTION pg_temp.reads(u text) RETURNS bigint LANGUAGE sql STABLE AS $h$
+-- reads and last_outcome are VOLATILE: a STABLE function reads with the snapshot of the statement that calls it, so in
+-- an expression that also makes a tool call it would not see the rows that call wrote
+CREATE FUNCTION pg_temp.reads(u text) RETURNS bigint LANGUAGE sql VOLATILE AS $h$
   SELECT count(*) FROM public.mcp_message_reads WHERE user_id = pg_temp.f(u)
 $h$;
-CREATE FUNCTION pg_temp.last_outcome(k text) RETURNS text LANGUAGE sql STABLE AS $h$
+CREATE FUNCTION pg_temp.last_outcome(k text) RETURNS text LANGUAGE sql VOLATILE AS $h$
   SELECT outcome FROM public.mcp_call_log WHERE connection_id = pg_temp.f(k) ORDER BY id DESC LIMIT 1
 $h$;
 -- message ids of every page of list_deal_messages on one deal, walked with the cursor (at most 200 pages)
@@ -521,8 +523,9 @@ BEGIN
   UPDATE public.cloud_release_switches SET messages_upload = true WHERE id;
   UPDATE public.member_addons SET revoked_at = now() WHERE user_id = pg_temp.f('A') AND addon_key = 'cloud_autosave';
   v := v || jsonb_build_object('licence_list', pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL) = ne,
-                               'licence_get', pg_temp.getm('K2', pg_temp.s('m_lin'), 1) = ne,
-                               'no_rows', pg_temp.reads('A') = n0);
+                               'licence_get', pg_temp.getm('K2', pg_temp.s('m_lin'), 1) = ne);
+  -- a read of what the calls wrote: its own statement, after them
+  v := v || jsonb_build_object('no_rows', pg_temp.reads('A') = n0);
   RETURN pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_each(v) e WHERE e.value <> 'true'), v::text);
 END $c$;
 
@@ -541,9 +544,14 @@ END $c$;
 -- row can reach the cap, so the wrapper's too_large branch is reached this way)
 CREATE FUNCTION pg_temp.c_c9g_no_read_no_row() RETURNS text LANGUAGE plpgsql AS $c$
 DECLARE v jsonb := '{}'; n0 bigint := pg_temp.reads('A'); nf jsonb := '{"ok":false,"error":"not_found"}'; tl jsonb := '{"ok":false,"error":"too_large"}';
+  g jsonb; o text;
 BEGIN
+  -- each call, then the read of what it logged, in separate statements (evaluation order inside one expression is
+  -- not promised)
+  g := pg_temp.getm('K2', pg_temp.s('m_tomb'), 1);
+  o := pg_temp.last_outcome('K2');
+  v := v || jsonb_build_object('removed', g = nf AND o = 'not_found');
   v := v || jsonb_build_object(
-    'removed', pg_temp.getm('K2', pg_temp.s('m_tomb'), 1) = nf AND pg_temp.last_outcome('K2') = 'not_found',
     'after_last', pg_temp.getm('K2', pg_temp.s('m_lin'), 2) = nf,
     'unconfirmed', pg_temp.lst('K2', pg_temp.s('dU'), NULL, NULL, 20, NULL) = nf,
     'invalid', pg_temp.getm('K2', 'x', 1) = '{"ok":false,"error":"invalid_input"}',
@@ -561,10 +569,11 @@ BEGIN
   RETURN jsonb_build_object('kind', 'keepr.list_deal_messages', 'deal_id', p_deal_id, 'messages',
     jsonb_build_array(jsonb_build_object('message_id', %L::uuid, 'channel', 'email', 'sent_at', NULL, 'snippet', repeat('x', 95000))));
 END $f$$s$, pg_temp.s('m_lin')));
-  v := v || jsonb_build_object(
-    'too_large_get', pg_temp.getm('K2', pg_temp.s('m_lin'), 1) = tl AND pg_temp.last_outcome('K2') = 'too_large',
-    'too_large_list', pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL) = tl,
-    'no_rows', pg_temp.reads('A') = n0);
+  g := pg_temp.getm('K2', pg_temp.s('m_lin'), 1);
+  o := pg_temp.last_outcome('K2');
+  v := v || jsonb_build_object('too_large_get', g = tl AND o = 'too_large');
+  v := v || jsonb_build_object('too_large_list', pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL) = tl);
+  v := v || jsonb_build_object('no_rows', pg_temp.reads('A') = n0);
   RETURN pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_each(v) e WHERE e.value <> 'true'), v::text);
 END $c$;
 
