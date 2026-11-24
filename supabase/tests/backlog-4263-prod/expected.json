@@ -67,7 +67,7 @@
     },
     "20261123170000": {
       "file": "supabase/migrations/20261123170000_backlog_4266_connect_notice_with_exchange.sql",
-      "file_md5": "c925e47500409cd959994d550afd75d3"
+      "file_md5": "50edd01572198dd6e9512ee05f5f3931"
     }
   },
   "labels": {
@@ -19540,7 +19540,7 @@
         "indexes": 0,
         "cron_jobs": 0,
         "ledger_rows": 1,
-        "must_hold": 20,
+        "must_hold": 21,
         "report_only": 1
       },
       "pins": {
@@ -19634,6 +19634,11 @@
           "kind": "ledger row",
           "want": "true"
         },
+        "data provider CHECK of ai_app_connect_notices = mcp_connections": {
+          "label": "MUST HOLD",
+          "kind": "data value",
+          "want": "equal"
+        },
         "anon-callable mcp_ functions": {
           "label": "MUST HOLD",
           "kind": "anon-callable list",
@@ -19663,7 +19668,7 @@
         "indexes": 15,
         "cron_jobs": 4,
         "ledger_rows": 17,
-        "must_hold": 1767,
+        "must_hold": 1768,
         "report_only": 145
       },
       "pins": {
@@ -29211,6 +29216,11 @@
           "label": "MUST HOLD",
           "kind": "data value",
           "want": "2"
+        },
+        "data provider CHECK of ai_app_connect_notices = mcp_connections": {
+          "label": "MUST HOLD",
+          "kind": "data value",
+          "want": "equal"
         },
         "anon-callable mcp_ functions": {
           "label": "MUST HOLD",

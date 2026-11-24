@@ -4,7 +4,7 @@
 -- Returns one row (postcheck, report_only). postcheck = 'ok' when every MUST HOLD assertion holds; report_only lists the
 -- differences of the REPORT ONLY assertions ('' when none). A MUST HOLD difference fails with:
 --   invalid input syntax for type integer: "POSTCHECK final-249 FAILED: <id>: want <x>, got <y> | ... || REPORT ONLY: ..."
--- Assertions: 1767 MUST HOLD, 145 REPORT ONLY (labels: the rule CTE; README.md).
+-- Assertions: 1768 MUST HOLD, 145 REPORT ONLY (labels: the rule CTE; README.md).
 WITH
 fn(sig, md5, owner, secdef, vol, lang, config, ret, strict, leak, par) AS (VALUES
     ('public._mcp_r_list_all_deals(text,date,date,uuid)', '1013e786d5770839281fb0c27f29b6aa', 'mcp_reader', 'true', 's', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
@@ -985,7 +985,8 @@ trg(name, tbl, want) AS (VALUES
     ('mcp_settings_notice_change_expires_requests', 'mcp_settings', 'mcp_settings after update row _mcp_notice_change_expires_requests() enabled'),
     ('mcp_connections_version_fixed', 'mcp_connections', 'mcp_connections before update row _mcp_connection_version_fixed() enabled')),
 dat(name, want) AS (VALUES
-    ('mcp_settings.notice_version', '2')),
+    ('mcp_settings.notice_version', '2'),
+    ('provider CHECK of ai_app_connect_notices = mcp_connections', 'equal')),
 rule(kind, must) AS (VALUES
     ('anon-callable list', true),
     ('authenticated-callable list', true),
@@ -1159,7 +1160,7 @@ checks(id, kind, want, got) AS (
     FROM trg g
   UNION ALL
   SELECT 'data ' || d.name, 'data value', d.want,
-         CASE d.name WHEN 'mcp_settings.notice_version' THEN (SELECT s.notice_version::text FROM public.mcp_settings s WHERE s.id) END
+         CASE d.name WHEN 'mcp_settings.notice_version' THEN (SELECT s.notice_version::text FROM public.mcp_settings s WHERE s.id) WHEN 'provider CHECK of ai_app_connect_notices = mcp_connections' THEN (SELECT CASE WHEN x.a IS NOT NULL AND x.a = x.b THEN 'equal' ELSE coalesce(x.a, '(none)') || ' <> ' || coalesce(x.b, '(none)') END FROM (SELECT (SELECT string_agg(pg_catalog.pg_get_constraintdef(k.oid)::text, ' & ' ORDER BY pg_catalog.pg_get_constraintdef(k.oid)::text) FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.ai_app_connect_notices'::regclass AND k.contype = 'c' AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'provider')]::smallint[]) AS a, (SELECT string_agg(pg_catalog.pg_get_constraintdef(k.oid)::text, ' & ' ORDER BY pg_catalog.pg_get_constraintdef(k.oid)::text) FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.mcp_connections'::regclass AND k.contype = 'c' AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'provider')]::smallint[]) AS b) x) END
     FROM dat d
 )
 SELECT CASE WHEN f.must IS NULL THEN 'ok'

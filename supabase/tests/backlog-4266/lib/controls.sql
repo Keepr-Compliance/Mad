@@ -162,3 +162,26 @@ BEGIN
     pg_temp.pass(x_app LIKE 'P0001 BACKLOG-4263: public.mcp_exchange_code is not at the expected body%' AND x_md5c = '@@NEW_MD5@@',
                  're-run of backlog-4263-notice/apply-20261118180000.sql: ' || x_app || ' md5 ' || coalesce(x_md5c, 'null')));
 END $c$;
+
+-- ---------------------------------------------------------------- the production post-check of this version, read-only, run as written
+-- supabase/tests/backlog-4263-prod/postcheck-20261123170000.sql answers 'ok' or raises (its MUST HOLD rows include the
+-- provider CHECK parity of ai_app_connect_notices and mcp_connections)
+CREATE FUNCTION pg_temp.c_postcheck() RETURNS text LANGUAGE plpgsql AS $c$
+-- The file pins the state after every earlier lane migration, 20261123150000 included (production applies 150000
+-- first). On a database where 150000 is not applied it must fail with exactly ONE difference, the one 150000 makes:
+-- mcp_list_my_connection_access() absent from the authenticated-callable list. Any other difference (the provider CHECK
+-- parity among them) is a FAIL in both states.
+DECLARE x_ok text; x_rep text; x_err text; x_150 boolean;
+BEGIN
+  x_150 := EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261123150000');
+  BEGIN
+    EXECUTE @@POSTCHECK@@ INTO x_ok, x_rep;
+  EXCEPTION WHEN OTHERS THEN x_err := SQLSTATE || ' ' || SQLERRM;
+  END;
+  IF x_150 THEN
+    RETURN pg_temp.pass(x_err IS NULL AND x_ok = 'ok', '150000 applied; postcheck-20261123170000.sql: ' || left(coalesce(x_err, x_ok || ' / ' || coalesce(x_rep, '')), 600));
+  END IF;
+  RETURN pg_temp.pass(x_err = '22P02 invalid input syntax for type integer: "POSTCHECK 20261123170000 FAILED: authenticated-callable mcp_ functions: '
+                              || 'want missing: none; extra: none, got missing: mcp_list_my_connection_access(); extra: none || REPORT ONLY: none"',
+                      '150000 not applied; postcheck-20261123170000.sql: ' || left(coalesce(x_err, x_ok || ' / ' || coalesce(x_rep, '')), 600));
+END $c$;

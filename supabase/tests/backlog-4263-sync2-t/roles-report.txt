@@ -367,8 +367,8 @@ input 14e89d51a652c293d20aae3a4c254761 supabase/tests/backlog-4263-prod/postchec
 input 9f046384ec119204c090bb5731d8f257 supabase/tests/backlog-4263-prod/postcheck-20261123130000.sql
 input 898a6ead2b21e85c5ef9f7084fda119d supabase/tests/backlog-4263-prod/postcheck-20261123140000.sql
 input bbdfbff572e863a79a8a84c5bfab500f supabase/tests/backlog-4263-prod/postcheck-20261123150000.sql
-input b54d6b91cf7f75dd51847bcea655a9d2 supabase/tests/backlog-4263-prod/postcheck-20261123170000.sql
-input 5a5f8957df0478aeee8da4937d02ef49 supabase/tests/backlog-4263-prod/postcheck-final-249.sql
+input 294e2a7f32ed8ebb4ea201a9ef44c174 supabase/tests/backlog-4263-prod/postcheck-20261123170000.sql
+input 74a5f4fbef93776f1d3e1923cbd980aa supabase/tests/backlog-4263-prod/postcheck-final-249.sql
 input 0018705570b43fbb83bd4f3006379436 supabase/tests/backlog-4263-prod/postcheck-final.sql
 input 05bca701afd40dc0f937661aeec0f417 supabase/tests/backlog-4263-sync2-erase/apply-20261123110000.sql
 input c53d43fcedb0739c2234764a0f33f134 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-a.sql
@@ -450,11 +450,11 @@ input 7d25c61b5664d7529444b8f1e2b855ce supabase/tests/backlog-4263/catalog-check
 input 5013f27bde0bfff98ab5fd48812f4a4c supabase/tests/backlog-4263/lib/fixtures.sql
 input 199466cbb6f4a76bd47d37a84e5244c8 supabase/tests/backlog-4263/lib/probes.sql
 input 6f26ed088d24c6ad906f2e48db86d8fb supabase/tests/backlog-4263/rollback-4263.sql
-input a35a1624e483c8e6245f4be42755cffa supabase/tests/backlog-4266/apply-20261123170000.sql
-input fad7d8e087c55c54763752ca3654608c supabase/tests/backlog-4266/harness-4266-fixtures.sql
-input 7e4dccbd029ce25f95b8914a5a3cc4a9 supabase/tests/backlog-4266/harness-4266-structure.sql
-input 044e59bfc03e6d5e00363bf44c40215c supabase/tests/backlog-4266/harness-4266.sql
-input 5a498989c47ad4fbb12e96cf88675508 supabase/tests/backlog-4266/lib/controls.sql
+input 1ca8562005b7e859214c60b710969982 supabase/tests/backlog-4266/apply-20261123170000.sql
+input 35da2f5a71c2a4ae8753805805482adc supabase/tests/backlog-4266/harness-4266-fixtures.sql
+input 41be9666e8ceab141da68d02b4ec78c4 supabase/tests/backlog-4266/harness-4266-structure.sql
+input b62855c75e9cf77477c23424118fb612 supabase/tests/backlog-4266/harness-4266.sql
+input b1ac910dc85fbde8007506fe56ea12a9 supabase/tests/backlog-4266/lib/controls.sql
 input 5d90ca4ba4757a904f9f35803fce33a3 supabase/tests/backlog-4266/lib/fixtures.sql
 input ad1072d341680f57f3ab4c178b32c1fc supabase/tests/backlog-4266/lib/helpers.sql
 input 5f9d5fb7ed527b79a00ee62656343b6d supabase/tests/backlog-4266/rollback-20261123170000.sql

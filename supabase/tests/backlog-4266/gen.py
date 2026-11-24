@@ -159,7 +159,7 @@ $post4266r$;
 assert ROLLBACK.count(OLD_STMT) == 1 and md5(body(OLD_STMT)) == OLD_MD5
 
 # ------------------------------------------------------------------------------------------------ controls and mutants
-CONTROLS = ['c_notice', 'c_none', 'c_fail_check', 'c_fail_deadlock', 'c_fail_lock', 'c_zero_row', 'c_catalogue', 'c_reruns']
+CONTROLS = ['c_notice', 'c_none', 'c_fail_check', 'c_fail_deadlock', 'c_fail_lock', 'c_zero_row', 'c_catalogue', 'c_reruns', 'c_postcheck']
 FAILS = ['c_fail_check', 'c_fail_deadlock', 'c_fail_lock', 'c_zero_row']
 
 
@@ -202,6 +202,11 @@ DDL_MUTANTS = [  # (id, sql, proof, primary controls)
     ('D08_old_precheck_widened', "UPDATE pg_temp.t66_txt SET v = replace(v, $w$NOT IN ('ab6a9345c55ab69c77347d9b37e92e9d', '9a33bff2db31288bd77a57489558a65b')$w$, "
      f"$w$NOT IN ('ab6a9345c55ab69c77347d9b37e92e9d', '9a33bff2db31288bd77a57489558a65b', '{NEW_MD5}')$w$) WHERE k IN ('m{OLD_VERSION}', 'a{OLD_VERSION}')",
      f"(SELECT bool_and(position('{NEW_MD5}' IN v) > 0) FROM pg_temp.t66_txt WHERE k IN ('m{OLD_VERSION}', 'a{OLD_VERSION}'))", ['c_reruns']),
+    ('D09_connections_provider_widened',
+     "ALTER TABLE public.mcp_connections DROP CONSTRAINT mcp_connections_provider_check, "
+     "ADD CONSTRAINT mcp_connections_provider_check CHECK (provider IN ('anthropic', 'openai', 'h66_other')) NOT VALID",
+     "(SELECT pg_catalog.pg_get_constraintdef(k.oid)::text FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.mcp_connections'::regclass "
+     "AND k.conname::text = 'mcp_connections_provider_check') LIKE '%h66_other%'", ['c_catalogue', 'c_postcheck']),
 ]
 assert OLD_MIG.count("NOT IN ('ab6a9345c55ab69c77347d9b37e92e9d', '9a33bff2db31288bd77a57489558a65b')") == 1
 assert OLD_APPLY.count("NOT IN ('ab6a9345c55ab69c77347d9b37e92e9d', '9a33bff2db31288bd77a57489558a65b')") == 1
@@ -297,7 +302,12 @@ FN_SNAP = """  SELECT p.oid::regprocedure::text AS sig, md5(p.prosrc)::text AS s
          p.prosecdef AS secdef, pg_catalog.pg_get_userbyid(p.proowner)::text AS owner, p.provolatile::text AS vol
     FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace"""
 LEDGER = f"(SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '{VERSION}')"
-CONTROLS_SQL = LIB['controls'].replace('@@MIGPOST@@', dq(MIG_POST, '$mpq$')).replace('@@NEW_MD5@@', NEW_MD5)
+POSTCHECK_PATH = f'supabase/tests/backlog-4263-prod/postcheck-{VERSION}.sql'
+POSTCHECK = rd(POSTCHECK_PATH)
+assert "provider CHECK of ai_app_connect_notices = mcp_connections" in POSTCHECK, 'the prod post-check does not pin the provider CHECK parity'
+_pc_sql = re.sub(r'(?m)^--[^\n]*\n', '', POSTCHECK).strip().rstrip(';')
+CONTROLS_SQL = (LIB['controls'].replace('@@MIGPOST@@', dq(MIG_POST, '$mpq$')).replace('@@NEW_MD5@@', NEW_MD5)
+                .replace('@@POSTCHECK@@', dq(_pc_sql, '$pcq$')))
 assert '@@' not in CONTROLS_SQL
 TXT = f"""CREATE TEMP TABLE t66_txt (k text PRIMARY KEY, v text NOT NULL);
 INSERT INTO pg_temp.t66_txt VALUES ('m{VERSION}', {dq(MIG, '$t1$')}), ('m{OLD_VERSION}', {dq(OLD_MIG, '$t2$')}), ('a{OLD_VERSION}', {dq(OLD_APPLY, '$t3$')});
@@ -477,7 +487,8 @@ def unwrap(raw, marker):
 def ms(res, a, b):
     from datetime import datetime
     try:
-        f = lambda k: datetime.fromisoformat(str(res[k]).replace('Z', '+00:00'))
+        # PostgreSQL drops trailing zeros of the fraction; pad it to 6 digits for fromisoformat
+        f = lambda k: datetime.fromisoformat(re.sub(r'\.(\d{1,6})', lambda m: '.' + m.group(1).ljust(6, '0'), str(res[k]).replace('Z', '+00:00'), count=1))
         return int((f(b) - f(a)).total_seconds() * 1000)
     except Exception:
         return None

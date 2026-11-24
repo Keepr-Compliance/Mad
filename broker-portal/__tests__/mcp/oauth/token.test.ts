@@ -480,6 +480,12 @@ describe('BACKLOG-4266: a database error on the token call → 503 and one Sentr
       throw new Error('sentry down');
     });
     mockRpc.mockResolvedValue(raised('MC004'));
-    await expectError(await post(form(CODE_GRANT)), 503, 'temporarily_unavailable');
+    const res = await post(form(CODE_GRANT));
+    await expectError(res, 503, 'temporarily_unavailable');
+    // the route's own catch answered (its Retry-After), not the route-level catch in guard.ts (no Retry-After, a second
+    // Sentry message 'mcp-oauth route error')
+    expect(res.headers.get('retry-after')).toBe('2');
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+    expect(mockCapture.mock.calls[0][0]).toBe('mcp-oauth token database call failed');
   });
 });

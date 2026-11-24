@@ -105,8 +105,8 @@ Not pinned: totals of functions or cron jobs, row counts, other versions in the 
 | `postcheck-20261123130000.sql` | 84 | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 17 | 6 |
 | `postcheck-20261123140000.sql` | 173 | 16 | 9 | 0 | 1 | 1 | 0 | 6 | 2 | 1 | 20 | 7 |
 | `postcheck-20261123150000.sql` | 63 | 7 | 3 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 20 | 8 |
-| `postcheck-20261123170000.sql` | 20 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 20 | 8 |
-| `postcheck-final-249.sql` | 1767 | 145 | 90 | 5 | 13 | 8 | 50 | 46 | 15 | 4 | 20 | 8 |
+| `postcheck-20261123170000.sql` | 21 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 20 | 8 |
+| `postcheck-final-249.sql` | 1768 | 145 | 90 | 5 | 13 | 8 | 50 | 46 | 15 | 4 | 20 | 8 |
 
 ## Callable `mcp_*` functions at each stage
 

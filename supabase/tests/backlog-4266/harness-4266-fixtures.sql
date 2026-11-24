@@ -3,7 +3,7 @@
 -- BACKLOG-4266: run on a database where 20261123140000 is applied and 20261123170000 is NOT (mcp_exchange_code at md5
 -- 9a33bff2db31288bd77a57489558a65b). ONE call that ends in RAISE, so nothing persists. Order: guard (refuses any database that is not the
 -- test database) -> state check -> helpers and fixtures -> the apply file (migration + ledger row) and a catalogue
--- diff -> 8 controls, each in a subtransaction that is undone -> 18 mutants and
+-- diff -> 9 controls, each in a subtransaction that is undone -> 19 mutants and
 -- 1 negative control, each proven installed before its primary controls run under it, the
 -- fingerprint compared after each -> the rollback file and checks after it -> RAISE 'H4266_RESULT <json>'.
 -- Afterwards: select extensions.pg_stat_statements_reset(). Records statuses, counts, fixture keys and md5s only.
@@ -365,7 +365,8 @@ REVOKE ALL ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, t
 GRANT EXECUTE ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea) TO anon;
 
 
--- Post-check: the body, attributes, owner and grants of the exchange; the notice table's owner and RLS.
+-- Post-check: the body, attributes, owner and grants of the exchange; the notice table's owner and RLS; the provider CHECK
+-- of ai_app_connect_notices equal to that of mcp_connections.
 DO $post4266$
 DECLARE v jsonb;
 BEGIN
@@ -378,8 +379,16 @@ BEGIN
                    FROM pg_catalog.pg_proc p WHERE p.oid = 'public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)'::regprocedure),
     'table', (SELECT c.relowner = 'postgres'::regrole::oid AND c.relrowsecurity AND NOT c.relforcerowsecurity
                      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal)
-                FROM pg_catalog.pg_class c WHERE c.oid = 'public.ai_app_connect_notices'::regclass)) INTO v;
-  IF (v ->> 'exchange')::boolean IS NOT TRUE OR (v ->> 'table')::boolean IS NOT TRUE THEN
+                FROM pg_catalog.pg_class c WHERE c.oid = 'public.ai_app_connect_notices'::regclass),
+    -- every provider a connection can have passes the notice table's provider CHECK: the two definitions are equal
+    'provider_check_notices', (SELECT string_agg(pg_catalog.pg_get_constraintdef(k.oid)::text, ' & ' ORDER BY pg_catalog.pg_get_constraintdef(k.oid)::text)
+                     FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.ai_app_connect_notices'::regclass AND k.contype = 'c'
+                      AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'provider')]::smallint[]),
+    'provider_check_connections', (SELECT string_agg(pg_catalog.pg_get_constraintdef(k.oid)::text, ' & ' ORDER BY pg_catalog.pg_get_constraintdef(k.oid)::text)
+                     FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.mcp_connections'::regclass AND k.contype = 'c'
+                      AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'provider')]::smallint[])) INTO v;
+  IF (v ->> 'exchange')::boolean IS NOT TRUE OR (v ->> 'table')::boolean IS NOT TRUE
+     OR v ->> 'provider_check_notices' IS NULL OR v ->> 'provider_check_notices' IS DISTINCT FROM v ->> 'provider_check_connections' THEN
     RAISE EXCEPTION 'BACKLOG-4266: post-check failed: %', v;
   END IF;
 END
