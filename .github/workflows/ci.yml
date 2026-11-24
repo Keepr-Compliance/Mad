@@ -183,7 +183,7 @@ jobs:
           while IFS= read -r file; do
             if [ -n "$file" ]; then
               case "$file" in
-                supabase/tests/*|broker-portal/__tests__/migrations/*|.github/workflows/ci.yml)
+                supabase/tests/*|supabase/migrations/*|broker-portal/__tests__/migrations/*|.github/workflows/ci.yml)
                   HARNESS_CHANGED="true"
                   break
                   ;;
@@ -1379,15 +1379,21 @@ jobs:
   # (*/concurrency/offline_check.py, two-session/offline_check.py) are NOT run
   # here: they drive run.sh with signals and sleeps and have shown a timing
   # flake under load; they stay local.
+  # Pushes to int-portal/** are excluded by this workflow's triggers, so on those
+  # branches this job runs on pull requests only.
   harness-python-gates:
     name: Harness Python Gates
     needs: check-changes
     if: needs.check-changes.outputs.harness-tests-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Run the harness python gates
         run: |
