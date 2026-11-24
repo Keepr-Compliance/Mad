@@ -117,6 +117,25 @@ BEGIN
   GET DIAGNOSTICS n = ROW_COUNT;
   IF n <> 1 THEN RAISE EXCEPTION 'cloud_release_switches holds % rows, want 1', n; END IF;
 END $h$;
+-- The claim's listings are bounded and taken over the whole database: blobs and rowless objects p_limit (1000), oldest
+-- first; removed message and file rows p_row_limit (20000), by id; owners to scrub 200, oldest move first. A probe
+-- that asserts its own row is listed (or, for c6b, NOT listed) can only tell while the database leaves room; otherwise
+-- it says so (PRECONDITION) instead of passing or failing. kind: 'listing' | 'rows' | 'owners'. NULL when there is room.
+CREATE FUNCTION pg_temp.room(kind text) RETURNS text LANGUAGE sql VOLATILE AS $h$
+  SELECT CASE
+    WHEN kind = 'listing' AND (SELECT count(*) FROM public.cloud_blobs b WHERE NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)) >= 900
+      THEN 'PRECONDITION 900 or more unreferenced blobs in the database (the listing holds 1000)'
+    WHEN kind = 'listing' AND (SELECT count(*) FROM storage.objects o WHERE o.bucket_id = 'cloud-deal-files' AND o.created_at < now() - interval '24 hours'
+            AND NOT EXISTS (SELECT 1 FROM public.cloud_blobs b WHERE b.storage_path = o.name)) >= 900
+      THEN 'PRECONDITION 900 or more rowless objects older than 24 h in the database (the listing holds 1000)'
+    WHEN kind = 'rows' AND (SELECT count(*) FROM public.cloud_deal_messages m WHERE m.removed_at < now() - interval '24 hours') >= 19000
+      THEN 'PRECONDITION 19000 or more message rows removed more than 24 h ago in the database (the batch holds 20000)'
+    WHEN kind = 'rows' AND (SELECT count(*) FROM public.cloud_deal_files f WHERE f.removed_at < now() - interval '24 hours') >= 19000
+      THEN 'PRECONDITION 19000 or more file rows removed more than 24 h ago in the database (the batch holds 20000)'
+    WHEN kind = 'owners' AND (SELECT count(*) FROM public.cloud_autosave_settings s WHERE s.active_install_id IS NOT NULL) >= 190
+      THEN 'PRECONDITION 190 or more owners with an active computer in the database (the owners list holds 200)'
+  END
+$h$;
 -- json helpers
 CREATE FUNCTION pg_temp.ids(j jsonb) RETURNS uuid[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT coalesce(array_agg((e ->> 'id')::uuid), '{}') FROM jsonb_array_elements(coalesce(j -> 'blobs', '[]')) e
