@@ -154,8 +154,8 @@ ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:415 _mcp_r_get_m
 ok supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql:416 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1004 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1005 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1010 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql:1011 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:558 _mcp_r_get_message owner mcp_reader role mcp_reader
@@ -192,16 +192,16 @@ ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_dea
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:564 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6420 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6444 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6538 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6539 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6426 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6450 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6544 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql:6545 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:557 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:551 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:976 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1053 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1054 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:982 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1059 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql:1060 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:559 _mcp_r_get_message owner mcp_reader role mcp_reader
@@ -238,10 +238,10 @@ ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messag
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:565 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6562 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6586 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6680 _mcp_r_get_message owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6681 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6568 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6592 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6686 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4263-sync2-t/harness-t.sql:6687 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql:48 _mcp_r_get_message owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263-sync2-t/rollback-20261123140000.sql:49 _mcp_r_list_deal_messages owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263/apply-20261118100000.sql:63 _mcp_r_list_all_deals owner mcp_reader role mcp_reader
@@ -394,10 +394,10 @@ input e24c8b837e55fac3fe5385b2a3a6519b supabase/tests/backlog-4263-sync2-erase/l
 input 2998304d0addc762f0d4bf1dbce6d192 supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql
 input 9bef89c9afd00393f9bf8e4f45dedba1 supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql
 input 4d3f040f20d5af4d75d84ebc0cd234bd supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql
-input 086f7b997307e6b57eafd7cba9fe5988 supabase/tests/backlog-4263-sync2-n/harness-n-fixtures.sql
-input 9a3508306f4f7e4a34fab4e8532b9f60 supabase/tests/backlog-4263-sync2-n/harness-n-structure.sql
-input 6a4366ba5082890db1701c9d871a4ff6 supabase/tests/backlog-4263-sync2-n/harness-n.sql
-input bd58d36cecdff5bbdaecdc0a96fc93f0 supabase/tests/backlog-4263-sync2-n/lib/controls.sql
+input 90e64b1c5a157d288fe006588f4ce871 supabase/tests/backlog-4263-sync2-n/harness-n-fixtures.sql
+input 1ab840337f29263105e6cfe5e1f81138 supabase/tests/backlog-4263-sync2-n/harness-n-structure.sql
+input f2a1084633babaf6928155d2aa502ce9 supabase/tests/backlog-4263-sync2-n/harness-n.sql
+input 668810d39765c8932dae628aeb513fa6 supabase/tests/backlog-4263-sync2-n/lib/controls.sql
 input beae44f67cdbbbba2b2ef8b71cb6cce0 supabase/tests/backlog-4263-sync2-n/lib/fixtures.sql
 input 5b096e6b23e795a196a67b4c992c18e1 supabase/tests/backlog-4263-sync2-n/lib/helpers.sql
 input cde4c23afa68efbea0023f264e89027a supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql
@@ -442,12 +442,12 @@ input a00d5f79e7b997d576b285226bf9aa38 supabase/tests/backlog-4263-sync2-s2/appl
 input 1dcc2594133d3dddefef5b156e60db17 supabase/tests/backlog-4263-sync2-s2/harness-s2.sql
 input b6b0e7767db4d5ec9a05419f2b60afad supabase/tests/backlog-4263-sync2-s2/rollback-20261123130000.sql
 input 86cf7ccdb84ceaa9ef27dad31721b27c supabase/tests/backlog-4263-sync2-t/apply-20261123140000.sql
-input bba2e8217753eaa4af7ed302228bae90 supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql
+input d0e9eef473a4768e7c69c32308adc4cc supabase/tests/backlog-4263-sync2-t/harness-t-controls.sql
 input 4730f7239a2c9eb83af61c740bab1f2b supabase/tests/backlog-4263-sync2-t/harness-t-fixtures.sql
-input 933aa6348ca36a1b45ff79c9adeac9ef supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql
-input 1a50c13b9f2b666a1ffba739fa3b4dcc supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql
-input 5d95349402bcba695c7c0e652f95fa75 supabase/tests/backlog-4263-sync2-t/harness-t.sql
-input f278a06c5086e8fef84bf187474702af supabase/tests/backlog-4263-sync2-t/lib/controls.sql
+input ccdff21f8ceba0b3eb28ac4ff2076e99 supabase/tests/backlog-4263-sync2-t/harness-t-mutants.sql
+input c53af73d8fb3b58b2c88e6902a7634fa supabase/tests/backlog-4263-sync2-t/harness-t-structure.sql
+input 3667412418625d3b25d6f915f65a69c3 supabase/tests/backlog-4263-sync2-t/harness-t.sql
+input 8994df1f09f5807a65a0c6f9f01351bb supabase/tests/backlog-4263-sync2-t/lib/controls.sql
 input aa730c67c67fe7a2209af7b5286838c9 supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql
 input a0cae17c45c61bdcf1198c84f3c4dd61 supabase/tests/backlog-4263-sync2-t/lib/helpers.sql
 input 24d96de8825380da5993c3f0e6c3defb supabase/tests/backlog-4263-sync2-t/roles.py

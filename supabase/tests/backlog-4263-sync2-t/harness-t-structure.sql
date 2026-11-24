@@ -622,8 +622,14 @@ BEGIN
   PERFORM pg_temp.lst('K2', pg_temp.s('dA'), NULL, NULL, 20, NULL);
   PERFORM pg_temp.getm('K2', pg_temp.s('m_lin'), 1);
   r := pg_temp.as_user('A', 'mcp_list_my_message_reads', '%L, %L::integer', NULL, '50');
-  lin := (SELECT e FROM jsonb_array_elements(r -> 'reads') e WHERE e ->> 'tool' = 'get_message');
+  -- the fixture user's own get_message row (one); rows of anyone else, if the view shows them, are a FAIL of own_rows_only
+  lin := (SELECT e FROM jsonb_array_elements(r -> 'reads') e WHERE e ->> 'tool' = 'get_message'
+             AND e ->> 'read_id' IN (SELECT x.id::text FROM public.mcp_message_reads x WHERE x.user_id = pg_temp.f('A')));
   v := v || jsonb_build_object('count', jsonb_array_length(r -> 'reads') = 6,
+    'own_rows_only', NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'reads') e
+                                  WHERE e ->> 'read_id' IS NULL
+                                     OR NOT EXISTS (SELECT 1 FROM public.mcp_message_reads x
+                                                     WHERE x.user_id = pg_temp.f('A') AND x.id::text = e ->> 'read_id')),
     'lin', lin ->> 'subject' = 'Offer accepted' AND lin ->> 'from' = 'Seller Agent <seller@example.test>' AND lin ->> 'message_state' = 'live'
            AND lin ->> 'deal_state' = 'live' AND lin ->> 'address' = 'Fixture dA Street' AND lin ->> 'app_name' = 'Fixture app K2'
            AND (lin ->> 'part')::int = 1 AND lin ->> 'channel' = 'email' AND lin ->> 'deal_id' = pg_temp.s('dA'));
