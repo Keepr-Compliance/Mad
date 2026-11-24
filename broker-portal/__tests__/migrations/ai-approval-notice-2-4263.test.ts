@@ -160,3 +160,31 @@ describe('BACKLOG-4263 T-N harness files are current', () => {
     }
   });
 });
+
+describe('BACKLOG-4263 T-N two-session control refuses the test project (text checks; offline_check.py runs them)', () => {
+  const TS = `${DIR}/two-session`;
+  const COMPOSE = read(`${TS}/compose.py`);
+  const RUN = read(`${TS}/run.sh`);
+  const HOSTED = ['53a38518', '7695375e2e8695625a20a77a'].join('');
+
+  it('no file of the folder holds the test project marker whole', () => {
+    for (const f of ['compose.py', 'run.sh', 'verdict.py', 'offline_check.py', 'README.md']) expect(`${f}: ${read(`${TS}/${f}`).includes(HOSTED)}`).toBe(`${f}: false`);
+  });
+
+  it('every composed call refuses when the test project marker row exists, and the marker has no default', () => {
+    expect(COMPOSE).toContain("IF EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = ('53a38518' || '7695375e2e8695625a20a77a')) THEN   /*REFUSE:hosted*/");
+    expect(COMPOSE).toContain("md5(u.id::text) = '__MARKER__'");
+    expect(COMPOSE).toContain("marker = marker if marker is not None else os.environ.get('T4263N_MARKER_MD5', '')");
+    expect(COMPOSE).toMatch(/if marker == HOSTED_MARKER:\n\s+raise SystemExit/);
+    expect(COMPOSE).not.toMatch(/GUARD_MD5\s*=/);
+  });
+
+  it('run.sh requires an explicit transport and marker, and refuses the hosted transport and marker', () => {
+    expect(RUN).toContain('[ -n "$K" ] && [ -x "$K" ] || { echo "refusing: T4263N_RUNNER must name');
+    expect(RUN).toContain('case "$(basename "$K")" in kt-sql|kt-sql.*) echo "refusing: T4263N_RUNNER is the hosted transport');
+    expect(RUN).toContain('case "$(basename "$K_REAL")" in kt-sql|kt-sql.*) echo "refusing: T4263N_RUNNER resolves to the hosted transport');
+    expect(RUN).toContain('[[ "$MARKER" =~ ^[0-9a-f]{32}$ ]] || { echo "refusing: T4263N_MARKER_MD5');
+    expect(RUN).toContain('[ "$MARKER" = "53a38518""7695375e2e8695625a20a77a" ] && { echo "refusing: T4263N_MARKER_MD5 is the hosted test database marker"');
+    expect(RUN.indexOf('refusing: T4263N_MARKER_MD5 is the hosted')).toBeLessThan(RUN.indexOf('send precheck.sql'));
+  });
+});

@@ -1,7 +1,23 @@
 # Two-session control for T-N: an approve whose transaction began before T-N's (dry-run database only)
 
-**DRY-RUN DATABASE ONLY. Never on the hosted test project or production. Not run without the coordinator's go.**
-Unlike the harness, this control COMMITS: T-N itself has to be committed while a second session waits on its lock.
+**DRY-RUN DATABASE ONLY. Never on the test project or production: the script refuses there.** Unlike the harness, this
+control COMMITS: T-N itself has to be committed while a second session waits on its lock. It commits the fixture rows,
+`mcp_settings.enabled` = true, T-N, then the rollback file, then a teardown that deletes the fixture rows by exact id and
+puts `mcp_settings.enabled` and `updated_at` back. It then proves the database is back at the precheck's baseline.
+
+How the refusal is enforced:
+- **No default marker.** The dry-run database's marker md5 must be given as `T4263N_MARKER_MD5`; nothing in the
+  repository supplies one. `run.sh` and `compose.py` each refuse when it is missing, and each refuses the test
+  project's marker.
+- **The guard of every call refuses** when the test project's marker row exists. That marker is written in two pieces
+  in these files, so a one-match substitution can neither find it nor satisfy it, and `offline_check.py` asserts no file
+  here holds it whole.
+- **The transport must be explicit.** `T4263N_RUNNER` has to be set, and `run.sh` refuses the hosted transport by its
+  name, also through a symlink.
+- Each refusal has a stub case in `offline_check.py`, and a mutation that removes it and turns the case red.
+
+Run on a dry-run database on 2026-11-24 (before these refusals were added; the SQL of the run is unchanged):
+pristine PASS, mutant RED.
 
 ## What it shows
 
@@ -56,18 +72,17 @@ deleted.
 
 ## Commands
 
-From a guarded copy of this folder: the marker md5 in `compose.py` replaced by an exact-string replace that must match
-once and prints `SUBSTITUTION APPLIED compose.py 1`. `T4263N_REPO` names the checkout the migration is read from, and
-`T4263N_RUNNER` names the dry-run transport wrapper, kept outside the repository.
+`T4263N_MARKER_MD5` is the md5 of the dry-run database's marker id. `T4263N_RUNNER` names the dry-run transport
+wrapper, kept outside the repository. `T4263N_REPO` optionally names the checkout the migration is read from.
 
 ```bash
-T4263N_REPO=<checkout> T4263N_RUNNER=<wrapper> bash run.sh <run-id> <fixture-user-id>            # expect: pristine: PASS
-T4263N_REPO=<checkout> T4263N_RUNNER=<wrapper> bash run.sh <run-id-2> <fixture-user-id-2> --mutant # expect: mutant: RED
+T4263N_MARKER_MD5=<md5> T4263N_RUNNER=<wrapper> bash run.sh <run-id> <fixture-user-id>             # expect: pristine: PASS
+T4263N_MARKER_MD5=<md5> T4263N_RUNNER=<wrapper> bash run.sh <run-id-2> <fixture-user-id-2> --mutant # expect: mutant: RED
 ```
 
 After a killed run:
-`T4263N_ENABLED=<true|false> T4263N_UPDATED_AT='<value>' ... bash run.sh cleanup <run-id> <fixture-user-id>`, with the
-values printed by that run's precheck.
+`T4263N_ENABLED=<true|false> T4263N_UPDATED_AT='<value>' T4263N_MARKER_MD5=... T4263N_RUNNER=... bash run.sh cleanup <run-id> <fixture-user-id>`,
+with the values printed by that run's precheck.
 
 ## Offline check (no database)
 
@@ -75,7 +90,10 @@ values printed by that run's precheck.
 - `bash -n` under `/bin/bash`;
 - both modes composed, with every mutant replacement matched once;
 - every composed text parsed by pglast;
-- `run.sh` end to end against a stub transport in six shapes: PASS, RED, a pristine hole, a dirty verify, a refused
-  precheck, and a late session 2.
+- `run.sh` end to end against a stub transport: PASS, RED, a pristine hole, a dirty verify, a refused precheck, a late
+  session 2, and each refusal (test project marker present, transport unset, transport named kt-sql directly or through
+  a symlink, marker missing, marker the test project's);
+- each refusal removed by a mutation (proven applied): its case goes red, and where a second layer still stops the run
+  the check says so.
 
 `python3 -I verdict.py selftest` checks the verdict on canned outputs; with `--control-green-ok` it must fail.

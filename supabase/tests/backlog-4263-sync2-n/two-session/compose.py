@@ -21,7 +21,11 @@ REPO = os.environ.get('T4263N_REPO') or os.path.abspath(os.path.join(HERE, '..',
 T_PATH = 'supabase/migrations/20261123150000_backlog_4263_ai_approval_notice_2.sql'
 RB_PATH = 'supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql'
 T_VERSION, T_LEDGER = '20261123150000', 'backlog_4263_ai_approval_notice_2'
-GUARD_MD5 = '53a385187695375e2e8695625a20a77a'   # the reserved test account; a guarded copy replaces it exactly once
+# The dry-run database's marker: md5 of the id of one auth.users row there, given as T4263N_MARKER_MD5 (no default, so
+# nothing in the repository makes this control runnable by omission). The hosted test project's marker is refused here
+# and inside every call; it is written as two pieces so no text in this folder contains it whole.
+HOSTED_MARKER = '53a38518' + '7695375e2e8695625a20a77a'
+MARKER_RE = re.compile(r'^[0-9a-f]{32}$')
 EXPIRE_FN = 'public._mcp_notice_change_expires_requests()'
 md5 = lambda s: hashlib.md5(s.encode('utf-8')).hexdigest()
 rd = lambda p: open(os.path.join(REPO, p), encoding='utf-8').read()
@@ -75,7 +79,7 @@ def texts(mode, show):
     return tn, rb
 
 
-GUARD = f"""DO $guard4263n2s$
+GUARD = """DO $guard4263n2s$
 DECLARE n bigint := 0;
 BEGIN
   IF pg_catalog.to_regclass('public.pm_backlog_items') IS NOT NULL THEN
@@ -84,7 +88,10 @@ BEGIN
   IF n > 100 OR coalesce((SELECT s.n_live_tup FROM pg_catalog.pg_stat_user_tables s WHERE s.relid = pg_catalog.to_regclass('public.pm_backlog_items')), 0) > 100 THEN
     RAISE EXCEPTION 'refuses to run: TEST DATABASE ONLY (production tracker rows present)';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = '{GUARD_MD5}') THEN
+  IF EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = ('53a38518' || '7695375e2e8695625a20a77a')) THEN   /*REFUSE:hosted*/
+    RAISE EXCEPTION 'refuses to run: the hosted test database (its marker is present); this control commits T-N';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = '__MARKER__') THEN
     RAISE EXCEPTION 'refuses to run: TEST DATABASE ONLY (test database marker absent)';
   END IF;
 END
@@ -322,7 +329,12 @@ def fill(text, vals):
     return text
 
 
-def compose(outdir, mode, run, a, o, m, c, r, show=True):
+def compose(outdir, mode, run, a, o, m, c, r, show=True, marker=None):
+    marker = marker if marker is not None else os.environ.get('T4263N_MARKER_MD5', '')
+    if not MARKER_RE.fullmatch(marker):
+        raise SystemExit('T4263N_MARKER_MD5 must be the md5 (32 lowercase hex) of the dry-run database marker id; there is no default')
+    if marker == HOSTED_MARKER:
+        raise SystemExit('refusing: T4263N_MARKER_MD5 is the hosted test database marker; this control commits T-N')
     if not re.fullmatch(r'[0-9a-f]{16}', run):
         raise SystemExit('run id: 16 lowercase hex characters')
     for x in (a, o, m):
@@ -332,7 +344,7 @@ def compose(outdir, mode, run, a, o, m, c, r, show=True):
         raise SystemExit('client id kpr_c_ + 22, request id 22 characters of [A-Za-z0-9_-]')
     tn, rb = texts(mode, show)
     other_tn, other_rb = texts('mutant' if mode == 'pristine' else 'pristine', False)
-    vals = {'RUN': run, 'A': a, 'O': o, 'M': m, 'C': c, 'R': r}
+    vals = {'RUN': run, 'A': a, 'O': o, 'M': m, 'C': c, 'R': r, 'MARKER': marker}
     files = {'precheck.sql': PRECHECK, 'setup.sql': SETUP, 'session2.tpl': SESSION2, 'session1.sql': session1(tn),
              'state.sql': STATE, 'rollback.sql': rollback(rb), 'rollback-other.sql': rollback(other_rb),
              'teardown.tpl': TEARDOWN, 'verify.sql': VERIFY, 'probe.sql': PROBE}
@@ -340,7 +352,8 @@ def compose(outdir, mode, run, a, o, m, c, r, show=True):
     for name, text in files.items():
         out = fill(text, vals)
         assert out.count('refuses to run: TEST DATABASE ONLY (test database marker absent)') == 1, name
-        assert out.count(GUARD_MD5) == 1, name
+        assert out.count(marker) == 1, name
+        assert out.count("md5(u.id::text) = ('53a38518' || '7695375e2e8695625a20a77a')") == 1 and HOSTED_MARKER not in out, name
         assert re.search(r'__[A-Z_]+__', out) is None or name.endswith('.tpl'), (name, re.findall(r'__[A-Z_]+__', out))
         open(os.path.join(outdir, name), 'w', encoding='utf-8').write(out)
     open(os.path.join(outdir, 'md5s.txt'), 'w').write(
@@ -354,7 +367,7 @@ def main(argv):
         for mode in ('pristine', 'mutant'):
             compose(os.path.join(d, mode), mode, '0123456789abcdef', '11111111-2222-4333-8444-555555555555',
                     '21111111-2222-4333-8444-555555555555', '31111111-2222-4333-8444-555555555555',
-                    'kpr_c_' + 'A' * 22, 'B' * 22, show=(mode == 'mutant'))
+                    'kpr_c_' + 'A' * 22, 'B' * 22, show=(mode == 'mutant'), marker=md5('offline-check-marker'))
         print(d)
         return 0
     if len(argv) != 8:

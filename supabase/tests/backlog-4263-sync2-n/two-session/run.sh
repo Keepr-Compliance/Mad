@@ -1,16 +1,19 @@
 #!/bin/bash
-# BACKLOG-4263 P11 two-session control: an approve whose transaction began BEFORE T-N's. DRY-RUN DATABASE ONLY.
-# WRITTEN, NOT RUN against a database until the coordinator gives the go.
+# BACKLOG-4263 P11 two-session control: an approve whose transaction began BEFORE T-N's. DRY-RUN DATABASE ONLY; it
+# refuses the hosted test project (its marker, its transport) and runs only with the dry-run marker given explicitly.
+# Run on a dry-run database on 2026-11-24: pristine PASS, mutant RED.
 #
 # Usage:
-#   T4263N_RUNNER=<path> run.sh <run-id> <fixture-user-id> [--mutant]
-#   T4263N_RUNNER=<path> run.sh cleanup <run-id> <fixture-user-id>
+#   T4263N_MARKER_MD5=<md5> T4263N_RUNNER=<path> run.sh <run-id> <fixture-user-id> [--mutant]
+#   T4263N_MARKER_MD5=<md5> T4263N_RUNNER=<path> run.sh cleanup <run-id> <fixture-user-id>
+# T4263N_MARKER_MD5 is the md5 of the id of the dry-run database's marker row (no default). The hosted test project's
+# marker is refused, as an argument and inside every call (the guard refuses when that marker row exists).
 # <run-id> is 16 lowercase hex characters, <fixture-user-id> a lowercase uuid4, both chosen BEFORE the run so the
 # before-note can name them (openssl rand -hex 8; python3 -c 'import uuid; print(uuid.uuid4())'). T4263N_RUNNER is the
 # dry-run transport wrapper, kept outside the repository: it takes one SQL file, sends it as ONE transaction and prints
-# kt-sql's envelope (a RAISE -> 'kt-sql: HTTP 400'; a commit -> 'kt-sql: HTTP 200'). Run from a guarded copy of this
-# folder (the test-database marker md5 in compose.py replaced exactly once), with T4263N_REPO naming the repository
-# checkout the migration and the rollback file are read from.
+# kt-sql's envelope (a RAISE -> 'kt-sql: HTTP 400'; a commit -> 'kt-sql: HTTP 200'). It must be set explicitly, and the
+# hosted transport (a file named kt-sql, also through a symlink) is refused. T4263N_REPO names the repository checkout
+# the migration and the rollback file are read from (default: the checkout this folder is in).
 #
 # What it COMMITS, in order (everything else ends in a RAISE):
 #   setup     one fixture user p4263n2s-<run-id>@example.test with its organization, membership, assignment and Keepr
@@ -38,8 +41,14 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K="${T4263N_RUNNER:-}"
-usage() { sed -n '5,12p' "$0"; exit 2; }
-[ -n "$K" ] && [ -x "$K" ] || { echo "T4263N_RUNNER must name the dry-run transport wrapper (an executable)" >&2; usage; }
+usage() { sed -n '6,17p' "$0"; exit 2; }
+[ -n "$K" ] && [ -x "$K" ] || { echo "refusing: T4263N_RUNNER must name the dry-run transport wrapper (an executable)" >&2; usage; }
+K_REAL="$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$K")"
+case "$(basename "$K")" in kt-sql|kt-sql.*) echo "refusing: T4263N_RUNNER is the hosted transport (${K}); this control commits T-N" >&2; exit 2 ;; esac
+case "$(basename "$K_REAL")" in kt-sql|kt-sql.*) echo "refusing: T4263N_RUNNER resolves to the hosted transport (${K_REAL}); this control commits T-N" >&2; exit 2 ;; esac
+MARKER="${T4263N_MARKER_MD5:-}"
+[[ "$MARKER" =~ ^[0-9a-f]{32}$ ]] || { echo "refusing: T4263N_MARKER_MD5 (the dry-run database marker md5) is required; there is no default" >&2; usage; }
+[ "$MARKER" = "53a38518""7695375e2e8695625a20a77a" ] && { echo "refusing: T4263N_MARKER_MD5 is the hosted test database marker" >&2; exit 2; }
 CLEANUP=0
 if [ "${1:-}" = cleanup ]; then CLEANUP=1; shift; fi
 RUN="${1:-}"; A="${2:-}"; MUT="${3:-}"
@@ -141,7 +150,7 @@ sleep 1
 ( "$K" "$tmp/session1.sql" > "$tmp/s1.out" 2>"$tmp/s1.err" || true ) &
 p1=$!
 wait $p2 $p1
-echo "session 1: $(head -c 600 "$tmp/s1.out")"
+echo "session 1 rows:"; py "$here/verdict.py" commit "$tmp/s1.out" | sed 's/^/  /' || echo "  (no committed rows: $(head -c 600 "$tmp/s1.out"))"
 echo "session 2: $(head -c 900 "$tmp/s2.out")"
 send state.sql state.out
 echo "state: $(head -c 600 "$tmp/state.out")"
