@@ -2,7 +2,9 @@
 """BACKLOG-4263 sync plan P3 (E1 erase functions, E3 schedule): controls and mutants in ONE kt-sql call each
 (one transaction that ends in RAISE, so nothing persists).
 
-Usage: harness.py run [--print] [--controls] [--mutants] [--only=<name,...>] | harness.py check | harness.py write | harness.py selftest
+Usage: harness.py run [--print] [--stage=fixtures|structure|controls|mutants|full|history_mutant] [--controls] [--mutants]
+                      [--only=<name,...>] [--marker=<md5> --transport=<executable>]
+       harness.py report <output file> [--stage=<stage>] | harness.py check | harness.py write | harness.py selftest [--control-green-ok]
 
 `harness.py write` writes apply-20261123110000.sql (E1's text unchanged + its ledger row); `harness.py check` (offline)
 also fails when that file differs from what E1 gives now.
@@ -10,7 +12,10 @@ also fails when that file differs from what E1 gives now.
 Needs on the test project: 20261123100000 (S1) applied (E1 refuses without it). E1/E3 need not be applied: the call
 runs both rollback files first, then E1 from the working tree, so it always tests this checkout.
 
-Order in a call: lock and statement timeouts; the E3 and E1 rollback files; E1; lib/helpers.sql; lib/probes.sql; each
+Order in a call: the guard (refuses any database that is not the test database); lock and statement timeouts; the run
+history cleared (every cloud_blob_erase_runs and cloud_blob_erase_leases row deleted, counts recorded as history_cleared,
+undone by the final RAISE: the E1 rollback refuses while run rows exist); the E3 and E1 rollback files; E1;
+lib/helpers.sql; lib/probes.sql; each
 control (C_*) and/or mutant (M_*) in its own subtransaction, undone at its end; a RAISE carrying the results. A mutant
 is an exact-string replace on one function of E1, read from the working tree: a fragment that does not match exactly
 once stops the script before anything is sent (MUTATION NOT APPLIED). In the database each mutant is checked by
@@ -118,6 +123,28 @@ def fn_mutant(mode, name, reps, probe, want='red'):
     return block('M_' + mode, body)
 
 
+def rb_mutant(mode, reps, want='red'):
+    """a mutant of the E1 rollback TEXT, handed to p_rollback_refuses_history; proven in the database by the md5 of the
+    text the probe receives"""
+    mu = RB1
+    for old, new in reps:
+        n = mu.count(old)
+        if n != 1:
+            raise SystemExit('MUTATION NOT APPLIED %s: fragment matched %d times in the E1 rollback: %r' % (mode, n, old[:120]))
+        mu = mu.replace(old, new)
+    assert mu != RB1
+    print('MUTATION APPLIED %s (E1 rollback text, mutated md5 %s)' % (mode, md5(mu)))
+    for old, new in reps:
+        for l in old.splitlines():
+            print('  - ' + l.strip()[:150])
+        for l in new.splitlines():
+            print('  + ' + l.strip()[:150])
+    WANT['M_' + mode] = want
+    body = ("    IF md5(%s) IS DISTINCT FROM %s THEN\n      v := 'NOT APPLIED IN DB';\n    ELSE\n      v := pg_temp.p_rollback_refuses_history(%s, %s);\n    END IF;"
+            % (q(mu), lit(md5(mu)), q(RB3), q(mu)))
+    return block('M_' + mode, body)
+
+
 def ddl_mutant(mode, sql, verify, probe, want='red'):
     WANT['M_' + mode] = want
     print('MUTATION APPLIED %s (ddl)\n  + %s' % (mode, sql.strip()[:200]))
@@ -126,9 +153,51 @@ def ddl_mutant(mode, sql, verify, probe, want='red'):
     return block('M_' + mode, body)
 
 
+GUARD_MD5 = '53a385187695375e2e8695625a20a77a'   # the test database's marker user (md5 of its id)
+GUARD = """DO $guard4263e$
+DECLARE n bigint := 0;
+BEGIN
+  IF pg_catalog.to_regclass('public.pm_backlog_items') IS NOT NULL THEN
+    EXECUTE 'SELECT count(*) FROM public.pm_backlog_items' INTO n;
+  END IF;
+  IF n > 100 OR coalesce((SELECT s.n_live_tup FROM pg_catalog.pg_stat_user_tables s WHERE s.relid = pg_catalog.to_regclass('public.pm_backlog_items')), 0) > 100 THEN
+    RAISE EXCEPTION 'erase harness refuses to run: TEST DATABASE ONLY (production tracker rows present)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = '__GUARD__') THEN
+    RAISE EXCEPTION 'erase harness refuses to run: TEST DATABASE ONLY (test database marker absent)';
+  END IF;
+END
+$guard4263e$;"""
+# the run history: deleted inside this call (undone by its final RAISE) so the embedded E1 rollback does not refuse;
+# the counts are reported, never asserted
+CLEAR_HISTORY = """DO $hist4263e$
+DECLARE nr bigint := 0; nl bigint := 0;
+BEGIN
+  IF pg_catalog.to_regclass('public.cloud_blob_erase_leases') IS NOT NULL THEN
+    DELETE FROM public.cloud_blob_erase_leases;                                                /*HISTORY:leases*/
+    GET DIAGNOSTICS nl = ROW_COUNT;
+  END IF;
+  IF pg_catalog.to_regclass('public.cloud_blob_erase_runs') IS NOT NULL THEN
+    DELETE FROM public.cloud_blob_erase_runs;                                                  /*HISTORY:runs*/
+    GET DIAGNOSTICS nr = ROW_COUNT;
+  END IF;
+  INSERT INTO pg_temp.p4263e_out VALUES ('history_cleared', jsonb_build_object('runs', nr, 'leases', nl)::text);
+END
+$hist4263e$;"""
+# the history mutant (a call-level outcome): the clearing is left out and one marked run row is written first, so the
+# embedded E1 rollback must refuse and the call give no result
+SEED_HISTORY = """DO $seed4263e$
+BEGIN
+  IF pg_catalog.to_regclass('public.cloud_blob_erase_runs') IS NULL THEN
+    RAISE EXCEPTION 'PRECONDITION no cloud_blob_erase_runs table: E1 is not applied, so no run history can exist';
+  END IF;
+  INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', jsonb_build_object('p4263e', '__RUN__'));
+END
+$seed4263e$;"""
+HISTORY_REFUSAL = "ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds "
 CONTROLS = ['p_grants()', 'p_invoke_url()', 'p_secrets(%s)' % q(E1), 'p_c6a()', 'p_c6b()', 'p_c6c()', 'p_c6d()', 'p_c6e()',
             'p_c6f()', 'p_capped()', 'p_note()', 'p_scrub_off()', 'p_owners()', 'p_c6g_seq()', 'p_dry_run()', 'p_e3(%s)' % q(E3),
-            'p_rollback(%s, %s)' % (q(RB3), q(RB1))]
+            'p_rollback(%s, %s)' % (q(RB3), q(RB1)), 'p_rollback_refuses_history(%s, %s)' % (q(RB3), q(RB1))]
 CNAME = lambda c: c.split('(')[0]
 
 
@@ -199,6 +268,8 @@ def mutants():
     m.append(fn_mutant('Invoke_without_url_check', 'cloud_blob_erase_invoke', [(
         "  IF v_url IS NULL OR btrim(v_url) = '' THEN                                                 /*INVOKE:url_required*/",
         "  IF false THEN")], P('p_invoke_url()')))
+    m.append(rb_mutant('RB1_history_check_dropped', [("  IF n > 0 THEN\n    RAISE EXCEPTION 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds % rows",
+                                                     "  IF false THEN\n    RAISE EXCEPTION 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds % rows")]))
     m.append(ddl_mutant('Invoke_granted_service_role', 'GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_invoke() TO service_role',
                         "has_function_privilege('service_role', 'public.cloud_blob_erase_invoke()', 'EXECUTE')", P('p_grants()')))
     m.append(ddl_mutant('Claim_granted_authenticated', 'GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_claim(boolean, integer, integer) TO authenticated',
@@ -206,29 +277,63 @@ def mutants():
     return m
 
 
-def compose(sel):
-    run = secrets.token_hex(12)
-    parts = ["SET LOCAL pg_stat_statements.track = 'none';", "SET LOCAL lock_timeout = '3s';", "SET LOCAL statement_timeout = '240s';",
-             "CREATE TEMP TABLE p4263e_out (k text, v text);",
-             RB3, RB1, E1, HL, PR]
-    blocks = []
-    if sel.get('controls'):
-        for c in CONTROLS:
-            blocks.append(block('C_' + CNAME(c), '    v := pg_temp.%s;' % c))
+STAGES = ('fixtures', 'structure', 'controls', 'mutants', 'full', 'history_mutant')
+# the structure call: every mechanism once, each block byte-identical to its counterpart in the full call: two controls
+# without a mutant, the new history control, one function-body mutant, one catalogue (DDL) mutant, the rollback-text
+# mutant, and the rollback control
+STRUCTURE = {'controls': ['p_invoke_url', 'p_grants', 'p_rollback_refuses_history', 'p_rollback'],
+             'mutants': ['M_Invoke_without_url_check', 'M_Invoke_granted_service_role', 'M_RB1_history_check_dropped']}
+FIXTURE_PROBE = """DO $fxt4263e$
+DECLARE t0 timestamptz := clock_timestamp(); c jsonb; r text;
+BEGIN
+  INSERT INTO pg_temp.p4263e_out VALUES ('setup_ms', ceil(extract(epoch FROM t0 - (SELECT v FROM pg_temp.p4263e_out WHERE k = 't_start')::timestamptz) * 1000)::text);
+  c := pg_temp.claim(true);
+  INSERT INTO pg_temp.p4263e_out VALUES ('dry_claim_ms', ceil(extract(epoch FROM clock_timestamp() - t0) * 1000)::text);
+  INSERT INTO pg_temp.p4263e_out VALUES ('dry_claim_counts', (c -> 'counts')::text);
+  r := pg_temp.room();
+  INSERT INTO pg_temp.p4263e_out VALUES ('room', coalesce(r, 'ok'));
+END
+$fxt4263e$;"""
+
+
+def compose(sel, run=None, guard=GUARD_MD5):
+    """sel: {'stage': one of STAGES} or the older {'controls': bool, 'mutants': bool, 'only': [...]}"""
+    run = run or secrets.token_hex(12)
+    stage = sel.get('stage') or ('full' if sel.get('controls') and sel.get('mutants') else 'controls' if sel.get('controls')
+                                 else 'mutants' if sel.get('mutants') else 'only' if sel.get('only') else None)
+    assert stage in STAGES + ('only',), sel
+    head = [GUARD.replace('__GUARD__', guard), "SET LOCAL pg_stat_statements.track = 'none';", "SET LOCAL lock_timeout = '3s';",
+            "SET LOCAL statement_timeout = '240s';", "CREATE TEMP TABLE p4263e_out (k text, v text);",
+            "INSERT INTO pg_temp.p4263e_out VALUES ('mode', %s), ('t_start', clock_timestamp()::text);" % lit(stage)]
+    head.append(SEED_HISTORY if stage == 'history_mutant' else CLEAR_HISTORY)
+    parts = head + [RB3, RB1, E1, HL, PR]
+    ctl = {CNAME(c): block('C_' + CNAME(c), '    v := pg_temp.%s;' % c) for c in CONTROLS}
     ms = mutants()
-    if sel.get('mutants'):
+    mut = {re.search(r"VALUES \('(M_\w+)'", b).group(1): b for b in ms}
+    blocks = []
+    if stage in ('controls', 'full'):
+        blocks += [ctl[CNAME(c)] for c in CONTROLS]
+    if stage in ('mutants', 'full'):
         blocks += ms
-    if sel.get('only'):
+    if stage == 'only':
         blocks += [x for x in ms if any(("'M_" + k + "'") in x for k in sel['only'])]
-    parts.append('DO $drv4263e$\nDECLARE v text;\nBEGIN\n' + ''.join(blocks) + 'END\n$drv4263e$;')
-    parts.append("DO $fin4263e$ BEGIN RAISE EXCEPTION 'P4263E_RESULT %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;")
+    if stage == 'structure':
+        blocks += [ctl[c] for c in STRUCTURE['controls']] + [mut[k] for k in STRUCTURE['mutants']]
+    if stage == 'fixtures':
+        parts.append(FIXTURE_PROBE)
+    elif stage == 'history_mutant':
+        pass   # the embedded E1 rollback refuses before any block could run
+    else:
+        parts.append('DO $drv4263e$\nDECLARE v text;\nBEGIN\n' + ''.join(blocks) + 'END\n$drv4263e$;')
+    marker = 'P4263E_FIXTURES_OK' if stage == 'fixtures' else 'P4263E_RESULT'
+    parts.append("DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;" % marker)
     text = '\n'.join(parts).replace('__RUN__', run)
-    assert '__RUN__' not in text
+    assert '__RUN__' not in text and '__GUARD__' not in text
     return text
 
 
-def run(sel, show=False):
-    text = compose(sel)
+def run(sel, show=False, guard=GUARD_MD5, transport=None):
+    text = compose(sel, guard=guard)
     if show:
         print(text)
         return 0
@@ -238,26 +343,51 @@ def run(sel, show=False):
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as fh:
         fh.write(text)
-    r = subprocess.run([os.path.expanduser('~/.claude/bin/kt-sql'), p], capture_output=True, text=True)
+    k = transport or os.path.expanduser('~/.claude/bin/kt-sql')
+    r = subprocess.run([k, p], capture_output=True, text=True)
     os.remove(p); os.rmdir(d)
-    subprocess.run([os.path.expanduser('~/.claude/bin/kt-sql'), '-c', 'select extensions.pg_stat_statements_reset()'], capture_output=True)
-    return report(r.stdout, r.stderr)
+    subprocess.run([k, '-c', 'select extensions.pg_stat_statements_reset()'], capture_output=True)
+    return report(r.stdout, r.stderr, stage=sel.get('stage'))
 
 
-def report(stdout, stderr='', out=print):
+def report(stdout, stderr='', out=print, stage=None):
     """Reads kt-sql's output (first line: the API's JSON answer, whose "message" holds the final RAISE text), prints
     one line per result and returns the exit code: 0 all good; 1 a control not PASS, or a mutant MISSED, CRASH,
-    PRECONDITION or NOT APPLIED IN DB; 2 no result found; 3 zero tests ran."""
+    PRECONDITION or NOT APPLIED IN DB; 2 no result found; 3 zero tests ran; 4 the expectation table is empty (report
+    called without the mutants being built: every mutant would read as want=red); 5 the call is of another stage.
+    stage 'history_mutant': 0 when the call refused with the E1 rollback's history text (CAUGHT), 1 otherwise."""
+    if not WANT:
+        out('NOT OK: the expectation table is empty: build the mutants first (harness.py report does), or every mutant reads as want=red')
+        return 4
     msg = stdout
     try:
         msg = json.loads(stdout.strip().split('\n')[0]).get('message', stdout)
     except Exception:
         pass
+    if stage == 'history_mutant':
+        caught = HISTORY_REFUSAL in msg and 'P4263E_RESULT' not in msg
+        out('%-7s M_History_not_cleared (call level) -> %s' % ('CAUGHT' if caught else 'MISSED', msg.split('\n')[0][:300]))
+        return 0 if caught else 1
+    if stage == 'fixtures':
+        m = re.search(r'P4263E_FIXTURES_OK (\{.*\})\s*\nCONTEXT', msg, re.S)
+        if not m:
+            out('NO RESULT: ' + (msg + stderr)[:3000])
+            return 2
+        res = json.loads(m.group(1))
+        ok = res.get('mode') == 'fixtures' and res.get('room') == 'ok' and 'history_cleared' in res
+        out('fixtures: setup %s ms, dry claim %s ms, room %s, history_cleared %s, dry claim counts %s'
+            % (res.get('setup_ms'), res.get('dry_claim_ms'), res.get('room'), res.get('history_cleared'), res.get('dry_claim_counts')))
+        out('fixtures: %s' % ('OK' if ok else 'NOT OK'))
+        return 0 if ok else 1
     m = re.search(r'P4263E_RESULT (\{.*\})\s*\nCONTEXT', msg, re.S)
     if not m:
         out('NO RESULT: ' + (msg + stderr)[:3000])
         return 2
     res = json.loads(m.group(1))
+    if stage and res.get('mode') != stage:
+        out('NOT OK: this is the %s call, expected %s' % (res.get('mode'), stage))
+        return 5
+    out('mode: %s; history_cleared: %s (report only)' % (res.get('mode'), res.get('history_cleared')))
     bad = n_ctl = n_mut = 0
     for k in sorted(res):
         v = res[k]
@@ -277,6 +407,12 @@ def report(stdout, stderr='', out=print):
                   ('PRECOND' if v.startswith('PRECONDITION') else 'MISSED')))
             out('%-7s %s want=%s -> %s' % (tag, k, want, v[:300]))
             bad += 0 if ok else 1
+    if stage == 'structure':
+        want_keys = sorted(['C_' + c for c in STRUCTURE['controls']] + STRUCTURE['mutants'])
+        got_keys = sorted(k for k in res if k.startswith(('C_', 'M_')))
+        if got_keys != want_keys:
+            out('NOT OK: the structure call ran %s, expected %s' % (got_keys, want_keys))
+            bad += 1
     out('controls=%d mutants=%d problems=%d' % (n_ctl, n_mut, bad))
     if n_ctl + n_mut == 0:
         out('FAIL: zero tests ran')
@@ -289,7 +425,15 @@ def _canned(results):
     return json.dumps({'message': body}) + '\nkt-sql: HTTP 400\n'
 
 
-def selftest():
+def selftest(green_ok=False):
+    """canned outputs through report(); green_ok (the selftest's own negative control) asserts that a missed mutant is
+    ok, which must make the selftest fail"""
+    saved = dict(WANT)
+    WANT.clear()
+    got = report(_canned({'C_p_a': 'PASS', 'M_x': 'PASS'}), out=lambda *_: None)
+    empty_ok = got == 4
+    print('%-4s report with an empty expectation table: exit %d (want 4)' % ('ok' if empty_ok else 'BAD', got))
+    WANT.update(saved)
     mutants()  # fills WANT
     green = [k for k, w in WANT.items() if w == 'green'][0]
     red = [k for k, w in WANT.items() if w == 'red'][0]
@@ -301,11 +445,11 @@ def selftest():
         ('mutant CRASH is not caught', {'C_p_a': 'PASS', red: 'CRASH 42601 x'}, 1),
         ('mutant PRECONDITION is not caught', {'C_p_a': 'PASS', red: 'PRECONDITION 950'}, 1),
         ('mutant NOT APPLIED IN DB', {'C_p_a': 'PASS', red: 'NOT APPLIED IN DB'}, 1),
-        ('mutant missed (PASS)', {'C_p_a': 'PASS', red: 'PASS'}, 1),
+        ('mutant missed (PASS)', {'C_p_a': 'PASS', red: 'PASS'}, 0 if green_ok else 1),
         ('equivalent mutant goes red', {'C_p_a': 'PASS', green: 'FAIL x'}, 1),
         ('zero tests', {'fixtures': 'x'}, 3),
     ]
-    bad = 0
+    bad = 0 if empty_ok else 1
     for label, res, want in cases:
         got = report(_canned(res), out=lambda *_: None)
         bad += got != want
@@ -313,6 +457,22 @@ def selftest():
     got = report('{"message":"Failed to run sql query: ERROR:  57014: canceling statement due to statement timeout"}\nkt-sql: HTTP 400\n', out=lambda *_: None)
     bad += got != 2
     print('%-4s no result line: exit %d (want 2)' % ('ok' if got == 2 else 'BAD', got))
+    refusal = ('{"message":"Failed to run sql query: ERROR:  P0001: ' + HISTORY_REFUSAL + '1 rows (the erase job\'s run history); keep a '
+               'copy, then delete them first\\nCONTEXT:  x"}\nkt-sql: HTTP 400\n')
+    for label, raw, want in (('history mutant refused (CAUGHT)', refusal, 0),
+                             ('history mutant gave a result (MISSED)', _canned({'C_p_a': 'PASS'}), 1),
+                             ('history mutant: another error (MISSED)', '{"message":"Failed to run sql query: ERROR:  55P03: lock timeout"}\nkt-sql: HTTP 400\n', 1)):
+        got = report(raw, out=lambda *_: None, stage='history_mutant')
+        bad += got != want
+        print('%-4s %s: exit %d (want %d)' % ('ok' if got == want else 'BAD', label, got, want))
+    for label, res, want in (('structure call with its own blocks', dict({'mode': 'structure'}, **{('C_' + c): 'PASS' for c in STRUCTURE['controls']},
+                                                                       **{k: 'FAIL x' for k in STRUCTURE['mutants']}), 0),
+                             ('structure call missing a block', {'mode': 'structure', 'C_p_grants': 'PASS'}, 1),
+                             ('a full call given as structure', {'mode': 'full', 'C_p_grants': 'PASS'}, 5)):
+        got = report(_canned(res), out=lambda *_: None, stage='structure')
+        bad += got != want
+        print('%-4s %s: exit %d (want %d)' % ('ok' if got == want else 'BAD', label, got, want))
+    print('selftest: %s' % ('all cases as expected' if not bad else '%d wrong' % bad))
     return 1 if bad else 0
 
 
@@ -452,7 +612,7 @@ def structure_all(composed):
 
 if __name__ == '__main__':
     a = sys.argv[1:]
-    if not a or a[0] not in ('run', 'check', 'write', 'selftest'):
+    if not a or a[0] not in ('run', 'check', 'write', 'selftest', 'report'):
         print(__doc__); sys.exit(2)
     ap = os.path.join(root, APPLY_REL)
     if a[0] == 'write':
@@ -460,11 +620,33 @@ if __name__ == '__main__':
         print('written', APPLY_REL, md5(APPLY))
         sys.exit(0)
     if a[0] == 'selftest':
-        sys.exit(selftest())
+        sys.exit(selftest(green_ok='--control-green-ok' in a))
+    if a[0] == 'report':
+        if len(a) < 2:
+            print(__doc__); sys.exit(2)
+        mutants()  # the expectation table
+        st = next((x.split('=', 1)[1] for x in a if x.startswith('--stage=')), None)
+        sys.exit(report(open(a[1], encoding='utf-8').read(), stage=st))
     if a[0] == 'check':
         ms = mutants()
         print('%d mutants, every fragment matched exactly once; %d controls' % (len(ms), len(CONTROLS)))
-        probs, nlit, ndef = structure_all(compose({'controls': True, 'mutants': True}))
+        full = compose({'stage': 'full'}, run='0' * 24)
+        probs, nlit, ndef = structure_all(full)
+        # every stage composes, and the structure call's blocks are byte-identical to the full call's
+        stc = compose({'stage': 'structure'}, run='0' * 24)
+        drv = stc[stc.index('DO $drv4263e$'):stc.index('$drv4263e$;')]
+        blocks = re.findall(r"  v := NULL;\n  BEGIN\n.*?  INSERT INTO pg_temp\.p4263e_out VALUES \('[CM]_\w+', coalesce\(v, 'NULL \(body set nothing\)'\)\);\n", drv, re.S)
+        if len(blocks) != len(STRUCTURE['controls']) + len(STRUCTURE['mutants']) or any(b not in full for b in blocks):
+            probs.append('structure call: %d blocks, not all byte-identical to the full call' % len(blocks))
+        for st in STAGES:
+            t = compose({'stage': st}, run='0' * 24)
+            if st != 'history_mutant' and (t.count('DO $hist4263e$') != 1 or t.index('DO $hist4263e$') > t.index(RB1)):
+                probs.append('%s call: the history is not cleared before the E1 rollback' % st)
+            if st == 'history_mutant' and ('DO $hist4263e$' in t or 'DO $seed4263e$' not in t):
+                probs.append('history_mutant call: clears the history or seeds none')
+            if not t.startswith('DO $guard4263e$'):
+                probs.append('%s call: the guard is not first' % st)
+        print('stages: %s compose; structure blocks byte-identical to the full call: %d' % (', '.join(STAGES), len(blocks)))
         for p_ in probs:
             print('STRUCTURE: ' + p_)
         if probs:
@@ -478,11 +660,26 @@ if __name__ == '__main__':
         print(APPLY_REL + ' matches')
         sys.exit(0)
     sel = {}
+    guard, transport = GUARD_MD5, None
     for x in a[1:]:
+        if x.startswith('--stage='):
+            sel['stage'] = x.split('=', 1)[1]
+            if sel['stage'] not in STAGES:
+                print('unknown stage ' + sel['stage']); sys.exit(2)
+        elif x.startswith('--marker='):
+            guard = x.split('=', 1)[1]
+        elif x.startswith('--transport='):
+            transport = x.split('=', 1)[1]
         if x == '--controls':
             sel['controls'] = True
         elif x == '--mutants':
             sel['mutants'] = True
         elif x.startswith('--only='):
             sel['only'] = x.split('=')[1].split(',')
-    sys.exit(run(sel, show='--print' in a))
+    if guard != GUARD_MD5 and not transport:
+        print('refusing: --marker is only for a non-default --transport'); sys.exit(2)
+    if not re.fullmatch(r'[0-9a-f]{32}', guard):
+        print('refusing: --marker must be 32 lowercase hex characters'); sys.exit(2)
+    if transport and not (os.path.isfile(transport) and os.access(transport, os.X_OK)):
+        print('refusing: the transport does not exist or is not executable'); sys.exit(2)
+    sys.exit(run(sel, show='--print' in a, guard=guard, transport=transport))

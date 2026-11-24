@@ -82,6 +82,7 @@ END $p$;
 CREATE FUNCTION pg_temp.p_c6a() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(11); b uuid; c jsonb; f jsonb; dry jsonb;
 BEGIN
+  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
   b := pg_temp.mk_blob(u, 'c6a', now() - interval '3 days', now() - interval '3 days', now() - interval '1 hour');
   PERFORM pg_temp.mk_obj(pg_temp.path(b), now() - interval '3 days');
   c := pg_temp.claim(false);
@@ -189,6 +190,7 @@ CREATE FUNCTION pg_temp.p_c6e() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(15); k uuid := pg_temp.mk_user(16); b_old uuid; b_young uuid; b_kept uuid;
         n_old text; n_young text; n_kept text; c jsonb; bad text := '';
 BEGIN
+  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
   b_old   := pg_temp.mk_blob(u, 'c6e-old',   now() - interval '3 days', now() - interval '3 days', NULL);
   b_young := pg_temp.mk_blob(u, 'c6e-young', now() - interval '2 hours', now() - interval '2 hours', NULL);
   b_kept  := pg_temp.mk_blob(k, 'c6e-kept',  now() - interval '3 days', now() - interval '3 days', now() - interval '1 hour');
@@ -212,6 +214,7 @@ CREATE FUNCTION pg_temp.p_c6f() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(17); ia uuid := pg_temp.fx(1701); io uuid := pg_temp.fx(1702);
         da uuid; dob uuid; ma uuid; shared uuid; own uuid; fa uuid; c jsonb; r jsonb; run uuid; i int; bad text := '';
 BEGIN
+  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(u, ia, now() - interval '1 hour');
   da := pg_temp.mk_deal(u, ia, 'c6f-active'); dob := pg_temp.mk_deal(u, io, 'c6f-old');
@@ -369,7 +372,7 @@ END $p$;
 -- dry run: claim and scrub change no cloud row, fence nothing, lease nothing, delete no object; only run rows are added
 CREATE FUNCTION pg_temp.p_dry_run() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(25); k uuid := pg_temp.mk_user(26); ia uuid := pg_temp.fx(2501); d uuid; dob uuid; m uuid;
-        b_orphan uuid; b_fenced uuid; b_live uuid; b_old uuid; before text; after text; c jsonb; r jsonb; runs_before bigint;
+        b_orphan uuid; b_fenced uuid; b_live uuid; b_old uuid; before text; after text; c jsonb; r jsonb; runs_before uuid[];
 BEGIN
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(u, ia, now() - interval '2 hours');
@@ -391,7 +394,7 @@ BEGIN
       UNION ALL SELECT 'b' || id || coalesce(purge_requested_at::text, '-') FROM public.cloud_blobs WHERE owner_user_id IN (u, k)
       UNION ALL SELECT 'o' || name FROM storage.objects WHERE bucket_id = 'cloud-deal-files' AND (name LIKE u::text || '/%' OR name LIKE k::text || '/%')
       UNION ALL SELECT 'l' || blob_id FROM public.cloud_blob_erase_leases WHERE blob_id IN (b_orphan, b_fenced, b_live)) s(x));
-  SELECT count(*) INTO runs_before FROM public.cloud_blob_erase_runs;
+  runs_before := ARRAY(SELECT x.id FROM public.cloud_blob_erase_runs x);
   c := pg_temp.claim(true);
   IF (c -> 'counts' ->> 'messages_hard_deleted')::int < 1 OR (c -> 'counts' ->> 'blobs_listed')::int < 1 THEN
     RETURN 'FAIL setup: the dry claim saw nothing to do: ' || left(c::text, 300);
@@ -406,7 +409,7 @@ BEGIN
       UNION ALL SELECT 'o' || name FROM storage.objects WHERE bucket_id = 'cloud-deal-files' AND (name LIKE u::text || '/%' OR name LIKE k::text || '/%')
       UNION ALL SELECT 'l' || blob_id FROM public.cloud_blob_erase_leases WHERE blob_id IN (b_orphan, b_fenced, b_live)) s(x));
   IF before IS DISTINCT FROM after THEN RETURN 'FAIL a dry run changed rows'; END IF;
-  IF (SELECT count(*) FROM public.cloud_blob_erase_runs) <> runs_before + 1 THEN RETURN 'FAIL run rows: want one added'; END IF;
+  IF (SELECT count(*) FROM public.cloud_blob_erase_runs x WHERE NOT (x.id = ANY (runs_before))) <> 1 THEN RETURN 'FAIL run rows: want one added'; END IF;
   RETURN 'PASS';
 END $p$;
 
@@ -442,5 +445,32 @@ BEGIN
      OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cloud-blob-erase') THEN
     RETURN 'FAIL objects left after rollback';
   END IF;
+  RETURN 'PASS';
+END $p$;
+
+-- the E1 rollback refuses while a run row exists, with its own text, and runs once the row is gone. The run table holds
+-- only this probe's row here: the call cleared the run history first and E1 recreated the tables; the row is marked
+-- with this run and deleted by its mark, never by a count.
+CREATE FUNCTION pg_temp.p_rollback_refuses_history(rb3 text, rb1 text) RETURNS text LANGUAGE plpgsql AS $p$
+DECLARE t text := 'none';
+BEGIN
+  EXECUTE rb3;
+  INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', jsonb_build_object('p4263e', '__RUN__'));
+  BEGIN
+    EXECUTE rb1;
+    RETURN 'FAIL the E1 rollback ran while a run row exists';
+  EXCEPTION WHEN OTHERS THEN
+    t := SQLERRM;
+  END;
+  IF t NOT LIKE 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds % rows (the erase job''s run history); keep a copy, then delete them first' THEN
+    RETURN 'FAIL refused for another reason: ' || left(t, 200);
+  END IF;
+  DELETE FROM public.cloud_blob_erase_runs x WHERE x.counts ->> 'p4263e' = '__RUN__';
+  BEGIN
+    EXECUTE rb1;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN 'FAIL refused with the run row gone: ' || left(SQLERRM, 200);
+  END;
+  IF to_regclass('public.cloud_blob_erase_runs') IS NOT NULL THEN RETURN 'FAIL the run table is still there after the rollback'; END IF;
   RETURN 'PASS';
 END $p$;

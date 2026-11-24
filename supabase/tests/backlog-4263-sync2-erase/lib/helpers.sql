@@ -117,6 +117,18 @@ BEGIN
   GET DIAGNOSTICS n = ROW_COUNT;
   IF n <> 1 THEN RAISE EXCEPTION 'cloud_release_switches holds % rows, want 1', n; END IF;
 END $h$;
+-- The claim lists at most p_limit (1000) blobs and p_limit rowless objects, oldest first, over the whole database. A
+-- probe that asserts its own blob or object is listed can only tell while the database holds fewer than 900 of each;
+-- otherwise it says so (PRECONDITION) instead of passing or failing. NULL when there is room.
+CREATE FUNCTION pg_temp.room() RETURNS text LANGUAGE sql VOLATILE AS $h$
+  SELECT CASE
+    WHEN (SELECT count(*) FROM public.cloud_blobs b WHERE NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id)) >= 900
+      THEN 'PRECONDITION 900 or more unreferenced blobs in the database (the listing holds 1000)'
+    WHEN (SELECT count(*) FROM storage.objects o WHERE o.bucket_id = 'cloud-deal-files' AND o.created_at < now() - interval '24 hours'
+            AND NOT EXISTS (SELECT 1 FROM public.cloud_blobs b WHERE b.storage_path = o.name)) >= 900
+      THEN 'PRECONDITION 900 or more rowless objects older than 24 h in the database (the listing holds 1000)'
+  END
+$h$;
 -- json helpers
 CREATE FUNCTION pg_temp.ids(j jsonb) RETURNS uuid[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT coalesce(array_agg((e ->> 'id')::uuid), '{}') FROM jsonb_array_elements(coalesce(j -> 'blobs', '[]')) e
