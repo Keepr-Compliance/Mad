@@ -15,7 +15,7 @@ import { mcpEnabled } from '@/lib/mcp/config';
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { bindingDigest } from '@/lib/mcp/oauth/crypto';
 import { isRequestId } from '@/lib/mcp/oauth/validate';
-import { CONSENT, M_C, PROVIDER_LABELS } from '@/lib/mcp/account/messages';
+import { M_C, NOTICE_TEXT, PROVIDER_LABELS } from '@/lib/mcp/account/messages';
 import { logAccount } from '@/lib/mcp/account/logging';
 import { readAccountRequest } from '@/lib/mcp/account/request';
 import { viewRequest } from '@/lib/mcp/account/rpc';
@@ -23,8 +23,6 @@ import { ReplayOff } from '@/components/sentry/ReplayOff';
 import { ConsentForm } from './ConsentForm';
 
 export const dynamic = 'force-dynamic';
-
-const NOTICE_VERSION = 1;
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -84,32 +82,35 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
         return <Notice message={M_C.requestInvalid} />;
     }
   }
-  if (view.noticeVersion !== NOTICE_VERSION) return <Notice message={M_C.noticeVersion} />;
+  // BACKLOG-4263 P11: the text of exactly the version the database answered; any other version cannot be approved here
+  const copy = Object.prototype.hasOwnProperty.call(NOTICE_TEXT, view.noticeVersion) ? NOTICE_TEXT[view.noticeVersion] : null;
+  if (copy === null) return <Notice message={M_C.noticeVersion} />;
   if (email === null) return <Notice message={M_C.failed} />;
 
   const provider = PROVIDER_LABELS[view.provider];
   return (
     <Shell>
       <p className="text-base font-semibold text-gray-900">
-        {view.canChangeTodos ? CONSENT.write.lead(provider) : CONSENT.lead(provider)}
+        {view.canChangeTodos ? copy.write.lead(provider) : copy.lead(provider)}
       </p>
       <p data-testid="consent-name-host">
-        {CONSENT.nameLabel}
-        &ldquo;<bdi>{view.clientName}</bdi>&rdquo;{CONSENT.nameHost(view.redirectHost)}
+        {copy.nameLabel}
+        &ldquo;<bdi>{view.clientName}</bdi>&rdquo;{copy.nameHost(view.redirectHost)}
       </p>
       {view.replacesExisting && (
         <p role="note" className="font-semibold text-gray-900">
-          {CONSENT.replaces(provider)}
+          {copy.replaces(provider)}
         </p>
       )}
-      <p>{CONSENT.onlyIf(provider)}</p>
-      {view.ageSeconds !== undefined && <p className="text-gray-600">{CONSENT.startedAgo(view.ageSeconds)}</p>}
-      <p>{view.canChangeTodos ? CONSENT.write.scope : CONSENT.scope}</p>
-      {view.canChangeTodos && <p>{CONSENT.write.changes}</p>}
-      <p>{CONSENT.agreement(provider)}</p>
-      <p>{CONSENT.disconnect}</p>
-      <p>{CONSENT.whatDisconnects}</p>
-      <p className="pt-2 text-gray-600">{CONSENT.signedInAs(email)}</p>
+      <p>{copy.onlyIf(provider)}</p>
+      {view.ageSeconds !== undefined && <p className="text-gray-600">{copy.startedAgo(view.ageSeconds)}</p>}
+      <p>{view.canChangeTodos ? copy.write.scope : copy.scope}</p>
+      {view.canChangeTodos && <p>{copy.write.changes}</p>}
+      <p>{copy.agreement(provider)}</p>
+      {copy.readLog !== undefined && <p data-testid="consent-read-log">{copy.readLog}</p>}
+      <p>{copy.disconnect}</p>
+      <p>{copy.whatDisconnects}</p>
+      <p className="pt-2 text-gray-600">{copy.signedInAs(email)}</p>
       <ConsentForm requestId={requestId} nonce={view.nonce} />
     </Shell>
   );

@@ -33,6 +33,12 @@ const CASES = [
     version: '20261123140000',
     name: 'backlog_4263_mcp_message_tools',
   },
+  {
+    migration: 'supabase/migrations/20261123150000_backlog_4263_ai_approval_notice_2.sql',
+    apply: 'supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql',
+    version: '20261123150000',
+    name: 'backlog_4263_ai_approval_notice_2',
+  },
 ];
 
 describe.each(CASES)('apply file $apply', ({ migration, apply, version, name }) => {

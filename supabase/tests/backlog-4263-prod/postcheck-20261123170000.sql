@@ -54,6 +54,7 @@ auth_want(sig) AS (VALUES
     ('public.mcp_authorize_view(text,bytea)'),
     ('public.mcp_disconnect(uuid)'),
     ('public.mcp_disconnect_all_mine()'),
+    ('public.mcp_list_my_connection_access()'),
     ('public.mcp_list_my_connections()'),
     ('public.mcp_list_my_message_reads(text,integer)')),
 sweep_want(sig) AS (SELECT NULL::text WHERE false),

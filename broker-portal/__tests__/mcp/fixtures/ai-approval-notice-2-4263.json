@@ -1,0 +1,82 @@
+{
+  "source": "Transcribed from the answer sample of supabase/tests/backlog-4263-sync2-n/harness-n.sql (20261123150000 applied inside the call), run 2026-11-24; ids, the nonce and the request id replaced by placeholders the test fills in.",
+  "view_v2": {
+    "ok": true,
+    "nonce": "@NONCE@",
+    "scope": "mcp:read",
+    "provider": "openai",
+    "request_id": "@REQUEST_ID@",
+    "age_seconds": 0,
+    "client_name": "Fixture app",
+    "redirect_host": "chatgpt.com",
+    "notice_version": 2,
+    "replaces_existing": false
+  },
+  "access": {
+    "ok": true,
+    "connections": [
+      {
+        "id": "@CONN_V2@",
+        "messages": true
+      },
+      {
+        "id": "@CONN_V1@",
+        "messages": false
+      }
+    ]
+  },
+  "reads": {
+    "ok": true,
+    "reads": [
+      {
+        "from": "Seller Agent <seller@example.test>",
+        "part": null,
+        "tool": "list_deal_messages",
+        "address": "Fixture dA Street",
+        "channel": "email",
+        "deal_id": "@DEAL@",
+        "read_at": "2026-11-24T03:57:08.605092Z",
+        "read_id": "@READ1@",
+        "sent_at": "2026-01-02T10:00:00.000000Z",
+        "subject": "Inspection",
+        "app_name": "Fixture app",
+        "provider": "openai",
+        "deal_state": "live",
+        "message_state": "live"
+      },
+      {
+        "from": "Seller Agent <seller@example.test>",
+        "part": null,
+        "tool": "list_deal_messages",
+        "address": "Fixture dA Street",
+        "channel": "email",
+        "deal_id": "@DEAL@",
+        "read_at": "2026-11-24T03:57:08.605092Z",
+        "read_id": "@READ2@",
+        "sent_at": "2026-01-01T10:00:00.000000Z",
+        "subject": "Offer accepted",
+        "app_name": "Fixture app",
+        "provider": "openai",
+        "deal_state": "live",
+        "message_state": "live"
+      },
+      {
+        "from": "Seller Agent <seller@example.test>",
+        "part": null,
+        "tool": "list_deal_messages",
+        "address": "Fixture dA Street",
+        "channel": "text",
+        "deal_id": "@DEAL@",
+        "read_at": "2026-11-24T03:57:08.605092Z",
+        "read_id": "@READ3@",
+        "sent_at": "2026-01-03T10:00:00.000000Z",
+        "subject": null,
+        "app_name": "Fixture app",
+        "provider": "openai",
+        "deal_state": "live",
+        "message_state": "live"
+      }
+    ],
+    "next_cursor": null
+  }
+}
