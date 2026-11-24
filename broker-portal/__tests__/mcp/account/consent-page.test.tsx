@@ -506,7 +506,7 @@ describe('BACKLOG-4263 P11: approval page version 2', () => {
         'What ChatGPT (OpenAI) does with it is covered by your agreement with ChatGPT (OpenAI).',
     );
     expect(screen.getByTestId('consent-read-log')).toHaveTextContent(
-      'Keepr keeps a list of every email and text the app reads. You can see it in Account > AI apps.',
+      'Keepr keeps a list of every email and text the app reads. You can see it in My Account > AI apps.',
     );
     expect(text).not.toContain(V1_READ_SCOPE);
     expect(screen.getByRole('button', { name: CONSENT.allow })).toBeInTheDocument();

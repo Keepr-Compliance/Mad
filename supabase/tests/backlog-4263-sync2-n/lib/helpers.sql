@@ -206,3 +206,6 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
   RETURN 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 300);
 END $h$;
+CREATE FUNCTION pg_temp.req_expires(k text) RETURNS timestamptz LANGUAGE sql VOLATILE AS $h$
+  SELECT r.expires_at FROM public.mcp_authorization_requests r WHERE r.id = pg_temp.tx('rid:' || k)
+$h$;

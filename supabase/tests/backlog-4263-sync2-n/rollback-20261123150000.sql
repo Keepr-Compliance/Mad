@@ -3,8 +3,8 @@
 -- Refuses while any mcp_connections row holds approval page version 2 or later (those connections may use the email
 -- and text tools whatever the setting says). Order for a real rollback: messages_upload off first; then, with the
 -- operator's go, DELETE FROM public.mcp_connections WHERE notice_version >= 2; then this file.
--- Then: mcp_settings.notice_version 2 -> 1 (the notice-version trigger expires every pending request in the same
--- statement), the two triggers and the three functions are dropped (all owned by postgres, dropped as postgres), and the
+-- Then: mcp_settings.notice_version 2 -> 1 (the notice-version trigger sets expires_at = '-infinity' on every pending
+-- request in the same statement), the two triggers and the three functions are dropped (all owned by postgres, dropped as postgres), and the
 -- ledger row is removed.
 -- Locks: EXCLUSIVE on mcp_authorization_requests until commit; DROP TRIGGER takes ACCESS EXCLUSIVE on mcp_settings and
 -- mcp_connections until commit; lock_timeout 3s.
@@ -14,7 +14,7 @@ LOCK TABLE public.mcp_authorization_requests IN EXCLUSIVE MODE;
 DO $pre4263nr$
 DECLARE r record; v_md5 text; n bigint;
 BEGIN
-  FOR r IN SELECT * FROM (VALUES ('public._mcp_notice_change_expires_requests()', '2d21d9cde692108e445962ee03e8f0c4'), ('public._mcp_connection_version_fixed()', '4ed7ea84ed79cb6eec9e894f14ec7bb6'), ('public.mcp_list_my_connection_access()', '5589e7c2efd88c80f1f1cd619498c622')) x(sig, want) LOOP
+  FOR r IN SELECT * FROM (VALUES ('public._mcp_notice_change_expires_requests()', 'c6c5cc1976da55e4cb896e0f6e8ca2fb'), ('public._mcp_connection_version_fixed()', '4ed7ea84ed79cb6eec9e894f14ec7bb6'), ('public.mcp_list_my_connection_access()', '5589e7c2efd88c80f1f1cd619498c622')) x(sig, want) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS DISTINCT FROM r.want THEN
       RAISE EXCEPTION 'ROLLBACK 20261123150000: % is not at the body 20261123150000 wrote (md5 %)', r.sig, coalesce(v_md5, 'missing');
@@ -46,7 +46,7 @@ BEGIN
     'functions_left', (SELECT count(*) FROM unnest(ARRAY['public._mcp_notice_change_expires_requests()', 'public._mcp_connection_version_fixed()', 'public.mcp_list_my_connection_access()']) s WHERE to_regprocedure(s) IS NOT NULL),
     'triggers_left', (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgname IN ('mcp_settings_notice_change_expires_requests', 'mcp_connections_version_fixed') AND NOT t.tgisinternal),
     'version', (SELECT s.notice_version FROM public.mcp_settings s WHERE s.id),
-    'live_pending', (SELECT count(*) FROM public.mcp_authorization_requests q WHERE q.status = 'pending' AND q.expires_at > now()),
+    'live_pending', (SELECT count(*) FROM public.mcp_authorization_requests q WHERE q.status = 'pending' AND q.expires_at > '-infinity'),
     'other_functions_changed', (SELECT count(*) FROM pg_temp.p4263nr_fn_before b
          WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.oid::regprocedure::text = b.sig
                              AND md5(p.prosrc) = b.src_md5 AND p.proacl::text IS NOT DISTINCT FROM b.acl AND p.proconfig IS NOT DISTINCT FROM b.config

@@ -21,8 +21,14 @@ calls there; afterwards they refuse (the not-applied check).
 2. Structure (only if the coordinator allows it as a stage): `kt-sql harness-n-structure.sql > st.txt;
    python3 gen.py report st.txt structure` -> last line `structure: OK`.
 3. Full: `kt-sql harness-n.sql > out.txt; python3 gen.py report out.txt full` -> last line
-   `controls=15 mutant_entries=16 (real=15 + negative_control_required_not_applied=1) problems=0`.
+   `controls=16 mutant_entries=18 (real=17 + negative_control_required_not_applied=1) problems=0`.
 4. After every call: `kt-sql -c "select extensions.pg_stat_statements_reset()"`.
+
+Locks held by every call (each mutant and control block for milliseconds; the last step until the RAISE): EXCLUSIVE
+on `mcp_authorization_requests`, SHARE ROW EXCLUSIVE on `mcp_settings` and `mcp_connections`, the `cloud_release_switches`
+row. T-N takes them in the order requests, settings, connections; a turn-off or "Disconnect all AI apps" at the same
+moment takes connections then requests, so one of the two can end with SQLSTATE 40P01: nothing of that call is applied
+(stop, as for 57014 / 55P03, and run again later).
 
 Rules: never between minute 15 and minute 30 of the hour (the call holds the `cloud_release_switches` row; the erase job
 takes it at minute 23). One full call. No re-send. Stop on SQLSTATE `57014` or `55P03`. HTTP 200 on any harness file
@@ -47,8 +53,9 @@ means it committed: an incident, stop and report.
   while a version-2 connection exists and then restores version-1 behaviour; C-N13 a notice-version change made outside
   T-N also expires a request viewed before it; C-N14 an UPDATE of a connection's version is refused (postgres and
   service_role) while other columns still change; C-N15 T-N applies with its own trigger present, and the trigger is what
-  expires pending requests (viewed and not).
-- **Mutants** (15 + the negative control): each is proven applied in a block of its own before its primary controls run;
+  expires pending requests (viewed and not); C-N16 the value written is `'-infinity'` (for a viewed request, for one
+  whose expiry time has passed by T-N's clock, and for a change made outside T-N).
+- **Mutants** (17 + the negative control): each is proven applied in a block of its own before its primary controls run;
   the catalogue fingerprint is compared after every one (`MUTANT NOT RESTORED <id>`).
 - **Samples**: the view answer at version 2, the reader's answer and the read log after one list call, taken once (undone).
   The portal's test fixture `broker-portal/__tests__/mcp/fixtures/ai-approval-notice-2-4263.json` is transcribed from them.
@@ -56,8 +63,8 @@ means it committed: an incident, stop and report.
 
 ## Not covered by one call
 
-The lock wait of a second session (a connect begun while T-N holds its lock waits until T-N ends) needs two sessions:
-`two-session/` holds the scripts. They are not run without the coordinator's go.
+An approve whose transaction began before T-N's needs two sessions (one call has one transaction start time):
+`two-session/` (see its README). It commits T-N on the dry-run database and is not run without the coordinator's go.
 
 ## Files
 
@@ -66,11 +73,11 @@ The lock wait of a second session (a connect begun while T-N holds its lock wait
 | `gen.py` | Generator, `check`, `report`, `report-fixtures`, `selftest`, `dry-wrappers` |
 | `lib/helpers.sql` | Temp tables, call-as-role, the approval chain, tool calls as the portal makes them, `tn()` / `rb()` |
 | `lib/fixtures.sql` | Two licensed users, one deal with three messages, two version-1 connections |
-| `lib/controls.sql` | The controls C-N1 ... C-N15 |
+| `lib/controls.sql` | The controls C-N1 ... C-N16 |
 | `apply-20261123150000.sql` | The migration text unchanged + its ledger row |
 | `rollback-20261123150000.sql` | Undoes 20261123150000; refuses while any connection holds version 2 or later |
 | `harness-n.sql` | The full call |
 | `harness-n-structure.sql` | Six controls, five mutants (one of each kind, the negative control among them), the fingerprint twice, the last step |
 | `harness-n-fixtures.sql` | The fixtures and the timing probes |
 | `answers-report.txt` | `answers.py` (backlog-4263-sync2-t) over `lib/*.sql` against the migrations through 20261123150000 |
-| `two-session/` | The lock-wait scripts (not run) |
+| `two-session/` | The approve-before-T-N two-session control (hand-written; not run without the coordinator's go) |

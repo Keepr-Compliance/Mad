@@ -76,7 +76,7 @@ export const CONSENT_V2 = {
   agreement: (provider: string) =>
     `What it reads, including other people's contact details, emails and texts, is sent to ${provider}. ` +
     `What ${provider} does with it is covered by your agreement with ${provider}.`,
-  readLog: 'Keepr keeps a list of every email and text the app reads. You can see it in Account > AI apps.',
+  readLog: 'Keepr keeps a list of every email and text the app reads. You can see it in My Account > AI apps.',
   write: {
     ...CONSENT.write,
     scope:

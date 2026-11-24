@@ -269,3 +269,25 @@ BEGIN
     'viewed_expired', pg_temp.req_live('R15b') IS FALSE,
     'trigger_present', pg_temp.has_trigger('mcp_settings_notice_change_expires_requests')));
 END $c$;
+
+-- C-N16: the value written is '-infinity' (earlier than the start of every transaction, so no approve or view whose
+-- transaction began before the bump can accept the request); it covers a pending request whose expiry time has already
+-- passed by the bump's clock, and a change made outside T-N writes the same value
+CREATE FUNCTION pg_temp.c_n16_expiry_value() RETURNS text LANGUAGE plpgsql AS $c$
+DECLARE ea timestamptz; eb timestamptz;
+BEGIN
+  PERFORM pg_temp.begin_req('R16a', 'chatgpt');
+  PERFORM pg_temp.view_req('R16a', 'A');
+  PERFORM pg_temp.begin_req('R16b', 'chatgpt');
+  UPDATE public.mcp_authorization_requests SET expires_at = now() - interval '1 second' WHERE id = pg_temp.tx('rid:R16b');
+  PERFORM pg_temp.tn();
+  -- read before the next begin: mcp_authorize_begin deletes requests whose expires_at < now() (20261118130000:563-564)
+  ea := pg_temp.req_expires('R16a');
+  eb := pg_temp.req_expires('R16b');
+  PERFORM pg_temp.begin_req('R16c', 'chatgpt');
+  UPDATE public.mcp_settings SET notice_version = 3 WHERE id;
+  RETURN pg_temp.verdict(jsonb_build_object(
+    'viewed_neg_infinity', ea = '-infinity'::timestamptz,
+    'lapsed_neg_infinity', eb = '-infinity'::timestamptz,
+    'out_of_band_neg_infinity', pg_temp.req_expires('R16c') = '-infinity'::timestamptz));
+END $c$;

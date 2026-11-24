@@ -45,7 +45,8 @@ describe('BACKLOG-4263 T-N migration text', () => {
     const b = fnBody(MIG, '_mcp_notice_change_expires_requests');
     expect(b).toContain("TG_TABLE_NAME = 'mcp_settings'");
     expect(b.indexOf('LOCK TABLE public.mcp_authorization_requests IN EXCLUSIVE MODE;')).toBeLessThan(b.indexOf('UPDATE public.mcp_authorization_requests'));
-    expect(b).toMatch(/SET expires_at = now\(\)\n\s+WHERE r\.status = 'pending' AND r\.expires_at > now\(\);/);
+    expect(b).toMatch(/SET expires_at = '-infinity' +\/\*EXPIRE:value\*\/\n\s+WHERE r\.status = 'pending' AND r\.expires_at > '-infinity';/);
+    expect(b).not.toMatch(/SET expires_at = now\(\)/);
   });
 
   it('the trigger is the only expiry of requests in the file (no second mechanism to conflict with it)', () => {

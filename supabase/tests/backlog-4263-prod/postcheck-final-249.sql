@@ -94,7 +94,7 @@ fn(sig, md5, owner, secdef, vol, lang, config, ret, strict, leak, par) AS (VALUE
     ('public.mcp_message_access(text,bytea,text)', '1fb7181cbb05c85dd38819d814949b4d', 'postgres', 'true', 's', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public.mcp_list_my_message_reads(text,integer)', '98591cf030d80fe8742b00c231d65f76', 'postgres', 'true', 's', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u'),
     ('public._mcp_prune_message_reads()', '5fcc039167ee947d0f060adb39c98e8c', 'postgres', 'false', 'v', 'plpgsql', 'search_path=""', 'integer', 'false', 'false', 'u'),
-    ('public._mcp_notice_change_expires_requests()', '2d21d9cde692108e445962ee03e8f0c4', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'trigger', 'false', 'false', 'u'),
+    ('public._mcp_notice_change_expires_requests()', 'c6c5cc1976da55e4cb896e0f6e8ca2fb', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'trigger', 'false', 'false', 'u'),
     ('public._mcp_connection_version_fixed()', '4ed7ea84ed79cb6eec9e894f14ec7bb6', 'postgres', 'true', 'v', 'plpgsql', 'search_path=""', 'trigger', 'false', 'false', 'u'),
     ('public.mcp_list_my_connection_access()', '5589e7c2efd88c80f1f1cd619498c622', 'postgres', 'true', 's', 'plpgsql', 'search_path=""', 'jsonb', 'false', 'false', 'u')),
 fx(sig, role, want, kind) AS (VALUES

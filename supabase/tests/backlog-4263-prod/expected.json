@@ -63,7 +63,7 @@
     },
     "20261123150000": {
       "file": "supabase/migrations/20261123150000_backlog_4263_ai_approval_notice_2.sql",
-      "file_md5": "9b5d6ffad217413f8646b67beb9d8cec"
+      "file_md5": "6ee99e92af36fd211334d1e8287c9de5"
     }
   },
   "labels": {
@@ -19148,7 +19148,7 @@
         "function _mcp_notice_change_expires_requests() md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "2d21d9cde692108e445962ee03e8f0c4"
+          "want": "c6c5cc1976da55e4cb896e0f6e8ca2fb"
         },
         "function _mcp_notice_change_expires_requests() owner": {
           "label": "MUST HOLD",
@@ -26911,7 +26911,7 @@
         "function _mcp_notice_change_expires_requests() md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "2d21d9cde692108e445962ee03e8f0c4"
+          "want": "c6c5cc1976da55e4cb896e0f6e8ca2fb"
         },
         "function _mcp_notice_change_expires_requests() owner": {
           "label": "MUST HOLD",

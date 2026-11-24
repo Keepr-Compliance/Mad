@@ -2,7 +2,7 @@
 # statements on objects another role owns, with the role in force (roles.py); files: every .sql under
 # supabase/tests/<folder> for the folders in roles.FOLDERS and the erase harness as composed; owners from the
 # migrations up to 20261123150000
-files 203
+files 201
 statements 242
 wrong_role 0
 migration_wrong_role 0
@@ -366,8 +366,8 @@ input 41ef8b9eac67d1d71ab9b526d6afff96 supabase/tests/backlog-4263-prod/postchec
 input 14e89d51a652c293d20aae3a4c254761 supabase/tests/backlog-4263-prod/postcheck-20261123120000.sql
 input 9f046384ec119204c090bb5731d8f257 supabase/tests/backlog-4263-prod/postcheck-20261123130000.sql
 input 898a6ead2b21e85c5ef9f7084fda119d supabase/tests/backlog-4263-prod/postcheck-20261123140000.sql
-input f2b6e66cafd0a2baf4122b71e4208f96 supabase/tests/backlog-4263-prod/postcheck-20261123150000.sql
-input 201f252a7d0415ba3ce12d2e52bdea67 supabase/tests/backlog-4263-prod/postcheck-final-249.sql
+input bbdfbff572e863a79a8a84c5bfab500f supabase/tests/backlog-4263-prod/postcheck-20261123150000.sql
+input c4832bf168e65f2f57c0b1607048efe6 supabase/tests/backlog-4263-prod/postcheck-final-249.sql
 input 0018705570b43fbb83bd4f3006379436 supabase/tests/backlog-4263-prod/postcheck-final.sql
 input 05bca701afd40dc0f937661aeec0f417 supabase/tests/backlog-4263-sync2-erase/apply-20261123110000.sql
 input c53d43fcedb0739c2234764a0f33f134 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-a.sql
@@ -388,16 +388,14 @@ input 2e6731d57db8e7940d45ed4ebd036eec supabase/tests/backlog-4263-sync2-erase/l
 input e24c8b837e55fac3fe5385b2a3a6519b supabase/tests/backlog-4263-sync2-erase/lib/probes.sql
 input 2998304d0addc762f0d4bf1dbce6d192 supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql
 input 9bef89c9afd00393f9bf8e4f45dedba1 supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql
-input 7de981822eec807bd6a9e81c5f07698b supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql
-input 128292e465b1ede41cb181686a666a6e supabase/tests/backlog-4263-sync2-n/harness-n-fixtures.sql
-input 1a25e691c6945fa873a556e1a687a13e supabase/tests/backlog-4263-sync2-n/harness-n-structure.sql
-input ddf1d06ef216bb6656146abcb02a490e supabase/tests/backlog-4263-sync2-n/harness-n.sql
-input a1bff0695a82cbf419dabb50d6205393 supabase/tests/backlog-4263-sync2-n/lib/controls.sql
+input 4d3f040f20d5af4d75d84ebc0cd234bd supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql
+input 086f7b997307e6b57eafd7cba9fe5988 supabase/tests/backlog-4263-sync2-n/harness-n-fixtures.sql
+input 9a3508306f4f7e4a34fab4e8532b9f60 supabase/tests/backlog-4263-sync2-n/harness-n-structure.sql
+input 6a4366ba5082890db1701c9d871a4ff6 supabase/tests/backlog-4263-sync2-n/harness-n.sql
+input bd58d36cecdff5bbdaecdc0a96fc93f0 supabase/tests/backlog-4263-sync2-n/lib/controls.sql
 input beae44f67cdbbbba2b2ef8b71cb6cce0 supabase/tests/backlog-4263-sync2-n/lib/fixtures.sql
-input c7c481a34d8e1847bb1817c89ab307e9 supabase/tests/backlog-4263-sync2-n/lib/helpers.sql
-input 147baa47b47e6f4c79e3e8628d83c0b5 supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql
-input 1eb2ea0bdf4066ffb8aac6e62e899b75 supabase/tests/backlog-4263-sync2-n/two-session/session1.sql
-input d017063936d59c06c437dd1fc455e707 supabase/tests/backlog-4263-sync2-n/two-session/session2.sql
+input 5b096e6b23e795a196a67b4c992c18e1 supabase/tests/backlog-4263-sync2-n/lib/helpers.sql
+input cde4c23afa68efbea0023f264e89027a supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql
 input 92357a2a13f9585201df8ba4055ff6b9 supabase/tests/backlog-4263-sync2-s1/apply-20261123100000.sql
 input e5ae42d4878e4999c5659d5b4738d297 supabase/tests/backlog-4263-sync2-s1/concurrency/as-user.sql
 input 841848b867c015821c0200257f7bac06 supabase/tests/backlog-4263-sync2-s1/concurrency/assert.sql
