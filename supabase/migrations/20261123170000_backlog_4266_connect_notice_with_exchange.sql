@@ -175,3 +175,4 @@ BEGIN
   END IF;
 END
 $post4266$;
+-- THROWAWAY CI PROBE (BACKLOG-4263): this line exists only on a probe branch that is never merged
