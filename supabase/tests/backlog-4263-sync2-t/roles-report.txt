@@ -386,8 +386,8 @@ input cb7e23f9811bfe9ccc9b35d868c8004a supabase/tests/backlog-4263-sync2-erase/c
 input 738326f2ce367ac964d0691cf69a59fb supabase/tests/backlog-4263-sync2-erase/concurrency/wait-b.sql
 input 2e6731d57db8e7940d45ed4ebd036eec supabase/tests/backlog-4263-sync2-erase/lib/helpers.sql
 input e24c8b837e55fac3fe5385b2a3a6519b supabase/tests/backlog-4263-sync2-erase/lib/probes.sql
-input a98d5d88159fd5fd86c73ebc7c091e7c supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql
-input 08d1a7f5cbd6a0033753311d9cd8324c supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql
+input 2998304d0addc762f0d4bf1dbce6d192 supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql
+input 9bef89c9afd00393f9bf8e4f45dedba1 supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql
 input 7de981822eec807bd6a9e81c5f07698b supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql
 input 128292e465b1ede41cb181686a666a6e supabase/tests/backlog-4263-sync2-n/harness-n-fixtures.sql
 input 1a25e691c6945fa873a556e1a687a13e supabase/tests/backlog-4263-sync2-n/harness-n-structure.sql
