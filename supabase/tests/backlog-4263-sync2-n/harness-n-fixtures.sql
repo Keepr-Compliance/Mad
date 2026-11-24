@@ -1594,6 +1594,6 @@ BEGIN
   PERFORM pg_temp.rec('tn_probe', to_jsonb(r));
   PERFORM pg_temp.rec('wal_bytes', to_jsonb(pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_insert_lsn(),
                                                                        ((SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'wal_start'))::pg_lsn)));
-  RAISE NOTICE 'T4263N_FIXTURES_OK %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);
+  RAISE EXCEPTION 'T4263N_FIXTURES_OK %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);
 END
 $fxend4263n$;
