@@ -27,7 +27,8 @@ def err(text):
 
 
 def rows(r):
-    return json.dumps(r)
+    """A successful call whose final SELECT answers these rows (encoded per transport shape by enc())."""
+    return ('OK', r)
 
 
 A0 = '2026-11-23T10:00:00.100000+00:00'   # A start
@@ -71,6 +72,9 @@ CASES = [  # (label, case, mutant, a.out, b.out, expected first word)
     ('attach gate timeout', 'attach', 'single_statement_fence', ATTACH_A, GATE_TIMEOUT, 'INCONCLUSIVE'),
     ('attach both ok, no overlap', 'attach', '', ATTACH_A, b(fenced=False, t_start=B0_LATE), 'INCONCLUSIVE'),
     ('attach fenced missing', 'attach', '', ATTACH_A, b(), 'INCONCLUSIVE'),
+    ('c6g_skip hold ended early (2 s, not 4): overlap from the real hold end', 'c6g_skip', '',
+     raised('P_A', {'t_start': A0, 't_hold': AH, 't_end': '2026-11-23T10:00:02.140000+00:00'}, 7),
+     b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
     ('c6g_skip pass', 'c6g_skip', '', SKIP_A, b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'PASS'),
     ('c6g_skip waited', 'c6g_skip', '', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'FAIL'),
     ('c6g_skip mutant caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'CAUGHT'),
@@ -112,7 +116,8 @@ PRECHECK = [  # (label, output, case, expected exit)
     ('attach with 900 orphans', rows([dict(PRE, orphans=900)]), 'attach', 1),
     ('c6g with 900 orphans', rows([dict(PRE, orphans=900)]), 'c6g_skip', 0),
     ('not one transaction (setting lost)', rows([dict(PRE, txn=None)]), 'attach', 1),
-    ('two rows returned', rows([{'probe_set': 'one'}, PRE]), 'attach', 1),
+    ('answer missing its tag', 'RAW:' + json.dumps([{'a': dict(PRE)}]), 'attach', 1),
+    ('a reply from another call (wrong tag)', rows([dict(PRE, tag='residue')]), 'attach', 1),
     ('isolation repeatable read', rows([dict(PRE, iso='repeatable read')]), 'attach', 1),
     ('per-table counts unreadable', rows([dict(PRE, fk=None)]), 'attach', 1),
     ('a row already references the id', rows([dict(PRE, fk=[dict(FKROWS[0], n=1)])]), 'attach', 1),
@@ -137,47 +142,75 @@ def run(args):
     return r.returncode, r.stdout.strip()
 
 
+def enc(x, tag, shape):
+    """Canned output in a transport's shape. hosted: the final SELECT's json column a, one row. dry: every statement's
+    output line, including command tags and earlier rows, the tagged answer last; stderr lines mixed in."""
+    if isinstance(x, str):
+        return x[4:] if x.startswith('RAW:') else x
+    r = x[1]
+    if tag == 'fkcount':
+        r = [{'tag': 'fkcount', 'fk': r}]
+    else:
+        r = [v if 'tag' in v else dict(v, tag=tag) for v in r]
+    if shape == 'hosted':
+        return json.dumps([{'a': r[-1]}])
+    lines = [{'line': 'SET'}, {'line': '1'}, {'line': 'INSERT 0 1'}] + [{'line': json.dumps(v, separators=(', ', ' : '))} for v in r]
+    return 'transport stderr line\n' + json.dumps(lines) + '\nkt-sql: HTTP 200\n'
+
+
 bad = 0
+n_out = 0
 with tempfile.TemporaryDirectory() as d:
     def put(name, txt):
         p = os.path.join(d, name)
         open(p, 'w').write(txt)
         return p
-    for label, case, mut, fa, fb, want in CASES:
-        rc, out = run([case, mut, put('a', fa), put('b', fb)])
-        good = out.split(':')[0] == want and (rc == 0) == (want in ('PASS', 'CAUGHT')) and 'fakerowvalue4263' not in out
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'{label}: {out[:110]} (rc {rc})')
-    for label, txt, case, want in PRECHECK:
-        rc, out = run(['precheck', put('p', txt), case])
-        good = rc == want and out.startswith('ok ') == (want == 0)
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'precheck/{label}: {out[:110]} (rc {rc})')
-    for label, txt, want in APPLIED:
-        rc, out = run(['applied', 'cloud_blob_erase_scrub_m4263', put('m', txt)])
-        good = rc == want and out.startswith('MUTATION APPLIED ') == (want == 0)
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'applied/{label}: {out[:110]} (rc {rc})')
-    for label, txt, want in FK:
-        rc, out = run(['fkcounts', 'x', put('f', txt)])
-        good = out.splitlines()[-1] == want and (rc == 0) == (want != 'unreadable')
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
+    for shape in ('hosted', 'dry'):
+        for label, case, mut, fa, fb, want in CASES:
+            rc, out = run([case, mut, put('a', enc(fa, 'attach_a', shape)), put('b', enc(fb, 'x', shape))])
+            good = out.split(':')[0] == want and (rc == 0) == (want in ('PASS', 'CAUGHT')) and 'fakerowvalue4263' not in out
+            bad += not good; n_out += 1
+            print(('ok   ' if good else 'BAD  ') + f'[{shape}] {label}: {out[:110]} (rc {rc})')
+        for label, txt, case, want in PRECHECK:
+            rc, out = run(['precheck', put('p', enc(txt, 'probe', shape)), case])
+            good = rc == want and out.startswith('ok ') == (want == 0)
+            bad += not good; n_out += 1
+            print(('ok   ' if good else 'BAD  ') + f'[{shape}] precheck/{label}: {out[:110]} (rc {rc})')
+        for label, txt, want in APPLIED:
+            rc, out = run(['applied', 'cloud_blob_erase_scrub_m4263', put('m', enc(txt, 'md5', shape))])
+            good = rc == want and out.startswith('MUTATION APPLIED ') == (want == 0)
+            bad += not good; n_out += 1
+            print(('ok   ' if good else 'BAD  ') + f'[{shape}] applied/{label}: {out[:110]} (rc {rc})')
+        for label, txt, want in FK:
+            rc, out = run(['fkcounts', 'x', put('f', enc(txt, 'fkcount', shape))])
+            good = out.splitlines()[-1] == want and (rc == 0) == (want != 'unreadable')
+            bad += not good; n_out += 1
+            print(('ok   ' if good else 'BAD  ') + f'[{shape}] fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
+        for label, txt, key, want in (('last tagged line wins', 'RAW:' + json.dumps([{'line': json.dumps({'tag': 'residue', 'n': 9})},
+                                       {'line': 'DO'}, {'line': json.dumps({'tag': 'residue', 'n': 0})}]), 'n', '0'),
+                                      ('residue', rows([{'n': 0, 'auth_users': 25}]), 'n', '0'), ('missing', rows([{'n': 0}]), 'x', None),
+                                      ('error', LOCK_TIMEOUT, 'n', None)):
+            r = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'verdict.py'), 'col', key], input=enc(txt, 'residue', shape),
+                               capture_output=True, text=True)
+            got = r.stdout.strip() if r.returncode == 0 else None
+            good = got == want
+            bad += not good; n_out += 1
+            print(('ok   ' if good else 'BAD  ') + f'[{shape}] col/{label}: {got!r}')
 SUMMARY = [  # (label, output, must contain, must not contain)
     ('error with a row value', err('ERROR:  23505: duplicate key value violates unique constraint "k"\nDETAIL:  Failing row contains (fakerowvalue4263).\n'),
      'SQLSTATE 23505 (message withheld)', 'fakerowvalue4263'),
     ('lock timeout', LOCK_TIMEOUT, 'SQLSTATE 55P03: canceling statement due to lock timeout', 'CONTEXT'),
     ('own marker', b(fenced=False), 'P_B {', 'fakerowvalue4263'),
-    ('rows', rows([{'x': 'fakerowvalue4263'}]), 'columns x', 'fakerowvalue4263'),
+    ('rows', rows([{'x': 'fakerowvalue4263'}]), 'keys x', 'fakerowvalue4263'),
 ]
 with tempfile.TemporaryDirectory() as d:
     for label, txt, want, never in SUMMARY:
         p = os.path.join(d, 's')
-        open(p, 'w').write(txt)
+        open(p, 'w').write(enc(txt, 'x', 'dry'))
         rc, out = run(['summary', p])
         good = want in out and never not in out
         bad += not good
         print(('ok   ' if good else 'BAD  ') + f'summary/{label}: {out[:110]}')
-n = len(CASES) + len(PRECHECK) + len(APPLIED) + len(FK) + len(SUMMARY)
+n = n_out + len(SUMMARY)
 print(f'{n} canned outputs, {bad} wrong')
 sys.exit(1 if bad or n == 0 else 0)

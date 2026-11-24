@@ -2,7 +2,7 @@
 # statements on objects another role owns, with the role in force (roles.py); files: every .sql under
 # supabase/tests/<folder> for the folders in roles.FOLDERS and the erase harness as composed; owners from the
 # migrations up to 20261123170000
-files 210
+files 217
 statements 242
 wrong_role 0
 migration_wrong_role 0
@@ -371,19 +371,23 @@ input 294e2a7f32ed8ebb4ea201a9ef44c174 supabase/tests/backlog-4263-prod/postchec
 input 74a5f4fbef93776f1d3e1923cbd980aa supabase/tests/backlog-4263-prod/postcheck-final-249.sql
 input 0018705570b43fbb83bd4f3006379436 supabase/tests/backlog-4263-prod/postcheck-final.sql
 input 05bca701afd40dc0f937661aeec0f417 supabase/tests/backlog-4263-sync2-erase/apply-20261123110000.sql
-input c53d43fcedb0739c2234764a0f33f134 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-a.sql
+input 06d1af7e4bb3c3ea3cf368fc10c1aa04 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-a.sql
 input 34a679c7c3ffa61ca38e1c20c140d9a7 supabase/tests/backlog-4263-sync2-erase/concurrency/attach-b.sql
 input da191b9c3f19b69bfcb89cf99d5aaee8 supabase/tests/backlog-4263-sync2-erase/concurrency/delete.sql
-input 89c09126ce98baed57a8acda014d6278 supabase/tests/backlog-4263-sync2-erase/concurrency/drop-copies.sql
-input b6e5d5433322cfdb383b4b59c1b1a9de supabase/tests/backlog-4263-sync2-erase/concurrency/fk-counts.sql
+input 9f6da0970ddc542b410d21b75039aa6a supabase/tests/backlog-4263-sync2-erase/concurrency/drop-copies.sql
+input cac9b93d0e07a4bcd58734506c4dd55c supabase/tests/backlog-4263-sync2-erase/concurrency/fk-counts.sql
 input aa41fde71553ad38eb3643411f86ae2e supabase/tests/backlog-4263-sync2-erase/concurrency/gate.sql
-input 4800524ac70c1f5870c5671418ce9826 supabase/tests/backlog-4263-sync2-erase/concurrency/md5.sql
-input 662d3cf146a41f9544b22439a9ccbd8f supabase/tests/backlog-4263-sync2-erase/concurrency/precheck.sql
-input f585cb69f22d5329b1893ff37eb0a7c8 supabase/tests/backlog-4263-sync2-erase/concurrency/residue.sql
-input 901386812909b03e5709cc7ecf1c4a36 supabase/tests/backlog-4263-sync2-erase/concurrency/setup.sql
-input d5ec7408430dc1ff617721ff75bd9b69 supabase/tests/backlog-4263-sync2-erase/concurrency/skip-a.sql
+input d9a0f55731ed227ec62ca827f33a4f04 supabase/tests/backlog-4263-sync2-erase/concurrency/guard.sql
+input e929799b4e333676777d942c44e06dab supabase/tests/backlog-4263-sync2-erase/concurrency/hold-marker.sql
+input 5a2407e4513143d837a6c358209dda12 supabase/tests/backlog-4263-sync2-erase/concurrency/md5.sql
+input 6571dd06e59af2e0a2a5149a47fa878a supabase/tests/backlog-4263-sync2-erase/concurrency/own.sql
+input 5849ad82b1e0661644e0d987b5965dc9 supabase/tests/backlog-4263-sync2-erase/concurrency/precheck.sql
+input 71d0f908bfbeb5136c7e8f2a3af28b70 supabase/tests/backlog-4263-sync2-erase/concurrency/residue.sql
+input 47050736bcce60ddd8ac90e4db1bf344 supabase/tests/backlog-4263-sync2-erase/concurrency/setup.sql
+input d101bbe81bbc4af55abc21c216b6cd90 supabase/tests/backlog-4263-sync2-erase/concurrency/skip-a.sql
 input 9c236b7e899d58f5de8127d2e15782d1 supabase/tests/backlog-4263-sync2-erase/concurrency/skip-b.sql
-input cb7e23f9811bfe9ccc9b35d868c8004a supabase/tests/backlog-4263-sync2-erase/concurrency/wait-a.sql
+input b0e5dde2f915ab93ab99c37327f9fb83 supabase/tests/backlog-4263-sync2-erase/concurrency/stats-reset.sql
+input 9e15c5e3d55997e1197859276eb39926 supabase/tests/backlog-4263-sync2-erase/concurrency/wait-a.sql
 input 738326f2ce367ac964d0691cf69a59fb supabase/tests/backlog-4263-sync2-erase/concurrency/wait-b.sql
 input 2e6731d57db8e7940d45ed4ebd036eec supabase/tests/backlog-4263-sync2-erase/lib/helpers.sql
 input e24c8b837e55fac3fe5385b2a3a6519b supabase/tests/backlog-4263-sync2-erase/lib/probes.sql
@@ -399,36 +403,39 @@ input 5b096e6b23e795a196a67b4c992c18e1 supabase/tests/backlog-4263-sync2-n/lib/h
 input cde4c23afa68efbea0023f264e89027a supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql
 input 92357a2a13f9585201df8ba4055ff6b9 supabase/tests/backlog-4263-sync2-s1/apply-20261123100000.sql
 input e5ae42d4878e4999c5659d5b4738d297 supabase/tests/backlog-4263-sync2-s1/concurrency/as-user.sql
-input 841848b867c015821c0200257f7bac06 supabase/tests/backlog-4263-sync2-s1/concurrency/assert.sql
-input 8b662ead9d7b146062c0f19a1e7bd9c5 supabase/tests/backlog-4263-sync2-s1/concurrency/auth-count.sql
+input 85a2f975e4bc7cbcc1fbf6b199f93cfd supabase/tests/backlog-4263-sync2-s1/concurrency/assert.sql
+input 5974a4feafbf58b67001e2a93fc0fd07 supabase/tests/backlog-4263-sync2-s1/concurrency/auth-count.sql
 input 0c2b231f51fe4e231c2230fed895a662 supabase/tests/backlog-4263-sync2-s1/concurrency/claim-ib-replace.sql
-input 06a215c87cd267b0a3b4fa3b7a527d16 supabase/tests/backlog-4263-sync2-s1/concurrency/drop-mutants.sql
-input d172571b6084b470b11e0fb9638059c4 supabase/tests/backlog-4263-sync2-s1/concurrency/end-hold.sql
-input 86d61dae582dceea5834a01d934e525b supabase/tests/backlog-4263-sync2-s1/concurrency/end.sql
-input 8ed3c5bac2daea1dc342b34f269a36f3 supabase/tests/backlog-4263-sync2-s1/concurrency/fk-counts.sql
+input 58d9989ab40edb235657df09e2e79f82 supabase/tests/backlog-4263-sync2-s1/concurrency/drop-mutants.sql
+input 7e2d5a32fc77bf5aa0f25c4cdd464dd1 supabase/tests/backlog-4263-sync2-s1/concurrency/end-hold.sql
+input 354d6ee39764e8fe26fed7ce04e1dba8 supabase/tests/backlog-4263-sync2-s1/concurrency/end.sql
+input a7c55cc8a5f138531433ca654658e22b supabase/tests/backlog-4263-sync2-s1/concurrency/fk-counts.sql
 input 63db2b9110d46c53e88edf47338fea94 supabase/tests/backlog-4263-sync2-s1/concurrency/gate.sql
 input 41591f28b104127178169e17d41a6bc6 supabase/tests/backlog-4263-sync2-s1/concurrency/guard.sql
 input 3f96dc41b9a930ffa12c3851721f528b supabase/tests/backlog-4263-sync2-s1/concurrency/hold-marker.sql
 input 535652523032856b57a92c02664cfc6c supabase/tests/backlog-4263-sync2-s1/concurrency/lock-timeout-b.sql
 input 1b4014196710935669c55674a608f354 supabase/tests/backlog-4263-sync2-s1/concurrency/lock-timeout.sql
-input 382dcdf86f2bc1442d189c05df5f6675 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-claim-nolock.sql
+input 67f99e5643b8e0383237bdebfe7864eb supabase/tests/backlog-4263-sync2-s1/concurrency/md5.sql
+input bb76ffdbad1c1d859c127030ea46ea16 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-claim-read-before-lock.sql
 input 9ac281b8772783014feda028246ee0ff supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-confirm-nolock.sql
 input 998490740b09587466fb992184e98d95 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-deal-gate-before-lock.sql
 input 3a916c80a3f790f6bb8cbbb27c3f421a supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-off-check-before-lock.sql
-input 5d699ffbe3227e6607b273fc4c05d6ce supabase/tests/backlog-4263-sync2-s1/concurrency/precheck.sql
-input 9ce19f388f83c1d0b543ebe4cf54b4e2 supabase/tests/backlog-4263-sync2-s1/concurrency/r1-write-hold.sql
-input 243a6005743963a98da24ee9c36db847 supabase/tests/backlog-4263-sync2-s1/concurrency/r2-confirm-hold.sql
-input f4265aad11f92c45f8efb9f19cd36872 supabase/tests/backlog-4263-sync2-s1/concurrency/r3-claim-ia-hold.sql
+input cf14f704c8c2dc7cbefb2f4498ecf019 supabase/tests/backlog-4263-sync2-s1/concurrency/own.sql
+input eab63793a01f7bc71c62c690430a4af0 supabase/tests/backlog-4263-sync2-s1/concurrency/precheck.sql
+input ea4f59512354a5c18d653b83163afd26 supabase/tests/backlog-4263-sync2-s1/concurrency/r1-write-hold.sql
+input 5c5f0adf1ae7804e65031e5887d408e3 supabase/tests/backlog-4263-sync2-s1/concurrency/r2-confirm-hold.sql
+input 08ac7fd42b68d1db2b6d2dc7cd40c926 supabase/tests/backlog-4263-sync2-s1/concurrency/r3-claim-ia-hold.sql
 input 00eeff4f90ba44e0279d04e1bee78ace supabase/tests/backlog-4263-sync2-s1/concurrency/r3-claim-ib.sql
-input af11228dd96341dfbb26f6ad637eb292 supabase/tests/backlog-4263-sync2-s1/concurrency/r4-claim-ib-hold.sql
+input d3b5d1ba6d328c1cbeea6e87e4fbd4b8 supabase/tests/backlog-4263-sync2-s1/concurrency/r4-claim-ib-hold.sql
 input 28911d1cce8bb30a9ef61d3619cacc45 supabase/tests/backlog-4263-sync2-s1/concurrency/r4-off-ia.sql
 input e1853d0e4b290bd1257d6ee9a77eef10 supabase/tests/backlog-4263-sync2-s1/concurrency/r5-claim-ib.sql
-input 388e37f3ba7efe9b1d55d2fab477ec49 supabase/tests/backlog-4263-sync2-s1/concurrency/r5-off-ia-hold.sql
-input 72059273b9cc0098556e981bf05373f4 supabase/tests/backlog-4263-sync2-s1/concurrency/r6-claim-ib-hold.sql
+input 88f769ad1c8b5bbcd8c8f839b917c548 supabase/tests/backlog-4263-sync2-s1/concurrency/r5-off-ia-hold.sql
+input e5d49d3465c24bc6caf6118e3f7800be supabase/tests/backlog-4263-sync2-s1/concurrency/r6-claim-ib-hold.sql
 input 9e7ed37ffbf7fe96dec461b0b97690f0 supabase/tests/backlog-4263-sync2-s1/concurrency/r6-write-ia.sql
-input f15286e92e9fdb3c1640eba167a52acd supabase/tests/backlog-4263-sync2-s1/concurrency/setup.sql
+input 54bcc279cb6f6e244ea287bc0f0a832c supabase/tests/backlog-4263-sync2-s1/concurrency/setup.sql
+input b0e5dde2f915ab93ab99c37327f9fb83 supabase/tests/backlog-4263-sync2-s1/concurrency/stats-reset.sql
 input 787e304c22979c4bb9d1c9951fb8cea9 supabase/tests/backlog-4263-sync2-s1/concurrency/teardown.sql
-input 253543c10bf224fbe26c8214cc5c2515 supabase/tests/backlog-4263-sync2-s1/concurrency/verify.sql
+input 2f9cc4b1089cc8fb20aef05829d9ad7a supabase/tests/backlog-4263-sync2-s1/concurrency/verify.sql
 input 8cb818a54ee81d343bcc11d64f9cb23a supabase/tests/backlog-4263-sync2-s1/harness-s1.sql
 input bab45bf2fc475a65002cf7d48d9ea076 supabase/tests/backlog-4263-sync2-s1/rollback-20261123100000.sql
 input a00d5f79e7b997d576b285226bf9aa38 supabase/tests/backlog-4263-sync2-s2/apply-20261123130000.sql

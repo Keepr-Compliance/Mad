@@ -1,6 +1,7 @@
 # BACKLOG-4263 sync plan P3 harness: file-byte erase job (E1 `20261123110000`, E3 `20261123120000`)
 
-Venue: the test project through `~/.claude/bin/kt-sql` (it refuses the production ref). **Nothing here has been run
+Venue: the test project through `~/.claude/bin/kt-sql` (it refuses the production ref); the two-session scripts take
+the transport as a parameter (below). **Nothing here has been run
 yet.** Runs are arranged by the main session one at a time, each under a before-note to the coordinator. Cap: 3 full
 runs per batch; `harness.py` resets `pg_stat_statements` after each call.
 
@@ -57,9 +58,47 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
   dropped first in the trap, which then checks that no `*_m4263` function is left. The pristine `c6g_wait` also uses
   a copy: the live scrub with a 4 s sleep after its settings lock, so it is an instrumented copy of the live code,
   not the live function itself.
-- **Gate marker:** the first line of session A's call is `/*p_hold:<run>*/`. `pg_stat_activity.query` keeps only
-  the first `track_activity_query_size` bytes of a call (1 kB on the test project, `../backlog-4236/concurrency/c3-marker.sql`);
-  the marker ends at byte 27, and `offline_check.py` fails when it ends past byte 900.
+- **Transport.** `SQL_TRANSPORT` names the executable that sends one call: it takes `<file.sql>` or `-c "<sql>"` and
+  prints kt-sql's envelope (one JSON line; on an error a `kt-sql: HTTP <code>` line). Default: `~/.claude/bin/kt-sql`
+  (the hosted test database). A self-hosted dry-run database is reached through a dry-run transport wrapper kept
+  outside the repository. A transport path that does not exist or is not executable is refused before any call.
+- **Guard marker.** `guard.sql` (first in every call) refuses any database without the hosted test database's marker
+  user. `GUARD_MARKER_MD5` (32 hex characters) replaces that one literal in every text sent. The override is refused
+  unless a non-default `SQL_TRANSPORT` is named. The script cannot know where a transport points: with an override,
+  the remaining protection is the transport's own fixed target and `guard.sql`'s refusal of any database holding more
+  than 100 tracker rows. Chosen over guarded copies because every repository file then stays byte-identical between
+  the dry run and the hosted run; only the environment differs. The dry-run marker's value is not in the repository.
+- **Answers.** Every call that does not end in RAISE answers with ONE final `SELECT json_build_object('tag', …) AS a`.
+  `verdict.py` reads the last tagged answer of the call, from either row shape: the final SELECT's column (a
+  transport that returns the last statement's rows) or every statement's output line (a transport that returns every
+  line, including command tags). No reader depends on which statements' rows come back. Raising sessions carry their
+  answer in the RAISE text, which both transports return the same way.
+- **Gate and the activity text.** The holding statement itself starts with `/*p_hold:<run>*/`, and the call starts
+  with it too (`hold-marker.sql`, before `guard.sql`). What `pg_stat_activity.query` shows while the hold runs:
+  - a transport that submits the whole call as one text (the hosted API): the call text, cut at
+    `track_activity_query_size` (1 kB on the hosted test database, `../backlog-4236/concurrency/c3-marker.sql`); the
+    marker ends at byte 27. Not measured on the hosted database by this change.
+  - a transport that submits statement by statement inside one transaction (the dry run): the current statement only,
+    which starts with the marker. Measured on the dry-run database during a run: `/*p_hold:<run>*/ SELECT pg_sleep(4);`
+    (S1 session 1, erase attach A), and `/*p_hold:<run>*/\n-- The holding statement …\nDO $a$ …` (erase c6g A).
+  Session 2's gate text holds the marker split (`'%p_hold:' || '<run>' || '*/%'`), so it never matches itself on
+  either transport. `offline_check.py` checks both views of every holder call.
+- **Calls that COMMIT** (everything else is read-only or ends in RAISE): the own-name copy (create, then drop),
+  setup (the 8 fixture rows), `attach`'s session A (one `cloud_deal_files` row of the fixture user), the delete (the
+  fixture user; its rows cascade), and the last call's `pg_stat_statements_reset()` (statistics only). Session B of
+  every case and session A of `c6g_skip` / `c6g_wait` are one DO each that ends in RAISE.
+- **Dry run** (self-hosted dry-run database, 2026-11-24): attach PASS, attach `single_statement_fence` CAUGHT,
+  c6g_skip PASS, c6g_skip `no_skip_locked` CAUGHT, c6g_wait PASS, c6g_wait `read_before_lock` CAUGHT; session B
+  started 2.89–3.00 s before A's hold ended in each; every residue check clean (`auth.users` 1 before, 1 after; no
+  copy, fixture user or marked run row left; the switch row unchanged).
+- **The first read-only call on the hosted test database must confirm** (the dry run could not show these): that
+  one call is one transaction there (the probe's `txn = one`) and which rows the Management API returns for a
+  multi-statement call; `track_activity_query_size`; that the whole call text is what `pg_stat_activity.query` shows;
+  real timings (gate, holds, the live claim's runtime over real rows); whether the API cancels a query when the client
+  disconnects (interrupt paths); that the session role holds EXECUTE on the four live S1 functions
+  (`cloud_claim_install`, `cloud_confirm_blob`, `set_my_cloud_autosave`, `cloud_upsert_deal`); and, by reading the
+  probe call's own `pg_stat_activity.query` back, whether the transport prefixes the call text, so the marker's byte
+  position on that transport is measured, not assumed. The probe prints the first three as `probe:`.
 - **Timing arithmetic:** launch offset 1 s, hold 4 s, so session B starts about 4 − 1 = 3 s before A's hold ends.
   The verdict needs at least 1.5 s of A's hold left when B starts (the expected 3 s is twice that) and B's start
   after A's hold began; both sessions report start and end from the database clock. "Waited" = B ended after A's

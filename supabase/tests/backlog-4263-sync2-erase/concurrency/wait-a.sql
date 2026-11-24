@@ -1,5 +1,7 @@
 /*p_hold:__RUN__*/
--- session A: the hold marker above is FIRST in the call (pg_stat_activity.query keeps the first 1 kB only).
+-- The holding statement (the DO below) starts with the marker: a transport that submits statement by statement
+-- shows only the current statement in pg_stat_activity.query. hold-marker.sql, first in the call, serves one that
+-- submits the whole call as one text (the activity view keeps its first 1 kB).
 -- c6g_wait A: the own-name scrub copy with a 4 s sleep right after its settings lock (or, mutant, before it), RAISE.
 DO $a$ DECLARE t0 timestamptz; run uuid; r jsonb; BEGIN
   PERFORM set_config('lock_timeout', '3s', true);

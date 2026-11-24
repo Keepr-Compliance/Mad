@@ -8,31 +8,71 @@ usage: verdict.py <case> <pristine|mutant> <first.out> <second.out> <state.out> 
 Prints one line and exits 0 only for the expected outcome:
   pristine run: PASS (the case's passing shape) or ERROR: <why> / INCONCLUSIVE: <why>
   mutant run:   RED  (the case's own red shape)  or ERROR: <why> / INCONCLUSIVE: <why>
-A kt-sql output is the HTTP body (a JSON array of rows on success, a JSON object with "message" on an error) followed,
-on an error, by a line 'kt-sql: HTTP <code>' (stderr is captured with stdout). Anything that is not a row with the
-expected columns is ERROR, never a pass and never a red. Session 1 answers r, t_start, t_hold (after its call, before
+       verdict.py col <key> < out             -> one value of the call's tagged answer (run.sh's reader)
+A transport output is one JSON line (an array of rows on success, an object with "message" on an error) and, on an
+error, a line 'kt-sql: HTTP <code>'; stderr may be captured with stdout. Every call answers with one tagged json (a
+final SELECT ... AS a, or a RAISE for raising sessions); tagged() reads it from both row shapes (the final SELECT's
+column, or every statement's output line). Anything that is not the expected tagged answer is ERROR, never a pass and
+never a red. Session 1 answers r, t_start, t_hold (after its call, before
 its hold) and t_end (after its hold, before its locks are released); session 2 answers r, t_start (after the gate) and
 t_end. A missing or unreadable time, or session 2 not starting inside session 1's hold with at least OVERLAP_S seconds
 of it left, is INCONCLUSIVE: no PASS and no RED without measured overlap. Waited = session 2 ended after t_end.
 """
 import json
+import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 
-def rows(path):
-    t = open(path, encoding='utf-8').read()
-    body = t.split('\nkt-sql:')[0].strip()
-    try:
-        v = json.loads(body)
-    except Exception:
-        return None, 'not JSON: ' + body[:200]
+def envelope(path):
+    """The transport's JSON line: the first line of the output that parses as a JSON array or object (stderr may be
+    captured with stdout, in any order, so other lines are skipped). None when there is none."""
+    for line in open(path, encoding='utf-8').read().replace('\r\n', '\n').split('\n'):
+        line = line.strip()
+        if line[:1] in ('[', '{'):
+            try:
+                v = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(v, (list, dict)):
+                return v
+    return None
+
+
+def tagged(rows_):
+    """The last tagged answer {"tag": ...} among a call's rows. Two row shapes, one answer: a transport that returns
+    the final SELECT's json column as {"a": {...}} (or {"a": "<json text>"}), and one that returns every output line of
+    every statement as {"line": "<text>"}."""
+    for r in reversed(rows_):
+        if not isinstance(r, dict):
+            continue
+        for key in ('a', 'line'):
+            v = r.get(key)
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except ValueError:
+                    v = None
+            if isinstance(v, dict) and 'tag' in v:
+                return v
+    return None
+
+
+def answer(path, tag=None):
+    """(answer dict, None) or (None, why)."""
+    v = envelope(path)
+    if v is None:
+        return None, 'not JSON: ' + open(path, encoding='utf-8').read()[:200]
     if isinstance(v, dict):
         return None, 'error: ' + str(v.get('message', v))[:300]
-    if not isinstance(v, list) or not v:
-        return None, 'no result row'
-    return v, None
+    a = tagged(v) if v else None
+    if a is None:
+        return None, 'no tagged answer row'
+    if tag and a.get('tag') != tag:
+        return None, f"answer tagged {a.get('tag')!r}, expected {tag!r}"
+    return a, None
 
 
 def ts(x):
@@ -54,13 +94,13 @@ OVERLAP_S = 1.5  # session 2 must start at least this long before session 1's ho
 
 def main(argv):
     case, mode, f1, f2, fs, ia, ib = argv
-    a, e1 = rows(f1)
-    b, e2 = rows(f2)
-    s, e3 = rows(fs)
+    a, e1 = answer(f1, 'session')
+    b, e2 = answer(f2, 'session')
+    s, e3 = answer(fs, 'state')
     for name, e in (('session 1', e1), ('session 2', e2), ('state', e3)):
         if e:
             return f'ERROR: {name} {e}'
-    a, b, st = a[-1], b[-1], s[-1].get('j')
+    st = s.get('j')
     if not isinstance(a.get('r'), dict) or not isinstance(b.get('r'), dict) or not isinstance(st, dict):
         return 'ERROR: a result row lacks its r / j column'
     ra, rb = a['r'], b['r']
@@ -126,13 +166,10 @@ def fk_lines(label, fk):
     return lines + [f'total={total} setnull={kept}']
 
 
-def probe(rows_, need):
-    """(ok, line) for the first call. ok only when it proves one call = one transaction and the shape (exactly one row,
-    the last statement's), read committed, readable per-table counts that are all 0, and nothing left behind."""
-    if not isinstance(rows_, list) or len(rows_) != 1 or not isinstance(rows_[0], dict):
-        n = len(rows_) if isinstance(rows_, list) else 0
-        return False, f'the probe answered {n} rows, not exactly 1: one call = one transaction (last statement only) not proven'
-    r = rows_[0]
+def probe(r, need):
+    """(ok, line) for the first call's tagged answer. ok only when it proves one call = one transaction (a local setting
+    set by an earlier statement is still visible), read committed, readable per-table counts that are all 0, and nothing
+    left behind."""
     if r.get('txn') != 'one':
         return False, f"one call = one transaction NOT proven (txn {r.get('txn')!r}); nothing was created"
     if r.get('iso') != 'read committed':
@@ -157,7 +194,7 @@ def probe(rows_, need):
 
 
 def precheck(path, need_on):
-    r, e = rows(path)
+    r, e = answer(path, 'probe')
     if e:
         return False, f'precheck {e}'
     return probe(r, lambda x: [('the case needs one_computer on and it is off (the coordinator flips it; never flipped here)',
@@ -165,24 +202,61 @@ def precheck(path, need_on):
 
 
 def fkcounts(label, path):
-    r, e = rows(path)
-    fk = None if e else fk_rows(r)
+    r, e = answer(path, 'fkcount')
+    fk = None if e else fk_rows(r.get('fk'))
     if fk is None:
         return [f'  {label}: per-table counts unreadable', 'unreadable'], False
     return fk_lines(label, fk), True
 
 
 def applied(name, path):
-    r, e = rows(path)
+    r, e = answer(path, 'md5')
     if e:
         return f'ERROR: mutant {name} not proven applied: {e}'
-    m = r[-1].get('m')
+    m = r.get('m')
     if not (isinstance(m, str) and re.fullmatch(r'[0-9a-f]{32}', m)):
         return f'ERROR: mutant {name} not proven applied: no body (md5 {m!r})'
     return f'MUTATION APPLIED {name} md5 {m}'
 
 
+def col(key, text):
+    """One value of a call's tagged answer, for run.sh; exit 1 when there is none."""
+    with tempfile.NamedTemporaryFile('w', delete=False) as fh:
+        fh.write(text)
+    try:
+        a, e = answer(fh.name)
+    finally:
+        os.unlink(fh.name)
+    if e or key not in a:
+        return False, None
+    return True, a[key]
+
+
+def timing(f1, f2):
+    """One line of the measured times (database clock), for the record; never part of the verdict."""
+    a, _ = answer(f1, 'session')
+    b, _ = answer(f2, 'session')
+    if not a or not b:
+        return 'timing: unreadable'
+    t = {k: ts(v) for k, v in (('a0', a.get('t_start')), ('ah', a.get('t_hold')), ('ae', a.get('t_end')), ('b0', b.get('t_start')),
+                                ('be', b.get('t_end')))}
+    if None in t.values():
+        return 'timing: unreadable'
+    s = lambda x, y: f"{(t[y] - t[x]).total_seconds():.3f}"
+    return (f"timing: session 1 {s('a0', 'ae')} s (hold {s('ah', 'ae')} s); session 2 {s('b0', 'be')} s; "
+            f"overlap: session 2 started {s('b0', 'ae')} s before the hold ended; session 2 ended {s('ae', 'be')} s after it")
+
+
 if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == 'col':
+        found, v = col(sys.argv[2], sys.stdin.read())
+        if not found:
+            sys.exit(1)
+        print(v)
+        sys.exit(0)
+    if len(sys.argv) == 4 and sys.argv[1] == 'timing':
+        print(timing(sys.argv[2], sys.argv[3]))
+        sys.exit(0)
     if len(sys.argv) == 4 and sys.argv[1] == 'applied':
         out = applied(sys.argv[2], sys.argv[3]).replace('\n', ' ')
         print(out)

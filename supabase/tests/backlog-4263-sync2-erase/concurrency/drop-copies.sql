@@ -2,4 +2,5 @@
 SET LOCAL lock_timeout = '3s';
 DROP FUNCTION IF EXISTS public.cloud_blob_erase_claim_m4263(boolean, integer, integer);
 DROP FUNCTION IF EXISTS public.cloud_blob_erase_scrub_m4263(uuid, uuid, boolean, integer);
-SELECT count(*) AS left FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE '%\_m4263';
+SELECT json_build_object('tag', 'left', 'left', (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+                                                  AND p.proname LIKE '%\_m4263')) AS a;

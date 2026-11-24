@@ -18,4 +18,5 @@ DROP FUNCTION IF EXISTS public.cloud_claim_install_m4263(uuid, uuid, boolean);
 DROP FUNCTION IF EXISTS public.cloud_confirm_blob_m4263(uuid, uuid, uuid);
 DROP FUNCTION IF EXISTS public.set_my_cloud_autosave_m4263(uuid, boolean, integer, uuid);
 DROP FUNCTION IF EXISTS public.cloud_upsert_deal_m4263(uuid, jsonb);
-SELECT count(*) AS left FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE '%\_m4263';
+SELECT json_build_object('tag', 'left', 'left', (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+                                                  AND p.proname LIKE '%\_m4263')) AS a;
