@@ -332,3 +332,130 @@ export async function disconnectAllMine(): Promise<DisconnectResult> {
   const code = refusal(v, DISCONNECT_ERRORS);
   return code ? { kind: 'refused', error: code } : transport(null);
 }
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4263 P11: mcp_list_my_connection_access() (migration 20261123150000)
+//   -> {ok:true, connections:[{id, messages}]} | {ok:false, error:'not_signed_in'|'impersonating'}
+// Before that migration the function does not exist: every non-ok answer is 'unknown' and the page shows the labels it
+// showed before (no message wording, no hint).
+// ---------------------------------------------------------------------------
+
+type AccessResult = { kind: 'ok'; messages: ReadonlyMap<string, boolean> } | { kind: 'unknown'; reason: 'missing' | 'refused' | 'transport' };
+
+/** PostgREST's code for a function it cannot find (the migration is not applied). */
+const FUNCTION_NOT_FOUND = 'PGRST202';
+
+export function checkConnectionAccess(v: unknown): AccessResult {
+  if (!isObject(v)) return { kind: 'unknown', reason: 'transport' };
+  if (v.ok === true && hasExactKeys(v, ['ok', 'connections']) && Array.isArray(v.connections)) {
+    const out = new Map<string, boolean>();
+    for (const row of v.connections) {
+      if (!isObject(row) || !hasExactKeys(row, ['id', 'messages']) || !isConnectionId(row.id) || typeof row.messages !== 'boolean') {
+        return { kind: 'unknown', reason: 'transport' };
+      }
+      out.set(row.id, row.messages);
+    }
+    return { kind: 'ok', messages: out };
+  }
+  return refusal(v, ['not_signed_in', 'impersonating'] as const) ? { kind: 'unknown', reason: 'refused' } : { kind: 'unknown', reason: 'transport' };
+}
+
+export async function listMyConnectionAccess(): Promise<AccessResult> {
+  const res = await call('mcp_list_my_connection_access');
+  if ('kind' in res) return { kind: 'unknown', reason: res.code === FUNCTION_NOT_FOUND ? 'missing' : 'transport' };
+  return checkConnectionAccess(res.data);
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4263 P11: mcp_list_my_message_reads(p_cursor text, p_limit integer) (migration 20261123140000:607-675)
+//   -> {ok:true, reads:[{read_id, read_at, app_name, provider, tool, channel, sent_at, part, deal_id, deal_state,
+//       address, message_state, from, subject}], next_cursor} | {ok:false, error:'not_signed_in'|'impersonating'|'invalid_input'}
+// ---------------------------------------------------------------------------
+
+const READ_KEYS = ['read_id', 'read_at', 'app_name', 'provider', 'tool', 'channel', 'sent_at', 'part', 'deal_id', 'deal_state',
+  'address', 'message_state', 'from', 'subject'];
+const READS_PAGE = 50;
+const CURSOR_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export interface MessageRead {
+  readId: string;
+  readAt: string;
+  provider: Provider;
+  tool: 'list_deal_messages' | 'get_message';
+  channel: 'email' | 'text';
+  sentAt: string | null;
+  part: number | null;
+  dealState: 'live' | 'removed' | 'gone';
+  address: string | null;
+  messageState: 'live' | 'removed';
+  from: string | null;
+  subject: string | null;
+}
+
+type ReadsResult =
+  | { kind: 'ok'; reads: MessageRead[]; nextCursor: string | null }
+  | Refused<'not_signed_in' | 'impersonating' | 'invalid_input'>
+  | Transport;
+
+const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+
+function checkRead(v: unknown): MessageRead | null {
+  if (!isObject(v) || !hasExactKeys(v, READ_KEYS)) return null;
+  if (
+    !isConnectionId(v.read_id) ||
+    !isTimestamp(v.read_at) ||
+    typeof v.app_name !== 'string' ||
+    !isProvider(v.provider) ||
+    (v.tool !== 'list_deal_messages' && v.tool !== 'get_message') ||
+    (v.channel !== 'email' && v.channel !== 'text') ||
+    !(v.sent_at === null || isTimestamp(v.sent_at)) ||
+    !(v.part === null || (typeof v.part === 'number' && Number.isInteger(v.part) && v.part >= 1)) ||
+    !isConnectionId(v.deal_id) ||
+    (v.deal_state !== 'live' && v.deal_state !== 'removed' && v.deal_state !== 'gone') ||
+    !strOrNull(v.address) ||
+    (v.message_state !== 'live' && v.message_state !== 'removed') ||
+    !strOrNull(v.from) ||
+    !strOrNull(v.subject)
+  ) {
+    return null;
+  }
+  return {
+    readId: v.read_id,
+    readAt: v.read_at,
+    provider: v.provider,
+    tool: v.tool,
+    channel: v.channel,
+    sentAt: v.sent_at as string | null,
+    part: v.part as number | null,
+    dealState: v.deal_state,
+    address: v.address as string | null,
+    messageState: v.message_state,
+    from: v.from as string | null,
+    subject: v.subject as string | null,
+  };
+}
+
+export function checkReads(v: unknown): ReadsResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true) {
+    if (!hasExactKeys(v, ['ok', 'reads', 'next_cursor']) || !Array.isArray(v.reads)) return transport(null);
+    if (!(v.next_cursor === null || (typeof v.next_cursor === 'string' && CURSOR_RE.test(v.next_cursor)))) return transport(null);
+    const out: MessageRead[] = [];
+    for (const row of v.reads) {
+      const r = checkRead(row);
+      if (r === null) return transport(null);
+      out.push(r);
+    }
+    return { kind: 'ok', reads: out, nextCursor: v.next_cursor as string | null };
+  }
+  const code = refusal(v, ['not_signed_in', 'impersonating', 'invalid_input'] as const);
+  return code ? { kind: 'refused', error: code } : transport(null);
+}
+
+/** One page of the person's read log, newest first. A cursor that is not the database's own format is not sent. */
+export async function listMyMessageReads(cursor: string | null): Promise<ReadsResult> {
+  const c = cursor !== null && CURSOR_RE.test(cursor) ? cursor : null;
+  const res = await call('mcp_list_my_message_reads', { p_cursor: c, p_limit: READS_PAGE });
+  if ('kind' in res) return res;
+  return checkReads(res.data);
+}

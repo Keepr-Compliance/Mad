@@ -20,6 +20,8 @@ export interface AiAppRow {
   lastUsed: string;
   /** BACKLOG-4263 PR-6: what the connection may do; null when the database does not say. */
   allowed: string | null;
+  /** BACKLOG-4263 P11: shown when the connection may not read emails and texts; null when it may, or when unknown. */
+  hint: string | null;
 }
 
 export function AiAppsList({ rows }: { rows: AiAppRow[] }) {
@@ -61,6 +63,11 @@ export function AiAppsList({ rows }: { rows: AiAppRow[] }) {
               {row.allowed !== null && (
                 <p className="text-gray-600" data-testid="ai-app-allowed">
                   {row.allowed}
+                </p>
+              )}
+              {row.hint !== null && (
+                <p className="text-gray-600" data-testid="ai-app-hint">
+                  {row.hint}
                 </p>
               )}
             </div>

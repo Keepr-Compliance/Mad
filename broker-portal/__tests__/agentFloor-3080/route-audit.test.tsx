@@ -559,7 +559,7 @@ const REPORTS_ADMITTED = {
  */
 const MCP_GATED_PAGES: Record<string, PageEntry> = {
   'app/dashboard/account/ai-apps/page.tsx': {
-    invoke: async () => (await import('@/app/dashboard/account/ai-apps/page')).default(),
+    invoke: async () => (await import('@/app/dashboard/account/ai-apps/page')).default({ searchParams: Promise.resolve({}) }),
     refused: { notFound: true },
   },
   'app/dashboard/account/ai-apps/connect/[requestId]/page.tsx': {
