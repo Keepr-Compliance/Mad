@@ -36,6 +36,8 @@ snapshot and missed the call's own rows; both are VOLATILE since.
     WHERE attrelid = 'public.cloud_deal_messages'::regclass AND attname = 'thread_key';
    SELECT count(*) FROM pg_stat_activity WHERE state <> 'idle' AND backend_type = 'client backend';
    ```
+   The read log must be empty (the probe's first count): with read-log rows present the embedded rollback step
+   legitimately refuses (`ROLLBACK 20261123140000: public.mcp_message_reads holds rows`), so the call cannot read OK.
    Stop and ask if `can_set` is false, if `reader_owners` is not `{mcp_reader}`, or if either count is not 0. The
    harness changes the two reader functions only under `SET LOCAL ROLE mcp_reader` (`pg_temp.as_reader`); `roles.py`
    checks that statically for every file listed in its report (`roles-report.txt`).

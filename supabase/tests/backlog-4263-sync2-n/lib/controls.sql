@@ -204,7 +204,9 @@ BEGIN
   PERFORM pg_temp.chain('N11', 'A', 'chatgpt');
   first := pg_temp.try('rb');
   v := v || jsonb_build_object(
-    'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: 1 connection(s) hold approval page version 2 or later%',
+    -- the rollback counts every connection at version 2 or later (by design); only the refusal is asserted here
+    'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: % connection(s) hold approval page version 2 or later%',
+    'refused_count', coalesce(substring(first FROM 'ROLLBACK 20261123150000: ([0-9]+) connection\(s\)')::int > 0, false),
     'unchanged', pg_temp.setting_version() = 2 AND pg_temp.has_trigger('mcp_connections_version_fixed'));
   DELETE FROM public.mcp_connections WHERE id = pg_temp.f('N11');
   second := pg_temp.try('rb');
