@@ -38,7 +38,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 import * as PageModule from '@/app/dashboard/account/ai-apps/connect/[requestId]/page';
-import { CONSENT, M_C } from '@/lib/mcp/account/messages';
+import { CONSENT, CONSENT_V2, M_C, NOTICE_TEXT } from '@/lib/mcp/account/messages';
 import { bindingDigest } from '@/lib/mcp/oauth/crypto';
 import { BIND_COOKIE, BINDING, EMAIL, NONCE, REQUEST_ID, clearMcpEnv, refused, setMcpEnv, viewOk } from './fixtures';
 import { captureConsole } from '../oauth/fixtures';
@@ -267,8 +267,8 @@ describe('view refusals and malformed answers', () => {
     await expect(Page({ params: Promise.resolve({ requestId: REQUEST_ID }) })).rejects.toMatchObject({ to: '/login' });
   });
 
-  it('notice_version 2 → update message, no buttons', async () => {
-    mockRpc.mockResolvedValue({ data: viewOk({ notice_version: 2 }), error: null });
+  it.each([0, 3, 99])('notice_version %p (no text for that version) → update message, no buttons', async (n) => {
+    mockRpc.mockResolvedValue({ data: viewOk({ notice_version: n }), error: null });
     await renderPage();
     expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
     expect(screen.getByRole('alert')).toHaveTextContent(M_C.noticeVersion);
@@ -477,5 +477,71 @@ describe('BACKLOG-4263 PR-10.5: the request age line', () => {
     await renderPage();
     expect(screen.getByRole('alert')).toHaveTextContent(M_C.failed);
     expect(buttons()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------- BACKLOG-4263 P11
+// The view answer at version 2 is transcribed from the T-N harness sample (fixtures/ai-approval-notice-2-4263.json).
+describe('BACKLOG-4263 P11: approval page version 2', () => {
+  const FX = require('../fixtures/ai-approval-notice-2-4263.json') as { view_v2: Record<string, unknown> };
+  const v2 = (over: Record<string, unknown> = {}) => ({ ...FX.view_v2, nonce: NONCE, request_id: REQUEST_ID, ...over });
+  const V1_READ_SCOPE = 'It cannot read your emails, texts, files or contact list.';
+  const V1_WRITE_SCOPE = 'It cannot read, send or delete your emails or texts, cannot read your files or contact list, and cannot change anything else.';
+
+  it('the transcribed view answer at version 2 is accepted and shows the version-2 sentences, with the buttons', async () => {
+    mockRpc.mockResolvedValue({ data: v2(), error: null });
+    const { container } = await renderPage();
+    const text = container.textContent ?? '';
+    expect(text).toContain(
+      'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists (including private ones) and todos. ' +
+        'It can also read the people on each deal, with their names, companies, email addresses, phone numbers and notes. ' +
+        'It can also read the emails and texts attached to each deal, including emails Keepr matched by a contact only (marked Needs review) ' +
+        'and texts you hid from exports. Each one is marked so the app can tell you. ' +
+        'It sees the names, types and sizes of attached files, but cannot open them. ' +
+        'It cannot read your other emails or texts, or your contact list. ' +
+        'It cannot change, send or delete anything.',
+    );
+    expect(text).toContain(
+      "What it reads, including other people's contact details, emails and texts, is sent to ChatGPT (OpenAI). " +
+        'What ChatGPT (OpenAI) does with it is covered by your agreement with ChatGPT (OpenAI).',
+    );
+    expect(screen.getByTestId('consent-read-log')).toHaveTextContent(
+      'Keepr keeps a list of every email and text the app reads. You can see it in My Account > AI apps.',
+    );
+    expect(text).not.toContain(V1_READ_SCOPE);
+    expect(screen.getByRole('button', { name: CONSENT.allow })).toBeInTheDocument();
+  });
+
+  it('version 2 with a write grant shows the version-2 write wording, not version 1\'s', async () => {
+    mockRpc.mockResolvedValue({ data: v2({ scope: 'mcp:todos' }), error: null });
+    const { container } = await renderPage();
+    const text = container.textContent ?? '';
+    expect(text).toContain(CONSENT_V2.write.scope);
+    expect(text).toContain(
+      'It can also read the emails and texts attached to each deal, including ones marked Needs review or hidden from exports, ' +
+        "and see attached files' names, types and sizes. ",
+    );
+    expect(text).toContain('It cannot open files, send or delete emails or texts, read your contact list, or change anything else.');
+    expect(text).not.toContain(V1_WRITE_SCOPE);
+    expect(screen.getByTestId('consent-read-log')).toBeInTheDocument();
+  });
+
+  it('version 1 shows no read-log line and none of the version-2 sentences', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk(), error: null });
+    const { container } = await renderPage();
+    expect(screen.queryByTestId('consent-read-log')).toBeNull();
+    expect(container.textContent).toContain(V1_READ_SCOPE);
+    expect(container.textContent).not.toContain('emails and texts attached to each deal');
+  });
+
+  it('the version map holds exactly versions 1 and 2; version 1 is the text approved before (CONSENT, unchanged)', () => {
+    expect(Object.keys(NOTICE_TEXT)).toEqual(['1', '2']);
+    expect(NOTICE_TEXT[1]).toBe(CONSENT);
+    expect(NOTICE_TEXT[2]).toBe(CONSENT_V2);
+    for (const k of ['lead', 'nameLabel', 'nameHost', 'replaces', 'onlyIf', 'disconnect', 'whatDisconnects', 'signedInAs', 'startedAgo'] as const) {
+      expect(CONSENT_V2[k]).toBe(CONSENT[k]);
+    }
+    expect(CONSENT_V2.write.lead).toBe(CONSENT.write.lead);
+    expect(CONSENT_V2.write.changes).toBe(CONSENT.write.changes);
   });
 });

@@ -217,7 +217,9 @@ def pre_lane_function(name):
     return [f for f in PRE_LANE if pat.search(open(os.path.join(MIGDIR, f), encoding='utf-8').read())]
 
 
-state = {'fn': {}, 'dropped': set(), 'tables': {}, 'cols': {}, 'cons': {}, 'conexpr': {}, 'idx': {}, 'cron': {}, 'ledger': set()}
+state = {'fn': {}, 'dropped': set(), 'tables': {}, 'cols': {}, 'cons': {}, 'conexpr': {}, 'idx': {}, 'cron': {}, 'ledger': set(), 'trg': {}}
+# data values a migration sets and its post-check pins (one row of a settings table; no personal data): version -> [(name, value)]
+DATA_SET = {'20261123150000': [('mcp_settings.notice_version', '2')]}
 per = {}          # version -> what the migration touched
 default_dep = {}  # assertion id -> why it rests on a default or on state from before the lane
 stmt_kinds = {}
@@ -230,7 +232,7 @@ def touch(v, kind, key):
 for f in MIGS:
     v = f[:14]
     per[v] = {'file': f'supabase/migrations/{f}', 'file_md5': md5(rd(f'supabase/migrations/{f}')),
-              'fn': [], 'dropped': [], 'tables': [], 'cols': [], 'cons': [], 'idx': [], 'cron': [], 'pretables': []}
+              'fn': [], 'dropped': [], 'tables': [], 'cols': [], 'cons': [], 'idx': [], 'cron': [], 'pretables': [], 'trg': [], 'data': []}
     text = rd(f'supabase/migrations/{f}')
     role = 'postgres'
     stmts = split(text)
@@ -390,6 +392,23 @@ for f in MIGS:
                     touch(v, 'cols', f'{t}.{name}')
                 continue
             raise AssertionError(('unknown ALTER TABLE', s[:120]))
+        m = re.match(r'CREATE (?:OR REPLACE )?TRIGGER (\w+) (BEFORE|AFTER) (\w+) ON public\.(\w+) FOR EACH (ROW|STATEMENT)(?: WHEN \((.*)\))? EXECUTE FUNCTION public\.(\w+)\(\)$', s, re.I)
+        if m:
+            name, when, ev, t, level, cond, fn = m.groups()
+            state['trg'][name] = f'{t} {when.lower()} {ev.lower()} {level.lower()} {fn}() enabled'
+            touch(v, 'trg', name)
+            if t not in state['tables']:
+                touch(v, 'pretables', t)
+            continue
+        m = re.match(r'DROP TRIGGER (?:IF EXISTS )?(\w+) ON public\.(\w+)$', s, re.I)
+        if m:
+            state['trg'].pop(m.group(1), None)
+            touch(v, 'trg', m.group(1))
+            continue
+        if re.match(r'LOCK TABLE public\.\w+ IN \w+ MODE$', s, re.I):
+            stmt_kinds.setdefault('LOCK', 0)
+            stmt_kinds['LOCK'] += 1
+            continue
         if head.startswith('DO $'):
             body = raw[spans[0][0]:spans[0][1]]
             assert not re.search(r'CREATE (OR REPLACE )?FUNCTION|CREATE TABLE|CREATE POLICY|GRANT |REVOKE ', body, re.I), (v, s[:60])
@@ -404,10 +423,13 @@ for f in MIGS:
         stmt_kinds.setdefault(head.split(' ')[0], 0)
         stmt_kinds[head.split(' ')[0]] += 1
     assert seen_create == n_create, (v, seen_create, n_create)
+    for _name, _val in DATA_SET.get(v, []):
+        state.setdefault('data', {})[_name] = _val
+        touch(v, 'data', _name)
     state['ledger'].add(v)
     per[v]['state'] = json.loads(json.dumps(state, default=lambda o: C(o) if isinstance(o, set) else o))
 
-assert set(stmt_kinds) <= {'DO', 'SET', 'INSERT', 'SELECT', 'COMMENT'}, stmt_kinds
+assert set(stmt_kinds) <= {'DO', 'SET', 'INSERT', 'SELECT', 'COMMENT', 'LOCK'}, stmt_kinds
 for t, x in state['tables'].items():
     assert not x['privs'], ('a created table keeps default grants; the check would rest on default privileges', t, x['privs'])
 
@@ -577,7 +599,7 @@ def facts(st, keys):
         if x['kind'] == 'r':
             out[f'relation {t} rls'] = ('relation rls', str(x['rls']).lower())
             out[f'relation {t} force_rls'] = ('relation force_rls', 'false')
-            out[f'relation {t} triggers'] = ('relation triggers', '')
+            out[f'relation {t} triggers'] = ('relation triggers', ','.join(C(n for n, d in st['trg'].items() if d.split(' ')[0] == t)))
             out[f'relation {t} policies'] = ('relation policies', x['policies'])
             out[f'relation {t} columns'] = ('relation columns', x['columns'])
         else:
@@ -605,6 +627,10 @@ def facts(st, keys):
         out[f'cron job {k}'] = ('cron job', f"{x['schedule']} | {x['command']} | {x['username']} | active | this database")
     for v in keys['ledger']:
         out[f'ledger row {v}'] = ('ledger row', 'true')
+    for name in keys.get('trg', []):
+        out[f'trigger {name}'] = ('trigger', st['trg'].get(name, '(absent)'))
+    for name in keys.get('data', []):
+        out[f'data {name}'] = ('data value', st['data'][name])
     out[ANON_ID] = ('anon-callable list', ', '.join(anon_list(st)))
     out[AUTH_ID] = ('authenticated-callable list', ', '.join(auth_list(st)))
     out[SWEEP_ID] = ('internal-prefix sweep', ', '.join(sweep_list(st)))
@@ -616,7 +642,8 @@ def facts(st, keys):
 def keys_of(v):
     p = per[v]
     return {'fn': p['fn'], 'dropped': [d for d in p['dropped'] if d not in p['fn']], 'tables': p['tables'], 'cols': p['cols'],
-            'cons': p['cons'], 'idx': p['idx'], 'cron': p['cron'], 'ledger': [v], 'pretables': p['pretables']}
+            'cons': p['cons'], 'idx': p['idx'], 'cron': p['cron'], 'ledger': [v], 'pretables': p['pretables'], 'trg': p['trg'],
+            'data': p['data']}
 
 
 FINAL = per[LAST]['state']
@@ -624,7 +651,7 @@ PRE_GRANTS = {t: pre_lane_table_grants(t) for v in VERSIONS for t in per[v]['pre
 
 
 def final_keys(versions, st):
-    keys = {k: [] for k in ('fn', 'dropped', 'tables', 'cols', 'cons', 'idx', 'cron', 'ledger', 'pretables')}
+    keys = {k: [] for k in ('fn', 'dropped', 'tables', 'cols', 'cons', 'idx', 'cron', 'ledger', 'pretables', 'trg', 'data')}
     for v in versions:
         for k, xs in keys_of(v).items():
             for x in xs:
@@ -760,10 +787,13 @@ def render(k):
     pred_rows = [row(i, want[f'index {i} predicate']) for i in keys['idx'] if f'index {i} predicate' in want]
     cron_rows = [row(j, want['cron job ' + j]) for j in keys['cron']]
     led_rows = [row(v) for v in keys['ledger']]
+    trg_rows = [row(n, want['trigger ' + n].split(' ')[0], want['trigger ' + n]) for n in keys.get('trg', [])]
+    dat_rows = [row(n, want['data ' + n]) for n in keys.get('data', [])]
     anon_rows = [row('public.' + s) for s in anon_list(st)]
     auth_rows = [row('public.' + s) for s in auth_list(st)]
     sweep_rows = [row('public.' + s) for s in sweep_list(st)]
-    rule_rows = [f"({lit(kind)}, {'false' if kind in REPORT_ONLY else 'true'})" for kind in ALL_KINDS]
+    rule_rows = [f"({lit(kind)}, {'false' if kind in REPORT_ONLY else 'true'})" for kind in ALL_KINDS
+                 if kind not in NEW_KINDS or any(kd == kind for kd, _ in WANT[k].values())]
     n_must = sum(1 for kind, _ in WANT[k].values() if label(kind) == 'MUST HOLD')
     n_rep = len(WANT[k]) - n_must
     head = f"""-- postcheck-{k}.sql  (generated by {REL}/gen.py; do not hand-edit)
@@ -794,6 +824,11 @@ def render(k):
             values('sweep_want', 'sig', sweep_rows),
             'rule(kind, must) AS (VALUES\n    ' + ',\n    '.join(rule_rows) + ')',
             CHECKS]
+    # triggers and data values: only in the files that pin one (the other files stay as they were)
+    if trg_rows or dat_rows:
+        ctes.insert(-2, values('trg', 'name, tbl, want', trg_rows))
+        ctes.insert(-2, values('dat', 'name, want', dat_rows))
+        ctes[-1] = CHECKS[:-1] + EXTRA_CHECKS + ')'
     return head + 'WITH\n' + ',\n'.join(ctes) + '\n' + FINAL_SELECT.replace('@@LABEL@@', k)
 
 
@@ -928,6 +963,22 @@ CHECKS = """checks(id, kind, want, got) AS (
                                         AND (pg_catalog.has_function_privilege('anon', p.oid, 'EXECUTE') OR pg_catalog.has_function_privilege('authenticated', p.oid, 'EXECUTE'))
                                         AND p.oid NOT IN (SELECT pg_catalog.to_regprocedure(w.sig)::oid FROM sweep_want w WHERE pg_catalog.to_regprocedure(w.sig) IS NOT NULL)), 'none')
 )"""
+NEW_KINDS = ('trigger', 'data value')
+EXTRA_CHECKS = """  UNION ALL
+  SELECT 'trigger ' || g.name, 'trigger', g.want,
+         coalesce((SELECT string_agg(g.tbl || ' '
+                                     || CASE WHEN t.tgtype::int & 2 <> 0 THEN 'before' ELSE 'after' END || ' '
+                                     || CASE WHEN t.tgtype::int & 28 = 16 THEN 'update' ELSE 'other events' END || ' '
+                                     || CASE WHEN t.tgtype::int & 1 <> 0 THEN 'row' ELSE 'statement' END || ' '
+                                     || t.tgfoid::regproc::text || '() ' || CASE WHEN t.tgenabled = 'O' THEN 'enabled' ELSE 'not enabled' END, ' & ')
+                     FROM pg_catalog.pg_trigger t WHERE t.tgname = g.name AND NOT t.tgisinternal
+                      AND t.tgrelid = pg_catalog.to_regclass('public.' || g.tbl)), '(absent)')
+    FROM trg g
+  UNION ALL
+  SELECT 'data ' || d.name, 'data value', d.want,
+         CASE d.name WHEN 'mcp_settings.notice_version' THEN (SELECT s.notice_version::text FROM public.mcp_settings s WHERE s.id) END
+    FROM dat d
+"""
 FINAL_SELECT = """SELECT CASE WHEN f.must IS NULL THEN 'ok'
             ELSE ('POSTCHECK @@LABEL@@ FAILED: ' || f.must || ' || REPORT ONLY: ' || coalesce(f.rep, 'none'))::integer::text END AS postcheck,
        coalesce(f.rep, '') AS report_only
