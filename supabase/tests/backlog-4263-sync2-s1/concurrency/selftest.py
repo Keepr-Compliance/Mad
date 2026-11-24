@@ -131,6 +131,10 @@ PRECHECK = [  # (label, output, need_on, expected exit)
     ('precheck row unreadable', ok([{'txn': 'one', 'iso': 'read committed', 'by_id': 0}]), '0', 1),
 ]
 COL = [  # (label, output, key, expected value or None)
+    ('last tagged line wins (an earlier tagged line in the same call)',
+     'RAW:' + json.dumps([{'line': json.dumps({'tag': 'left', 'left': 9})}, {'line': 'DO'}, {'line': json.dumps({'tag': 'left', 'left': 0})}]), 'left', '0'),
+    ('an untagged JSON line after the answer is not the answer',
+     'RAW:' + json.dumps([{'line': json.dumps({'tag': 'left', 'left': 0})}, {'line': json.dumps({'sub': 'x', 'left': 7})}]), 'left', '0'),
     ('count', ok([{'left': 0}]), 'left', '0'),
     ('missing key', ok([{'left': 0}]), 'right', None),
     ('error', LOCK_TIMEOUT, 'left', None),
