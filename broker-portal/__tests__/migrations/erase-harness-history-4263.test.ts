@@ -56,6 +56,7 @@ describe('BACKLOG-4263 erase harness run history', () => {
     expect(PY).toContain('return 4');
     expect(PY).toContain("sys.exit(selftest(green_ok='--control-green-ok' in a))");
     expect(PY).toContain("mutants()  # the expectation table");
+    expect(PY).toContain("if sel.get('only') and (sel.get('controls') or sel.get('mutants') or sel.get('stage')):");
   });
 
   it('listing assertions say PRECONDITION when the database leaves no room, and the dry-run count is scoped', () => {
