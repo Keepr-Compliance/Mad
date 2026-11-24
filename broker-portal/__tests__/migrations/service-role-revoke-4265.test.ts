@@ -570,6 +570,14 @@ describe('BACKLOG-4265 result-detail rule on backlog-4265', () => {
     expect((rd.match(/^ {4}'backlog-[\w-]+': (True|False),$/gm) ?? []).filter((l) => l.endsWith('True,'))).toEqual(["    'backlog-4265': True,"]);
     expect(read('supabase/tests/backlog-4263-sync2-t/call_shape.py')).toContain('probs += result_detail.check(here)');
   });
+  it('the row check records changed counts only and hashes auth.users without its sign-in columns', () => {
+    const h = read(`${DIR}/lib/helpers.sql`);
+    expect(h).toContain("md5(concat_ws('|', x.id::text, x.email::text, x.created_at::text)) FROM auth.users x");
+    expect(h).not.toMatch(/md5\(x::text\) FROM auth\.users/);
+    const fr = h.slice(h.indexOf('CREATE FUNCTION pg_temp.foreign_rows65()'));
+    expect(fr).toContain("'gone_or_changed'");
+    expect(fr).not.toContain("'before'");
+  });
   const red: [string, string][] = [
     ['a JSON variable cast to text', "CREATE FUNCTION pg_temp.c() RETURNS text LANGUAGE plpgsql AS $c$ DECLARE cl jsonb; BEGIN RETURN pg_temp.pass(true, jsonb_build_object('claim', left(cl::text, 200))::text); END $c$;"],
     ['SQLERRM recorded', "DO $x$ BEGIN NULL; EXCEPTION WHEN OTHERS THEN res := 'E ' || SQLERRM; END $x$;"],
