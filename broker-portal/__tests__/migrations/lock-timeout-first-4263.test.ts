@@ -1,5 +1,5 @@
 /**
- * BACKLOG-4263 (sync 2.49) — in every 20261123* migration of the lane, its rollback file and its apply file,
+ * BACKLOG-4263 (sync 2.49), BACKLOG-4266 — in every migration from version 20261123000000 on, its rollback file and its apply file,
  * lock_timeout is set before the first statement that takes a lock.
  *
  * Each file has exactly one lock_timeout statement, `SET LOCAL lock_timeout = '<n>ms|s'` (1 ms to 3 s), at top level.
@@ -185,18 +185,28 @@ export function problem(sql: string): string | null {
   return null;
 }
 
-const LANE = readdirSync(MIGDIR).filter((f) => /^20261123\d{6}_.*\.sql$/.test(f)).sort();
+// every migration from version 20261123000000 on (later versions are covered without editing this file), and every
+// apply-<version>.sql / rollback-<version>.sql of such a version in any folder under supabase/tests
+const FROM_VERSION = '20261123000000';
+const atOrAfter = (v: string): boolean => /^\d{14}$/.test(v) && v >= FROM_VERSION;
+const LANE = readdirSync(MIGDIR).filter((f) => /^\d{14}_.*\.sql$/.test(f) && atOrAfter(f.slice(0, 14))).sort();
 const TESTS = join(REPO, 'supabase/tests');
-const COMPANIONS = readdirSync(TESTS)
-  .filter((d) => d.startsWith('backlog-4263-sync2'))
-  .flatMap((d) => readdirSync(join(TESTS, d)).filter((f) => /^(apply|rollback)-20261123\d{6}\.sql$/.test(f)).map((f) => `supabase/tests/${d}/${f}`))
+const COMPANIONS = readdirSync(TESTS, { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .flatMap((d) =>
+    readdirSync(join(TESTS, d.name))
+      .filter((f) => /^(apply|rollback)-\d{14}\.sql$/.test(f) && atOrAfter(f.replace(/^(apply|rollback)-/, '').slice(0, 14)))
+      .map((f) => `supabase/tests/${d.name}/${f}`))
   .sort();
 const FILES = [...LANE.map((f) => `supabase/migrations/${f}`), ...COMPANIONS];
 
 describe('BACKLOG-4263 lock_timeout is set before the first statement that takes a lock', () => {
   it('finds the lane files', () => {
-    expect(LANE.length).toBeGreaterThanOrEqual(5);
-    expect(COMPANIONS.length).toBeGreaterThanOrEqual(8);
+    expect(LANE.length).toBeGreaterThanOrEqual(6);
+    expect(COMPANIONS.length).toBeGreaterThanOrEqual(10);
+    expect(LANE).toContain('20261123170000_backlog_4266_connect_notice_with_exchange.sql');
+    expect(COMPANIONS).toEqual(expect.arrayContaining(['supabase/tests/backlog-4266/apply-20261123170000.sql',
+      'supabase/tests/backlog-4266/rollback-20261123170000.sql']));
     for (const v of LANE.map((f) => f.slice(0, 14))) {
       expect(COMPANIONS.some((c) => c.endsWith(`rollback-${v}.sql`))).toBe(true);
     }

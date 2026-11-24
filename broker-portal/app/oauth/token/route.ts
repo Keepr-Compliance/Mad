@@ -6,8 +6,13 @@
  * assertion. Every request check answers without a database call. Grants:
  * authorization_code (mcp_exchange_code) and refresh_token (mcp_refresh). The
  * route never retries a database call.
+ *
+ * A database call that fails or answers outside the contract (`transport`) is answered 503 temporarily_unavailable
+ * and sends Sentry one static message (TOKEN_DB_FAILED_MESSAGE) tagged with the route, the grant and the database
+ * error code only (BACKLOG-4266).
  */
 
+import * as Sentry from '@sentry/nextjs';
 import { digest, newToken } from '@/lib/mcp/oauth/crypto';
 import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
 import { mediaType, oauthError, oauthJson, readBodyText } from '@/lib/mcp/oauth/http';
@@ -28,12 +33,16 @@ export const dynamic = 'force-dynamic';
 
 const MAX_TOKEN_BODY_BYTES = 8 * 1024;
 
+/** The one Sentry message of the 503 database path: no token, code, client id, user id or error text. */
+const TOKEN_DB_FAILED_MESSAGE = 'mcp-oauth token database call failed';
+type Grant = 'authorization_code' | 'refresh_token';
+
 function refuse(log: LogFields, outcome: string, error: string, status = 400, extra: Record<string, string> = {}): Response {
   log.outcome = outcome;
   return oauthError(status, error, extra);
 }
 
-function answer(log: LogFields, result: TokenResult, accessToken: string, refreshToken: string): Response {
+function answer(log: LogFields, grant: Grant, result: TokenResult, accessToken: string, refreshToken: string): Response {
   switch (result.kind) {
     case 'ok':
       log.outcome = 'issued';
@@ -49,6 +58,11 @@ function answer(log: LogFields, result: TokenResult, accessToken: string, refres
       return refuse(log, result.error, result.error);
     case 'transport':
       log.error = `${errorNameTag({ name: result.name })}:${dbCode(result.code)}`;
+      try {
+        Sentry.captureMessage(TOKEN_DB_FAILED_MESSAGE, { level: 'error', tags: { route: 'token', grant, db_code: dbCode(result.code) } });
+      } catch {
+        // reporting must never change the response
+      }
       return refuse(log, 'transport', 'temporarily_unavailable', 503, { 'Retry-After': '2' });
   }
 }
@@ -113,7 +127,7 @@ const route = withOAuthRoute('token', ['POST'], async (req, cfg, log) => {
       atDigest: digest(cfg.pepper, accessToken),
       rtDigest: digest(cfg.pepper, refreshToken),
     });
-    return answer(log, result, accessToken, refreshToken);
+    return answer(log, 'authorization_code', result, accessToken, refreshToken);
   }
 
   const presented = p.get('refresh_token');
@@ -127,7 +141,7 @@ const route = withOAuthRoute('token', ['POST'], async (req, cfg, log) => {
     newAtDigest: digest(cfg.pepper, accessToken),
     newRtDigest: digest(cfg.pepper, refreshToken),
   });
-  return answer(log, result, accessToken, refreshToken);
+  return answer(log, 'refresh_token', result, accessToken, refreshToken);
 });
 
 export const GET = route.GET;
