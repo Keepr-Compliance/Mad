@@ -58,11 +58,14 @@ export const MESSAGE_TOOLS = [LIST_DEAL_MESSAGES_TOOL, GET_MESSAGE_TOOL];
 
 type MessageTool = 'list' | 'get';
 
+const tooLarge = (tool: MessageTool): string =>
+  tool === 'list' ? MESSAGE_TOOL_MESSAGES.list_too_large : MESSAGE_TOOL_MESSAGES.get_too_large;
+
 /** Database outcome -> what the AI app is shown, for a connection that may read messages. */
 export function fromMessageDatabase(res: DataToolResult, tool: MessageTool): CallToolResult {
   if (res.kind === 'ok') {
     const text = JSON.stringify(res.result);
-    if (text.length > MAX_RESULT_CHARS) return toolError(MESSAGE_TOOL_MESSAGES.too_large);
+    if (text.length > MAX_RESULT_CHARS) return toolError(tooLarge(tool));
     return { content: [{ type: 'text', text }], structuredContent: res.result };
   }
   if (res.kind === 'error') {
@@ -73,8 +76,9 @@ export function fromMessageDatabase(res: DataToolResult, tool: MessageTool): Cal
         return toolError(TOOL_MESSAGES[res.error]);
       case 'not_entitled':
       case 'invalid_input':
-      case 'too_large':
         return toolError(MESSAGE_TOOL_MESSAGES[res.error]);
+      case 'too_large':
+        return toolError(tooLarge(tool));
       case 'not_found':
         return toolError(tool === 'list' ? MESSAGE_TOOL_MESSAGES.list_not_found : MESSAGE_TOOL_MESSAGES.get_not_found);
       default:

@@ -387,8 +387,9 @@ describe('refusals with message access', () => {
         return TOOL_MESSAGES[code];
       case 'not_entitled':
       case 'invalid_input':
-      case 'too_large':
         return MESSAGE_TOOL_MESSAGES[code];
+      case 'too_large':
+        return tool === 'list' ? 'That answer is too large. Ask for fewer messages (limit).' : 'That message is too large to show.';
       case 'not_found':
         return tool === 'list' ? MESSAGE_TOOL_MESSAGES.list_not_found : MESSAGE_TOOL_MESSAGES.get_not_found;
       default:
@@ -437,12 +438,23 @@ describe('refusals with message access', () => {
     expect(textOf(await callTool('get_message', { message_id: fid(1) }))).toBe(TOOL_MESSAGES.unavailable);
   });
 
-  it('a result over the portal ceiling is refused whole, never cut', async () => {
+  it('a result over the portal ceiling is refused whole, never cut, with the text of its tool', async () => {
     const big = clone(FX.get_cut_at_source);
     big.result.message.body_text = 'a'.repeat(MAX_RESULT_CHARS);
     getAnswer = { data: big };
     const r = await callTool('get_message', { message_id: fid(1) });
-    expect([r.isError, textOf(r), r.structuredContent]).toEqual([true, MESSAGE_TOOL_MESSAGES.too_large, undefined]);
+    expect([r.isError, textOf(r), r.structuredContent]).toEqual([true, 'That message is too large to show.', undefined]);
+    const page = clone(FX.list_dcap_p2);
+    page.result.messages[0].snippet = 'a'.repeat(MAX_RESULT_CHARS);
+    listAnswer = { data: page };
+    const l = await callTool('list_deal_messages', { deal_id: fid(1) });
+    expect([l.isError, textOf(l), l.structuredContent]).toEqual([true, 'That answer is too large. Ask for fewer messages (limit).', undefined]);
+  });
+
+  it('the list description says a hidden text may be hidden through the text it reacts to', () => {
+    expect(MESSAGE_TOOL_TEXT.list_deal_messages.description).toContain(
+      'hidden_from_export true means the person hid this text, or the text it reacts to, from exports of the deal;'
+    );
   });
 });
 
