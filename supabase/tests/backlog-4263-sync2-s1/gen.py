@@ -12,7 +12,7 @@
 `python3 gen.py check`   fails when a written file differs from what the migrations give now
 `python3 gen.py report <kt-sql output>`  reads the harness result (kt-sql's JSON error body or plain text) and prints PASS /
                          FAIL per control and mutant; exit 0 only when every control PASSes and every mutant is RED
-`python3 gen.py selftest`  offline self-test of `report` on canned outputs in both shapes (no database)
+`python3 gen.py selftest`  offline self-test of `report` on canned outputs in both shapes (no database); `selftest --control-green-ok` is its control (must fail)
 
 Two-session controls (claim versus writer, the claim race, turn-off versus claim) are in concurrency/ (hand-written).
 """
@@ -846,6 +846,9 @@ def unwrap(raw):
     return text
 
 
+GREEN_OK = False  # selftest's own control flips this to make report() count GREEN mutants as ok; it must then go red
+
+
 def report(raw):
     """(printed lines, ok). ok only when every control is PASS, every mutant is applied and RED on its primary control
     (FAIL:, not ERROR), no mutant carries an error, and the rollback step is ok. Anything unreadable is not ok."""
@@ -869,7 +872,7 @@ def report(raw):
         o = o if isinstance(o, dict) else {}
         red = sorted(c for c in ORDER if o.get(c, 'PASS') != 'PASS')
         ok = o.get('applied') is True and str(o.get(primary, '')).startswith('FAIL:') and 'error' not in o
-        bad += not ok
+        bad += not (ok or GREEN_OK)
         out.append(('RED  ' if ok else 'GREEN') + f' {mid}: applied={o.get("applied")} primary={primary} red={red}' + (f' error={o.get("error")}' if 'error' in o else ''))
     out.append('rollback: ' + str(res.get('rollback')))
     bad += res.get('rollback') != 'ok'
@@ -930,6 +933,9 @@ if len(sys.argv) > 2 and sys.argv[1] == 'report':
     print('\n'.join(lines))
     sys.exit(0 if ok else 1)
 if len(sys.argv) > 1 and sys.argv[1] == 'selftest':
+    if len(sys.argv) > 2 and sys.argv[2] == '--control-green-ok':  # the selftest's own control: must exit non-zero
+        GREEN_OK = True
+        print('MUTATION APPLIED report() counts GREEN mutants as ok')
     f = selftest()
     print(f'selftest: {"all cases as expected" if not f else "FAILED: " + ", ".join(f)}')
     sys.exit(1 if f else 0)

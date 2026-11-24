@@ -68,9 +68,22 @@ later, held until the call ends. Order: every E1 function touches the run table 
 inserts its run row, then its leases; finish reads its run row, then deletes leases), so taking runs first cannot
 deadlock with a job tick: a tick that already holds runs finishes, and this call waits (or gets 55P03). A tick that
 starts during the call waits for the call's length, up to its own timeouts. The call records `history_lock` (both
-tables held) in its result. One collision remains from before this change, live mode only: a live scrub holds the
-`cloud_release_switches` row FOR SHARE while it waits on the run table, and a control's switch UPDATE then waits on
-that row (a deadlock, one side aborted with 40P01). The minute 15–30 rule (E3's job fires at minute 23) avoids it.
+tables held) in its result. In dry_run mode (E3's first deploy) no tick holds another lock while it waits on the run
+table, so the job's side can wait or time out but is never part of a deadlock. In LIVE mode a live scrub can be waiting
+on the run table while it holds rows this call later needs, and each of these is a possible deadlock, existing before
+the clearing was added:
+- the `cloud_release_switches` row (the scrub holds it FOR SHARE; a control's switch UPDATE, `lib/helpers.sql:116`);
+- real file rows (the scrub holds them FOR UPDATE; the live claim inside a control takes file rows FOR UPDATE without
+  SKIP LOCKED, E1 `:186`);
+- real blob rows (the scrub's fence holds them FOR UPDATE, E1 `:454`; the live claim fences blobs through the same
+  `_cloud_fence_unreferenced`, E1 `:193`, `:208` and the orphans at `:219`, which locks them FOR UPDATE without SKIP
+  LOCKED, `20261112190000:412-414`).
+
+PostgreSQL aborts whichever side's deadlock check fires after the cycle forms, so a `40P01` can land on the job's side
+as well as on this call's. **Rule: this harness is never sent to a database whose erase job runs in LIVE mode. Every
+before-note and every result note states the job's mode as read at that minute**: no `cloud-blob-erase` cron job,
+or the job present and the Edge Function's `CLOUD_BLOB_ERASE_MODE` not `live` (anything else is a dry run,
+`handler.ts:22-23`), with the newest run row's `mode`. The minute 15–30 rule below still applies in dry_run mode.
 
 ## STOP RULES
 
@@ -82,9 +95,10 @@ that row (a deadlock, one side aborted with 40P01). The minute 15–30 rule (E3'
   | run and lease rows deleted (the clearing, then the tables dropped and re-created empty by the rollback and E1) | the saved file (above) |
   | the `cloud-blob-erase` cron job unscheduled (E3 rollback) | not from a file: re-apply E3 with its own note (it needs the URL secret first) |
   | `cloud_blob_erase_url` deleted (E1 rollback) | not from a file: set it again per environment, as after E1 |
-  | `cloud_blob_erase_secret` deleted, then a NEW one created by E1 (a different value) | not from a file: the Edge Function's copy no longer matches; update it per E1's notes |
+  | `cloud_blob_erase_secret` deleted, then a NEW one created by E1 (a different value) | not from a file: the Edge Function keeps no stored copy; it reads the secret through `rpc cloud_blob_erase_secret` and caches it in memory per warm instance (`supabase/functions/cloud-blob-erase/handler.ts:133-143`). A cold instance reads the new value; a warm one rejects until it restarts. Repair: restart or redeploy the function |
   | ledger rows `20261123120000` and `20261123110000` deleted (E1 re-created its objects, but writes no ledger row) | `apply-20261123110000.sql` (re-runnable text plus the ledger row); E3's row with E3's re-apply |
   | the six E1 functions dropped and re-created from the working tree | the same E1 text; nothing to do when the checkout is E1 as applied (`apply-20261123110000.sql` matches) |
+  | `--stage=fixtures` only: one `dry_run` run row, written by the timing probe's dry claim at the top level of the call (E1 `:144`), left in the re-created table | delete that row (the saved file holds none like it) |
 
 - Stop on SQLSTATE `57014` (statement timeout), `55P03` (lock timeout) or `40P01` (deadlock) in any output. On the
   dry-run database a `40P01` or `55P03` is a scheduling collision with another session: re-run once and say so.
@@ -279,3 +293,13 @@ before-note names a fresh uuid4 first); the run id is printed at the start. See 
 
 Row shapes: see the header of `lib/helpers.sql`. Message and file rows are inserted directly in the shapes the writers
 leave (cited there), not written through `cloud_upsert_*`, which need a licensed fixture account.
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `harness.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `harness.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `apply-20261123110000.sql` | commits | E1's text unchanged, then its ledger row (written by `harness.py write`) |
+| `rollback-20261123110000.sql` | commits | on its own to roll E1 back; inside every harness stage as a part, where the final RAISE rolls it back |
+| `rollback-20261123120000.sql` | commits | on its own to roll E3 back; inside every harness stage as a part, where the final RAISE rolls it back |

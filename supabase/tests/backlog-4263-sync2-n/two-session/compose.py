@@ -323,6 +323,12 @@ $pr$;
 """
 
 
+# the trap's statistics reset: one more call, so the guard is first in it like in every other call
+RESET = GUARD + """-- the trap's pg_stat_statements reset (writes no row)
+select extensions.pg_stat_statements_reset();
+"""
+
+
 def fill(text, vals):
     for k, v in vals.items():
         text = text.replace(f'__{k}__', v)
@@ -347,7 +353,7 @@ def compose(outdir, mode, run, a, o, m, c, r, show=True, marker=None):
     vals = {'RUN': run, 'A': a, 'O': o, 'M': m, 'C': c, 'R': r, 'MARKER': marker}
     files = {'precheck.sql': PRECHECK, 'setup.sql': SETUP, 'session2.tpl': SESSION2, 'session1.sql': session1(tn),
              'state.sql': STATE, 'rollback.sql': rollback(rb), 'rollback-other.sql': rollback(other_rb),
-             'teardown.tpl': TEARDOWN, 'verify.sql': VERIFY, 'probe.sql': PROBE}
+             'teardown.tpl': TEARDOWN, 'verify.sql': VERIFY, 'probe.sql': PROBE, 'reset.sql': RESET}
     os.makedirs(outdir, exist_ok=True)
     for name, text in files.items():
         out = fill(text, vals)

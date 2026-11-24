@@ -235,3 +235,13 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
 | `concurrency/guard.sql`, `drop-mutants.sql`, `mutant-*.sql` | Generated: the guard every sent file starts with; the mutant drop and check; the four own-name mutants |
 | `concurrency/setup.sql`, `teardown.sql`, `verify.sql`, `assert.sql`, `precheck.sql`, `fk-counts.sql`, `auth-count.sql`, `gate.sql`, `hold-marker.sql`, `lock-timeout.sql`, `lock-timeout-b.sql`, `as-user.sql`, `r*-*.sql`, `claim-ib-replace.sql`, `end.sql`, `end-hold.sql` | Hand-written fixtures, teardown, checks and session statements |
 | `concurrency/verdict.py`, `selftest.py` | Hand-written verdict of a case, and its offline self-test (26 canned outputs) |
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `gen.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `gen.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `harness-s1.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `apply-20261123100000.sql` | commits | the migration text, then its ledger row |
+| `rollback-20261123100000.sql` | commits | on its own, to roll the migration back |

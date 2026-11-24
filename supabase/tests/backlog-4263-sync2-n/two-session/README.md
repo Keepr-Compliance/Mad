@@ -97,3 +97,32 @@ with the values printed by that run's precheck.
   the check says so.
 
 `python3 -I verdict.py selftest` checks the verdict on canned outputs; with `--control-green-ok` it must fail.
+- every composed text, both modes, against the call-class table below (`../../backlog-4263-sync2-t/call_shape.py`);
+  the guard is the first statement of every composed text and of every text the stub runs received;
+- `run.sh` read as text, not run: every `$K` call sends a file that `compose.py` built (guard first) or one of two pinned
+  `sed` lines made from a composed template; a new call site is red even on a path no stub run takes
+  (`../../backlog-4263-sync2-t/call_sites.json`).
+
+## Call classes
+
+What each composed text is when it is sent. The offline check runs the shared checker on every composed text and
+compares this table with what `compose.py` writes; the jest pin `call-shape-4263.test.ts` reads the table too.
+
+| File | Class | Sent as |
+|---|---|---|
+| `precheck.sql` | rolled_back | read only; ends in its RAISE |
+| `setup.sql` | commits | the fixture rows |
+| `session2.tpl` | rolled_back | session 2 (`session2.sql` after the nonce is filled in); ends in its RAISE |
+| `session1.sql` | commits | session 1: T-N's apply text and its ledger row |
+| `state.sql` | rolled_back | read only; ends in its RAISE |
+| `rollback.sql` | commits | the T-N rollback file (trap) |
+| `rollback-other.sql` | commits | the T-N rollback file for the other mode's trigger body (trap) |
+| `teardown.tpl` | commits | the teardown (`teardown.sql` after the precheck values are filled in) |
+| `verify.sql` | rolled_back | read only; ends in its RAISE |
+| `probe.sql` | rolled_back | read only; ends in its RAISE (trap) |
+| `reset.sql` | commits | the trap's `pg_stat_statements` reset; writes no row |
+
+**`run.sh` changed (BACKLOG-4263, call-shape PR):** the trap's statistics reset used to be written by `run.sh` itself,
+with no guard in front of it. It is now `reset.sql`, composed with the guard first like every other call. The dry runs
+recorded before this change ran the earlier `run.sh` text; a dry run at this text has not been made.
+

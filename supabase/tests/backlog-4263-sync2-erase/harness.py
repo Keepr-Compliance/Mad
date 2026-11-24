@@ -307,11 +307,21 @@ END
 $fxt4263e$;"""
 
 
+def fin(stage):
+    """the final block: the call's last statement. Its RAISE is what rolls the whole call back."""
+    marker = 'P4263E_FIXTURES_OK' if stage == 'fixtures' else 'P4263E_RESULT'
+    return "DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;" % marker
+
+
+def stage_of(sel):
+    return sel.get('stage') or ('full' if sel.get('controls') and sel.get('mutants') else 'controls' if sel.get('controls')
+                                else 'mutants' if sel.get('mutants') else 'only' if sel.get('only') else None)
+
+
 def compose(sel, run=None, guard=GUARD_MD5):
     """sel: {'stage': one of STAGES} or the older {'controls': bool, 'mutants': bool, 'only': [...]}"""
     run = run or secrets.token_hex(12)
-    stage = sel.get('stage') or ('full' if sel.get('controls') and sel.get('mutants') else 'controls' if sel.get('controls')
-                                 else 'mutants' if sel.get('mutants') else 'only' if sel.get('only') else None)
+    stage = stage_of(sel)
     assert stage in STAGES + ('only',), sel
     head = [GUARD.replace('__GUARD__', guard), "SET LOCAL pg_stat_statements.track = 'none';", "SET LOCAL lock_timeout = '3s';",
             "SET LOCAL statement_timeout = '240s';", "CREATE TEMP TABLE p4263e_out (k text, v text);",
@@ -336,8 +346,7 @@ def compose(sel, run=None, guard=GUARD_MD5):
         pass   # the embedded E1 rollback refuses before any block could run
     else:
         parts.append('DO $drv4263e$\nDECLARE v text;\nBEGIN\n' + ''.join(blocks) + 'END\n$drv4263e$;')
-    marker = 'P4263E_FIXTURES_OK' if stage == 'fixtures' else 'P4263E_RESULT'
-    parts.append("DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;" % marker)
+    parts.append(fin(stage))
     text = '\n'.join(parts).replace('__RUN__', run)
     assert '__RUN__' not in text and '__GUARD__' not in text
     return text
@@ -345,6 +354,11 @@ def compose(sel, run=None, guard=GUARD_MD5):
 
 def run(sel, show=False, guard=GUARD_MD5, transport=None):
     text = compose(sel, guard=guard)
+    probs = send_problems(text, stage_of(sel))
+    if probs:
+        for p_ in probs:
+            print('REFUSING TO SEND: ' + p_)
+        return 6
     if show:
         print(text)
         return 0
@@ -366,6 +380,7 @@ def report(stdout, stderr='', out=print, stage=None):
     one line per result and returns the exit code: 0 all good; 1 a control not PASS, or a mutant MISSED, CRASH,
     PRECONDITION or NOT APPLIED IN DB; 2 no result found; 3 zero tests ran; 4 the expectation table is empty (report
     called without the mutants being built: every mutant would read as want=red); 5 the call is of another stage.
+    (run() itself exits 6, sending nothing, when the text it is about to send fails send_problems.)
     stage 'history_mutant': 0 when the call refused with the E1 rollback's history text (CAUGHT), 1 otherwise."""
     if not WANT:
         out('NOT OK: the expectation table is empty: build the mutants first (harness.py report does), or every mutant reads as want=red')
@@ -488,6 +503,42 @@ def selftest(green_ok=False):
         got = report(_canned(res), out=lambda *_: None, stage='structure')
         bad += got != want
         print('%-4s %s: exit %d (want %d)' % ('ok' if got == want else 'BAD', label, got, want))
+    # the CLI: --marker only with a transport that is not the default one, given or not
+    import tempfile
+    d = tempfile.mkdtemp()
+    stub = os.path.join(d, 'stub')
+    with open(stub, 'w') as fh:
+        fh.write('#!/bin/sh\necho "$1" >> "%s"\necho \'{"message": "x"}\'\necho "kt-sql: HTTP 400"\n' % os.path.join(d, 'calls'))
+    os.chmod(stub, 0o700)
+    default = os.path.expanduser('~/.claude/bin/kt-sql')
+    other = 'a' * 32
+    for label, args, want in (('--marker without --transport', ['--stage=fixtures', '--marker=' + other], '--marker is only for'),
+                              ('--marker with the default transport given explicitly', ['--stage=fixtures', '--marker=' + other, '--transport=' + default], '--marker is only for'),
+                              ('--marker with another transport', ['--stage=fixtures', '--marker=' + other, '--transport=' + stub], None),
+                              ('--only with --stage', ['--stage=full', '--only=x'], '--only runs the named mutants'),
+                              ('a marker that is not an md5', ['--marker=xyz', '--transport=' + stub], 'must be 32 lowercase hex')):
+        _, refusal = cli(args)
+        good = (refusal is None) if want is None else (refusal is not None and want in refusal)
+        bad += not good
+        print('%-4s cli %s: %s' % ('ok' if good else 'BAD', label, refusal or 'accepted'))
+    # run() refuses to send a text that fails send_problems, and sends nothing (a RETURN before the final RAISE: the
+    # composed final block and fin() agree, so only the shared rule can see it)
+    global fin
+    saved_fin = fin
+    calls = os.path.join(d, 'calls')
+    for label, patch, want_rc, want_calls in (('a final block that RETURNs first is not sent', True, 6, 0), ('the same call unpatched is sent', False, 2, 2)):
+        if patch:
+            fin = lambda stage: saved_fin(stage).replace(' BEGIN RAISE', ' BEGIN RETURN; RAISE')
+        try:
+            if os.path.exists(calls):
+                os.remove(calls)
+            rc = run({'stage': 'fixtures'}, transport=stub)
+        finally:
+            fin = saved_fin
+        n = len(open(calls).read().split('\n')) - 1 if os.path.exists(calls) else 0
+        good = rc == want_rc and n == want_calls
+        bad += not good
+        print('%-4s run: %s: exit %d, %d transport calls (want %d, %d)' % ('ok' if good else 'BAD', label, rc, n, want_rc, want_calls))
     print('selftest: %s' % ('all cases as expected' if not bad else '%d wrong' % bad))
     return 1 if bad else 0
 
@@ -495,12 +546,26 @@ def selftest(green_ok=False):
 
 
 def top_statements(text):
-    """top-level statements (comments dropped, string and dollar-quoted text kept), split on top-level semicolons"""
+    """top-level statements (line and block comments dropped, block comments nested as PostgreSQL nests them; string
+    and dollar-quoted text kept), split on top-level semicolons"""
     out, cur, i, n = [], [], 0, len(text)
     while i < n:
         if text.startswith('--', i):
             j = text.find('\n', i)
             i = n if j < 0 else j
+            continue
+        if text.startswith('/*', i):
+            depth = 0
+            while i < n:
+                if text.startswith('/*', i):
+                    depth += 1; i += 2
+                elif text.startswith('*/', i):
+                    depth -= 1; i += 2
+                    if depth == 0:
+                        break
+                else:
+                    i += 1
+            cur.append(' ')
             continue
         c = text[i]
         if c == "'":
@@ -536,9 +601,10 @@ def top_statements(text):
     return out
 
 
-def ends_in_raise(text, label):
+def ends_in_raise(text, label, stage=None):
     """the call must end in its final RAISE (otherwise it COMMITS): exactly one final block, last, a DO that raises,
-    nothing after it, and no top-level transaction control anywhere"""
+    nothing after it, and no top-level transaction control anywhere. With stage: the final block is byte-for-byte the
+    one fin(stage) builds (so no handler, condition or exit can sit around its RAISE)."""
     st = top_statements(text)
     bad = []
     fins = [x for x in st if x.startswith('DO $fin4263e$')]
@@ -546,12 +612,62 @@ def ends_in_raise(text, label):
         bad.append('%s call: the last statement is not its one final DO $fin4263e$ block' % label)
     elif not re.search(r"\bRAISE EXCEPTION '(P4263E_RESULT|P4263E_FIXTURES_OK) %'", st[-1]):
         bad.append('%s call: the final block does not RAISE' % label)
+    elif stage is not None and st[-1] + ';' != fin(stage):
+        bad.append('%s call: the final block is not byte-for-byte the one fin() builds' % label)
     if text.rstrip()[-len('$fin4263e$;'):] != '$fin4263e$;':
         bad.append('%s call: text follows the final block' % label)
     for x in st:
         if re.match(r'(?i)(COMMIT|END|ROLLBACK|ABORT|BEGIN|START\s+TRANSACTION|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b', x):
             bad.append('%s call: top-level transaction control: %s' % (label, x[:40]))
     return bad
+
+
+def _call_shape():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('call_shape4263e', os.path.join(here, '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def send_problems(text, stage):
+    """[] when text may be sent: the guard is its first statement, ends_in_raise with the exact final block of its
+    stage, and the shared rolled_back rule (backlog-4263-sync2-t/call_shape.py: nested comments, exit paths before the
+    RAISE, pglast's statement kinds where pglast is importable)"""
+    bad = ends_in_raise(text, stage, stage)
+    bad += ['%s call (call shape): %s' % (stage, x) for x in _call_shape().rolled_back(text)]
+    if not text.startswith('DO $guard4263e$'):
+        bad.append('%s call: the guard is not first' % stage)
+    return bad
+
+
+def cli(a):
+    """(sel, show, guard, transport) for `run`, or (None, message) when the arguments are refused"""
+    sel, guard, transport = {}, GUARD_MD5, None
+    for x in a:
+        if x.startswith('--stage='):
+            sel['stage'] = x.split('=', 1)[1]
+            if sel['stage'] not in STAGES:
+                return None, 'unknown stage ' + sel['stage']
+        elif x.startswith('--marker='):
+            guard = x.split('=', 1)[1]
+        elif x.startswith('--transport='):
+            transport = x.split('=', 1)[1]
+        if x == '--controls':
+            sel['controls'] = True
+        elif x == '--mutants':
+            sel['mutants'] = True
+        elif x.startswith('--only='):
+            sel['only'] = x.split('=')[1].split(',')
+    if guard != GUARD_MD5 and (not transport or os.path.realpath(transport) == os.path.realpath(os.path.expanduser('~/.claude/bin/kt-sql'))):
+        return None, 'refusing: --marker is only for a non-default --transport'
+    if sel.get('only') and (sel.get('controls') or sel.get('mutants') or sel.get('stage')):
+        return None, 'refusing: --only runs the named mutants on their own; it does not combine with --controls, --mutants or --stage'
+    if not re.fullmatch(r'[0-9a-f]{32}', guard):
+        return None, 'refusing: --marker must be 32 lowercase hex characters'
+    if transport and not (os.path.isfile(transport) and os.access(transport, os.X_OK)):
+        return None, 'refusing: the transport does not exist or is not executable'
+    return (sel, '--print' in a, guard, transport), None
 
 
 # ------------------------------------------------------------------------------------------------ offline structure check
@@ -720,7 +836,10 @@ if __name__ == '__main__':
                 or CLEAR_HISTORY.index('LOCK TABLE') > CLEAR_HISTORY.index('DELETE FROM'):
             probs.append('the history clearing does not lock both tables (runs, then leases) before its first DELETE')
         for st in STAGES:
-            probs += ends_in_raise(compose({'stage': st}, run='0' * 24), st)
+            probs += send_problems(compose({'stage': st}, run='0' * 24), st)
+        probs += send_problems(compose({'only': [k for k in WANT][:1]}, run='0' * 24), 'only')
+        if not _call_shape().gen_check(here, {'apply-20261123110000.sql': 'commits', 'rollback-20261123110000.sql': 'commits', 'rollback-20261123120000.sql': 'commits'}):
+            probs.append('call shape of the folder files (see CALL SHAPE above)')
         for stmt in ('DELETE FROM public.cloud_blob_erase_leases;', 'DELETE FROM public.cloud_blob_erase_runs;'):
             if CLEAR_HISTORY.count(stmt) != 1:
                 probs.append('the history clearing lacks: ' + stmt)
@@ -745,29 +864,8 @@ if __name__ == '__main__':
             sys.exit(1)
         print(APPLY_REL + ' matches')
         sys.exit(0)
-    sel = {}
-    guard, transport = GUARD_MD5, None
-    for x in a[1:]:
-        if x.startswith('--stage='):
-            sel['stage'] = x.split('=', 1)[1]
-            if sel['stage'] not in STAGES:
-                print('unknown stage ' + sel['stage']); sys.exit(2)
-        elif x.startswith('--marker='):
-            guard = x.split('=', 1)[1]
-        elif x.startswith('--transport='):
-            transport = x.split('=', 1)[1]
-        if x == '--controls':
-            sel['controls'] = True
-        elif x == '--mutants':
-            sel['mutants'] = True
-        elif x.startswith('--only='):
-            sel['only'] = x.split('=')[1].split(',')
-    if guard != GUARD_MD5 and (not transport or os.path.realpath(transport) == os.path.realpath(os.path.expanduser('~/.claude/bin/kt-sql'))):
-        print('refusing: --marker is only for a non-default --transport'); sys.exit(2)
-    if sel.get('only') and (sel.get('controls') or sel.get('mutants') or sel.get('stage')):
-        print('refusing: --only runs the named mutants on their own; it does not combine with --controls, --mutants or --stage'); sys.exit(2)
-    if not re.fullmatch(r'[0-9a-f]{32}', guard):
-        print('refusing: --marker must be 32 lowercase hex characters'); sys.exit(2)
-    if transport and not (os.path.isfile(transport) and os.access(transport, os.X_OK)):
-        print('refusing: the transport does not exist or is not executable'); sys.exit(2)
-    sys.exit(run(sel, show='--print' in a, guard=guard, transport=transport))
+    args, refusal = cli(a[1:])
+    if refusal:
+        print(refusal); sys.exit(2)
+    sel, show, guard, transport = args
+    sys.exit(run(sel, show=show, guard=guard, transport=transport))

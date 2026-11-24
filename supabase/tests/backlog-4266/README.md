@@ -104,3 +104,16 @@ subtransaction, `public.ai_app_connect_notices` gets one of four additions:
    - a sign-in.
 
    Report the table name and the count only, never row content. A re-run needs a written diagnosis first.
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `gen.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `gen.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `harness-4266.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-4266-fixtures.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-4266-structure.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `apply-20261123170000.sql` | commits | the migration text, then its ledger row |
+| `rollback-20261123170000.sql` | commits | on its own, to roll the migration back |
+| `dryrun-foreign-rows.sql` | fragment | never alone: put in front of a dry-run call |
