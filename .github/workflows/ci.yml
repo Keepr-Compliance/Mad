@@ -28,6 +28,7 @@ jobs:
       android-changed: ${{ steps.android.outputs.android-changed }}
       broker-portal-changed: ${{ steps.portals.outputs.broker-portal-changed }}
       admin-portal-changed: ${{ steps.portals.outputs.admin-portal-changed }}
+      harness-tests-changed: ${{ steps.harness.outputs.harness-tests-changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -170,6 +171,28 @@ jobs:
           echo "broker-portal-changed=$BROKER_CHANGED" >> $GITHUB_OUTPUT
           echo "admin-portal-changed=$ADMIN_CHANGED" >> $GITHUB_OUTPUT
           echo "Result: broker-portal-changed=$BROKER_CHANGED admin-portal-changed=$ADMIN_CHANGED"
+
+      # BACKLOG-4263: the harness python gates below run only when a test folder,
+      # the migration pins or this workflow changed. Same list as the filters above.
+      - name: Check for harness test changes
+        id: harness
+        run: |
+          CHANGED=$(cat "$RUNNER_TEMP/changed-files.txt")
+
+          HARNESS_CHANGED="false"
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              case "$file" in
+                supabase/tests/*|broker-portal/__tests__/migrations/*|.github/workflows/ci.yml)
+                  HARNESS_CHANGED="true"
+                  break
+                  ;;
+              esac
+            fi
+          done <<< "$CHANGED"
+
+          echo "harness-tests-changed=$HARNESS_CHANGED" >> $GITHUB_OUTPUT
+          echo "Result: harness-tests-changed=$HARNESS_CHANGED"
 
       - name: Determine OS matrix
         id: os
@@ -1345,6 +1368,57 @@ jobs:
     steps:
       - name: Skip (no admin-portal changes)
         run: echo "Skipping admin-portal type check - no admin-portal/ changes detected"
+
+  # BACKLOG-4263: the offline python gates of the database test harnesses
+  # (supabase/tests/backlog-4263-*, backlog-4266): call shape, call sites, each
+  # folder's generator check, selftest and negative control, and the erase
+  # harness check. Python standard library only, the runner's own python3, no
+  # secret, no network after checkout, no database call. Not a required check
+  # and in no aggregator's needs: a skipped run blocks nothing, so it has no
+  # skip mirror. The shell-driven concurrency offline checks
+  # (*/concurrency/offline_check.py, two-session/offline_check.py) are NOT run
+  # here: they drive run.sh with signals and sleeps and have shown a timing
+  # flake under load; they stay local.
+  harness-python-gates:
+    name: Harness Python Gates
+    needs: check-changes
+    if: needs.check-changes.outputs.harness-tests-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run the harness python gates
+        run: |
+          # the shell runs with -e: every exit code is taken through `if`, so a red gate is recorded, not fatal
+          set -uo pipefail
+          T=supabase/tests
+          python3 --version
+          fail=0
+          gate() {
+            echo "::group::$*"
+            if python3 -I "$@"; then rc=0; else rc=$?; fi
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then echo "::error::exit $rc: $*"; fail=1; fi
+          }
+          # a negative control must exit exactly 1; exit 0 means the selftest cannot fail
+          negative() {
+            if python3 -I "$@" > /dev/null 2>&1; then rc=0; else rc=$?; fi
+            if [ "$rc" -eq 1 ]; then echo "negative control exits 1, as it must: $*"
+            else echo "::error::negative control exited $rc, not 1: $*"; fail=1; fi
+          }
+          gate "$T/backlog-4263-sync2-t/call_shape.py" selftest
+          gate "$T/backlog-4263-sync2-t/call_shape.py" sites
+          for d in backlog-4263-sync2-s1 backlog-4263-sync2-s2 backlog-4263-sync2-t backlog-4263-sync2-n backlog-4266; do
+            gate "$T/$d/gen.py" check
+            gate "$T/$d/gen.py" selftest
+            negative "$T/$d/gen.py" selftest --control-green-ok
+          done
+          gate "$T/backlog-4263-sync2-erase/harness.py" check
+          gate "$T/backlog-4263-sync2-erase/harness.py" selftest
+          negative "$T/backlog-4263-sync2-erase/harness.py" selftest --control-green-ok
+          exit $fail
 
   # BACKLOG-2221: gate the Expo/React Native companion (android-companion/). It has
   # its own package-lock + jest/eslint/tsc but no root CI job covered it, so SMS
