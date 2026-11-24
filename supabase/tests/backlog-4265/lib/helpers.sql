@@ -86,7 +86,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     RESET ROLE;
     PERFORM pg_temp.clear_claims();
-    IF SQLERRM LIKE 'ROLE %' THEN RETURN SQLERRM; END IF;
+    IF SQLERRM LIKE 'ROLE %' THEN RETURN 'ROLE ' || coalesce(who, '?'); END IF;
     RETURN 'ERR ' || SQLSTATE;
   END;
 END $h$;
@@ -132,7 +132,8 @@ BEGIN
 END $h$;
 -- rows of the A, B and C tables and auth.users that existed before the fixtures. Left out: mcp_settings (the fixtures
 -- set its one row for this call), mcp_rate_counters (a tool call deletes counter windows older than one day, of any
--- bucket), and mcp_authorization_requests rows already expired.
+-- bucket), and mcp_authorization_requests rows already expired. auth.users is hashed on id, email and created_at only:
+-- a sign-in writes other columns of the row.
 CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE sql VOLATILE AS $h$
   SELECT 'cloud_deal_messages'::text, md5(x::text) FROM public.cloud_deal_messages x
   UNION ALL SELECT 'cloud_deal_files', md5(x::text) FROM public.cloud_deal_files x
@@ -150,7 +151,7 @@ CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE s
   UNION ALL SELECT 'cloud_deal_checklist_items', md5(x::text) FROM public.cloud_deal_checklist_items x
   UNION ALL SELECT 'cloud_autosave_settings', md5(x::text) FROM public.cloud_autosave_settings x
   UNION ALL SELECT 'member_addons', md5(x::text) FROM public.member_addons x
-  UNION ALL SELECT 'auth.users', md5(x::text) FROM auth.users x
+  UNION ALL SELECT 'auth.users', md5(concat_ws('|', x.id::text, x.email::text, x.created_at::text)) FROM auth.users x
 $h$;
 CREATE TEMP TABLE t65_pre ON COMMIT DROP AS SELECT * FROM pg_temp.row_hashes65();
 CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS $h$
@@ -160,7 +161,17 @@ CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS 
                           ('cloud_deals'), ('cloud_deal_parties'), ('cloud_deal_checklists'), ('cloud_deal_checklist_items'),
                           ('cloud_autosave_settings'), ('member_addons'), ('auth.users'))
   SELECT jsonb_object_agg(b.t, jsonb_build_object(
-           'before', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t),
            'gone_or_changed', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h))))
     FROM tbls b
+$h$;
+-- result reducers: a call_as answer is either a JSON value or 'ERR <sqlstate> <message>'; only the SQLSTATE is kept
+CREATE FUNCTION pg_temp.state65(v jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'string' AND (v #>> '{}') LIKE 'ERR %' THEN split_part(v #>> '{}', ' ', 2) END
+$h$;
+CREATE FUNCTION pg_temp.short65(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN t ~ '^("[a-z_]+"|[0-9]+)$' THEN t WHEN t LIKE 'ERR %' THEN 'ERR ' || split_part(t, ' ', 2) ELSE 'other' END
+$h$;
+-- the sorted top-level keys of a JSON object (no values)
+CREATE FUNCTION pg_temp.keys65(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'object' THEN (SELECT coalesce(jsonb_agg(k ORDER BY k), '[]') FROM jsonb_object_keys(v) k) END
 $h$;

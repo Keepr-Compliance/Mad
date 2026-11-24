@@ -23,7 +23,7 @@ BEGIN
   BEGIN
     EXECUTE pg_temp.tx65('migration');
   EXCEPTION WHEN OTHERS THEN
-    RETURN 'FAIL: second run ' || SQLSTATE || ' ' || left(SQLERRM, 300);
+    RETURN 'FAIL: second run ' || SQLSTATE;
   END;
   again := pg_temp.sr_holds65(ARRAY['A', 'B', 'C']);
   RETURN pg_temp.pass(cardinality(again) = 0, array_to_string(again, ','));
@@ -39,9 +39,12 @@ BEGIN
   sc := pg_temp.j(pg_temp.call_as(NULL, format('SELECT to_jsonb(public.cloud_blob_erase_scrub(%L::uuid, %L::uuid, false, 1000))',
                                                 gen_random_uuid(), pg_temp.s('A')), 'service_role'));
   SELECT x.subject, x.body_text, x.removed_at INTO m FROM public.cloud_deal_messages x WHERE x.id = pg_temp.f('m_inact');
+  -- the claim covers the whole database: its detail is its JSON type and top-level keys only, never a value
   RETURN pg_temp.pass(who = '"service_role"' AND jsonb_typeof(cl) = 'object' AND sc ->> 'state' = 'scrubbed'
                       AND m.subject IS NULL AND m.body_text IS NULL AND m.removed_at IS NOT NULL,
-                      jsonb_build_object('who', who, 'claim', left(cl::text, 200), 'scrub', left(sc::text, 200),
+                      jsonb_build_object('who', pg_temp.short65(who), 'claim_type', jsonb_typeof(cl), 'claim_keys', pg_temp.keys65(cl),
+                                         'claim_sqlstate', pg_temp.state65(cl), 'scrub_state', sc ->> 'state', 'scrub_sqlstate', pg_temp.state65(sc),
+                                         'scrub_counts', jsonb_build_object('scrubbed', sc -> 'scrubbed', 'files', sc -> 'files', 'messages', sc -> 'messages'),
                                          'scrubbed_row', m.removed_at IS NOT NULL AND m.subject IS NULL)::text);
 END $c$;
 
@@ -54,7 +57,9 @@ BEGIN
   g := pg_temp.getm('K2', pg_temp.s('m_lin'), 1);
   RETURN pg_temp.pass(who = '"anon"' AND l ->> 'ok' = 'true' AND g ->> 'ok' = 'true'
                       AND g -> 'result' -> 'message' ->> 'body_text' = E'Line 1\nLine 2',
-                      jsonb_build_object('who', who, 'list', left(l::text, 160), 'get', left(g::text, 160))::text);
+                      jsonb_build_object('who', pg_temp.short65(who), 'list_ok', l ->> 'ok', 'list_error', l ->> 'error', 'list_sqlstate', pg_temp.state65(l),
+                                         'get_ok', g ->> 'ok', 'get_error', g ->> 'error', 'get_sqlstate', pg_temp.state65(g),
+                                         'body_equal', g -> 'result' -> 'message' ->> 'body_text' = E'Line 1\nLine 2')::text);
 END $c$;
 
 -- c06: as user A (authenticated): a message upload is applied, and A reads A's own rows.
@@ -69,13 +74,15 @@ BEGIN
   n_all := (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = pg_temp.f('A'));
   RETURN pg_temp.pass(who = '"authenticated"' AND r ->> 'ok' = 'true' AND r -> 'results' -> 0 ->> 'status' = 'applied'
                       AND n_own = n_all::text,
-                      jsonb_build_object('who', who, 'upload', left(r::text, 200), 'own', n_own, 'rows', n_all)::text);
+                      jsonb_build_object('who', pg_temp.short65(who), 'upload_ok', r ->> 'ok', 'upload_status', r -> 'results' -> 0 ->> 'status',
+                                         'upload_error', r ->> 'error', 'upload_sqlstate', pg_temp.state65(r), 'own', pg_temp.short65(n_own), 'rows', n_all)::text);
 END $c$;
 
 -- c07: the EXECUTE grants of the functions naming these relations are as before the apply.
 CREATE FUNCTION pg_temp.c07_function_execute() RETURNS text LANGUAGE plpgsql AS $c$
 BEGIN
-  RETURN pg_temp.pass(pg_temp.fn_exec65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'fn_exec_before'), pg_temp.fn_sr65()::text);
+  RETURN pg_temp.pass(pg_temp.fn_exec65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'fn_exec_before'),
+                      'functions service_role can execute: ' || jsonb_array_length(pg_temp.fn_sr65()));
 END $c$;
 
 -- c08: default privileges are as before the apply.
@@ -92,7 +99,7 @@ BEGIN
   BEGIN
     EXECUTE pg_temp.tx65('rollback');
   EXCEPTION WHEN OTHERS THEN
-    RETURN 'FAIL: rollback ' || SQLSTATE || ' ' || left(SQLERRM, 300);
+    RETURN 'FAIL: rollback ' || SQLSTATE || CASE WHEN SQLERRM LIKE 'ROLLBACK%' THEN ' (its own check)' ELSE '' END;
   END;
   SELECT coalesce(string_agg(x.name, ',' ORDER BY x.name COLLATE "C"), '') INTO bad
     FROM pg_temp.t65_rel x
@@ -115,7 +122,8 @@ BEGIN
     FROM pg_temp.t65_rel x
    WHERE pg_temp.api_acl65(x.name) IS DISTINCT FROM CASE WHEN x.blk IN ('A', 'C') THEN 'authenticated:SELECT' ELSE '' END;
   RETURN pg_temp.pass(bad = '' AND pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before'),
-                      'differs: ' || bad || ' fingerprint ' || (pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before'))::text);
+                      'differs: ' || bad || ' fingerprint ' || CASE WHEN pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before')
+                                                                    THEN 'same' ELSE 'changed' END);
 END $c$;
 
 -- c14: as service_role, SELECT, INSERT, UPDATE and DELETE on each table of block B end in 42501.
@@ -148,7 +156,8 @@ BEGIN
     RETURN 'FAIL: the pre-check ran to its end as ' || who;
   EXCEPTION WHEN OTHERS THEN
     RESET ROLE;
-    RETURN pg_temp.pass(SQLERRM LIKE '4265 pre-check: current_user is mcp_reader, not postgres%', SQLSTATE || ' ' || left(SQLERRM, 200));
+    RETURN pg_temp.pass(SQLERRM LIKE '4265 pre-check: current_user is mcp_reader, not postgres%',
+                        SQLSTATE || CASE WHEN SQLERRM LIKE '4265 pre-check:%' THEN ' (another pre-check refusal)' ELSE '' END);
   END;
 END $c$;
 
@@ -163,16 +172,7 @@ BEGIN
                             'settings', (SELECT count(*) FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('B')));
     RAISE EXCEPTION 'undo-r16';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-r16' THEN o := jsonb_build_object('error', SQLSTATE || ' ' || left(SQLERRM, 200)); END IF;
+    IF SQLERRM <> 'undo-r16' THEN o := jsonb_build_object('error', SQLSTATE); END IF;
   END;
   RETURN o;
 END $c$;
-
--- report only: service_role's effective privileges on storage.objects and storage.buckets (catalogue values)
-CREATE FUNCTION pg_temp.r17_storage() RETURNS jsonb LANGUAGE sql VOLATILE AS $c$
-  SELECT jsonb_build_object(
-    'objects', (SELECT coalesce(jsonb_agg(p ORDER BY p), '[]') FROM unnest(pg_temp.privs65()) p
-                 WHERE pg_catalog.to_regclass('storage.objects') IS NOT NULL AND has_table_privilege('service_role', 'storage.objects'::regclass, p)),
-    'buckets', (SELECT coalesce(jsonb_agg(p ORDER BY p), '[]') FROM unnest(pg_temp.privs65()) p
-                 WHERE pg_catalog.to_regclass('storage.buckets') IS NOT NULL AND has_table_privilege('service_role', 'storage.buckets'::regclass, p)))
-$c$;

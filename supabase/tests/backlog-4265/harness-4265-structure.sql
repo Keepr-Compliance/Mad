@@ -73,7 +73,7 @@ $rv$;
     a2 := (SELECT coalesce(jsonb_agg(jsonb_build_object('rel', l.relation::regclass::text, 'mode', l.mode) ORDER BY l.relation::regclass::text, l.mode), '[]') FROM pg_catalog.pg_locks l WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.relation = ANY (ARRAY[pg_catalog.to_regclass('public.cloud_deal_messages'), pg_catalog.to_regclass('public.cloud_deal_files'), pg_catalog.to_regclass('public.cloud_blobs'), pg_catalog.to_regclass('public.mcp_settings'), pg_catalog.to_regclass('public.mcp_redirect_allowlist'), pg_catalog.to_regclass('public.mcp_oauth_clients'), pg_catalog.to_regclass('public.mcp_authorization_requests'), pg_catalog.to_regclass('public.mcp_connections'), pg_catalog.to_regclass('public.mcp_authorization_codes'), pg_catalog.to_regclass('public.mcp_tokens'), pg_catalog.to_regclass('public.mcp_rate_counters'), pg_catalog.to_regclass('public.mcp_call_log'), pg_catalog.to_regclass('public.cloud_deals'), pg_catalog.to_regclass('public.cloud_deal_parties'), pg_catalog.to_regclass('public.cloud_deal_checklists'), pg_catalog.to_regclass('public.cloud_deal_checklist_items'), pg_catalog.to_regclass('public.cloud_autosave_settings'), pg_catalog.to_regclass('public.member_addons'), pg_catalog.to_regclass('public.mcp_call_log_id_seq')]::oid[]));
     RAISE EXCEPTION 'undo-probe';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-probe' THEN err := SQLSTATE || ' ' || left(SQLERRM, 300); END IF;
+    IF SQLERRM <> 'undo-probe' THEN err := SQLSTATE; END IF;
   END;
   PERFORM set_config('keepr.h4265_probe', jsonb_build_object('before', b, 'after_revoke', a1, 'after_lock', a2, 'error', err,
     'control_seen', coalesce(a2 @> '[{"rel": "cloud_deal_messages", "mode": "AccessShareLock"}]'::jsonb, false),
@@ -364,7 +364,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     RESET ROLE;
     PERFORM pg_temp.clear_claims();
-    IF SQLERRM LIKE 'ROLE %' THEN RETURN SQLERRM; END IF;
+    IF SQLERRM LIKE 'ROLE %' THEN RETURN 'ROLE ' || coalesce(who, '?'); END IF;
     RETURN 'ERR ' || SQLSTATE;
   END;
 END $h$;
@@ -410,7 +410,8 @@ BEGIN
 END $h$;
 -- rows of the A, B and C tables and auth.users that existed before the fixtures. Left out: mcp_settings (the fixtures
 -- set its one row for this call), mcp_rate_counters (a tool call deletes counter windows older than one day, of any
--- bucket), and mcp_authorization_requests rows already expired.
+-- bucket), and mcp_authorization_requests rows already expired. auth.users is hashed on id, email and created_at only:
+-- a sign-in writes other columns of the row.
 CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE sql VOLATILE AS $h$
   SELECT 'cloud_deal_messages'::text, md5(x::text) FROM public.cloud_deal_messages x
   UNION ALL SELECT 'cloud_deal_files', md5(x::text) FROM public.cloud_deal_files x
@@ -428,7 +429,7 @@ CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE s
   UNION ALL SELECT 'cloud_deal_checklist_items', md5(x::text) FROM public.cloud_deal_checklist_items x
   UNION ALL SELECT 'cloud_autosave_settings', md5(x::text) FROM public.cloud_autosave_settings x
   UNION ALL SELECT 'member_addons', md5(x::text) FROM public.member_addons x
-  UNION ALL SELECT 'auth.users', md5(x::text) FROM auth.users x
+  UNION ALL SELECT 'auth.users', md5(concat_ws('|', x.id::text, x.email::text, x.created_at::text)) FROM auth.users x
 $h$;
 CREATE TEMP TABLE t65_pre ON COMMIT DROP AS SELECT * FROM pg_temp.row_hashes65();
 CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS $h$
@@ -438,9 +439,19 @@ CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS 
                           ('cloud_deals'), ('cloud_deal_parties'), ('cloud_deal_checklists'), ('cloud_deal_checklist_items'),
                           ('cloud_autosave_settings'), ('member_addons'), ('auth.users'))
   SELECT jsonb_object_agg(b.t, jsonb_build_object(
-           'before', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t),
            'gone_or_changed', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h))))
     FROM tbls b
+$h$;
+-- result reducers: a call_as answer is either a JSON value or 'ERR <sqlstate> <message>'; only the SQLSTATE is kept
+CREATE FUNCTION pg_temp.state65(v jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'string' AND (v #>> '{}') LIKE 'ERR %' THEN split_part(v #>> '{}', ' ', 2) END
+$h$;
+CREATE FUNCTION pg_temp.short65(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN t ~ '^("[a-z_]+"|[0-9]+)$' THEN t WHEN t LIKE 'ERR %' THEN 'ERR ' || split_part(t, ' ', 2) ELSE 'other' END
+$h$;
+-- the sorted top-level keys of a JSON object (no values)
+CREATE FUNCTION pg_temp.keys65(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'object' THEN (SELECT coalesce(jsonb_agg(k ORDER BY k), '[]') FROM jsonb_object_keys(v) k) END
 $h$;
 
 DO $t0_4265$ BEGIN PERFORM pg_temp.rec('t_fixture_start', to_jsonb(clock_timestamp())); END $t0_4265$;
@@ -772,7 +783,8 @@ $t1$), ('rollback', $t2$-- rollback-20261123160000.sql (generated by supabase/te
 -- Undoes supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql: gives role service_role back the privileges it held on the 18 tables and
 -- 1 sequence before that migration (measured on the test database, 2026-11-24): on each table SELECT, INSERT, UPDATE,
 -- DELETE, TRUNCATE, REFERENCES, TRIGGER and MAINTAIN; on mcp_call_log_id_seq USAGE, SELECT and UPDATE; grantor postgres, no
--- grant option. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
+-- grant option. The restored set is the one recorded for the test database; the pre-check refuses on a server below
+-- PostgreSQL 17. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
 -- post-check hold. Privileges of every other role are unchanged (the post-check compares a fingerprint the pre-check
 -- takes).
 -- lock_timeout 3s is set before the first statement.
@@ -955,7 +967,7 @@ BEGIN
   BEGIN
     EXECUTE pg_temp.tx65('migration');
   EXCEPTION WHEN OTHERS THEN
-    RETURN 'FAIL: second run ' || SQLSTATE || ' ' || left(SQLERRM, 300);
+    RETURN 'FAIL: second run ' || SQLSTATE;
   END;
   again := pg_temp.sr_holds65(ARRAY['A', 'B', 'C']);
   RETURN pg_temp.pass(cardinality(again) = 0, array_to_string(again, ','));
@@ -971,9 +983,12 @@ BEGIN
   sc := pg_temp.j(pg_temp.call_as(NULL, format('SELECT to_jsonb(public.cloud_blob_erase_scrub(%L::uuid, %L::uuid, false, 1000))',
                                                 gen_random_uuid(), pg_temp.s('A')), 'service_role'));
   SELECT x.subject, x.body_text, x.removed_at INTO m FROM public.cloud_deal_messages x WHERE x.id = pg_temp.f('m_inact');
+  -- the claim covers the whole database: its detail is its JSON type and top-level keys only, never a value
   RETURN pg_temp.pass(who = '"service_role"' AND jsonb_typeof(cl) = 'object' AND sc ->> 'state' = 'scrubbed'
                       AND m.subject IS NULL AND m.body_text IS NULL AND m.removed_at IS NOT NULL,
-                      jsonb_build_object('who', who, 'claim', left(cl::text, 200), 'scrub', left(sc::text, 200),
+                      jsonb_build_object('who', pg_temp.short65(who), 'claim_type', jsonb_typeof(cl), 'claim_keys', pg_temp.keys65(cl),
+                                         'claim_sqlstate', pg_temp.state65(cl), 'scrub_state', sc ->> 'state', 'scrub_sqlstate', pg_temp.state65(sc),
+                                         'scrub_counts', jsonb_build_object('scrubbed', sc -> 'scrubbed', 'files', sc -> 'files', 'messages', sc -> 'messages'),
                                          'scrubbed_row', m.removed_at IS NOT NULL AND m.subject IS NULL)::text);
 END $c$;
 
@@ -986,7 +1001,9 @@ BEGIN
   g := pg_temp.getm('K2', pg_temp.s('m_lin'), 1);
   RETURN pg_temp.pass(who = '"anon"' AND l ->> 'ok' = 'true' AND g ->> 'ok' = 'true'
                       AND g -> 'result' -> 'message' ->> 'body_text' = E'Line 1\nLine 2',
-                      jsonb_build_object('who', who, 'list', left(l::text, 160), 'get', left(g::text, 160))::text);
+                      jsonb_build_object('who', pg_temp.short65(who), 'list_ok', l ->> 'ok', 'list_error', l ->> 'error', 'list_sqlstate', pg_temp.state65(l),
+                                         'get_ok', g ->> 'ok', 'get_error', g ->> 'error', 'get_sqlstate', pg_temp.state65(g),
+                                         'body_equal', g -> 'result' -> 'message' ->> 'body_text' = E'Line 1\nLine 2')::text);
 END $c$;
 
 -- c06: as user A (authenticated): a message upload is applied, and A reads A's own rows.
@@ -1001,13 +1018,15 @@ BEGIN
   n_all := (SELECT count(*) FROM public.cloud_deal_messages WHERE owner_user_id = pg_temp.f('A'));
   RETURN pg_temp.pass(who = '"authenticated"' AND r ->> 'ok' = 'true' AND r -> 'results' -> 0 ->> 'status' = 'applied'
                       AND n_own = n_all::text,
-                      jsonb_build_object('who', who, 'upload', left(r::text, 200), 'own', n_own, 'rows', n_all)::text);
+                      jsonb_build_object('who', pg_temp.short65(who), 'upload_ok', r ->> 'ok', 'upload_status', r -> 'results' -> 0 ->> 'status',
+                                         'upload_error', r ->> 'error', 'upload_sqlstate', pg_temp.state65(r), 'own', pg_temp.short65(n_own), 'rows', n_all)::text);
 END $c$;
 
 -- c07: the EXECUTE grants of the functions naming these relations are as before the apply.
 CREATE FUNCTION pg_temp.c07_function_execute() RETURNS text LANGUAGE plpgsql AS $c$
 BEGIN
-  RETURN pg_temp.pass(pg_temp.fn_exec65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'fn_exec_before'), pg_temp.fn_sr65()::text);
+  RETURN pg_temp.pass(pg_temp.fn_exec65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'fn_exec_before'),
+                      'functions service_role can execute: ' || jsonb_array_length(pg_temp.fn_sr65()));
 END $c$;
 
 -- c08: default privileges are as before the apply.
@@ -1024,7 +1043,7 @@ BEGIN
   BEGIN
     EXECUTE pg_temp.tx65('rollback');
   EXCEPTION WHEN OTHERS THEN
-    RETURN 'FAIL: rollback ' || SQLSTATE || ' ' || left(SQLERRM, 300);
+    RETURN 'FAIL: rollback ' || SQLSTATE || CASE WHEN SQLERRM LIKE 'ROLLBACK%' THEN ' (its own check)' ELSE '' END;
   END;
   SELECT coalesce(string_agg(x.name, ',' ORDER BY x.name COLLATE "C"), '') INTO bad
     FROM pg_temp.t65_rel x
@@ -1047,7 +1066,8 @@ BEGIN
     FROM pg_temp.t65_rel x
    WHERE pg_temp.api_acl65(x.name) IS DISTINCT FROM CASE WHEN x.blk IN ('A', 'C') THEN 'authenticated:SELECT' ELSE '' END;
   RETURN pg_temp.pass(bad = '' AND pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before'),
-                      'differs: ' || bad || ' fingerprint ' || (pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before'))::text);
+                      'differs: ' || bad || ' fingerprint ' || CASE WHEN pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before')
+                                                                    THEN 'same' ELSE 'changed' END);
 END $c$;
 
 -- c14: as service_role, SELECT, INSERT, UPDATE and DELETE on each table of block B end in 42501.
@@ -1080,7 +1100,8 @@ BEGIN
     RETURN 'FAIL: the pre-check ran to its end as ' || who;
   EXCEPTION WHEN OTHERS THEN
     RESET ROLE;
-    RETURN pg_temp.pass(SQLERRM LIKE '4265 pre-check: current_user is mcp_reader, not postgres%', SQLSTATE || ' ' || left(SQLERRM, 200));
+    RETURN pg_temp.pass(SQLERRM LIKE '4265 pre-check: current_user is mcp_reader, not postgres%',
+                        SQLSTATE || CASE WHEN SQLERRM LIKE '4265 pre-check:%' THEN ' (another pre-check refusal)' ELSE '' END);
   END;
 END $c$;
 
@@ -1095,19 +1116,10 @@ BEGIN
                             'settings', (SELECT count(*) FROM public.cloud_autosave_settings WHERE user_id = pg_temp.f('B')));
     RAISE EXCEPTION 'undo-r16';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-r16' THEN o := jsonb_build_object('error', SQLSTATE || ' ' || left(SQLERRM, 200)); END IF;
+    IF SQLERRM <> 'undo-r16' THEN o := jsonb_build_object('error', SQLSTATE); END IF;
   END;
   RETURN o;
 END $c$;
-
--- report only: service_role's effective privileges on storage.objects and storage.buckets (catalogue values)
-CREATE FUNCTION pg_temp.r17_storage() RETURNS jsonb LANGUAGE sql VOLATILE AS $c$
-  SELECT jsonb_build_object(
-    'objects', (SELECT coalesce(jsonb_agg(p ORDER BY p), '[]') FROM unnest(pg_temp.privs65()) p
-                 WHERE pg_catalog.to_regclass('storage.objects') IS NOT NULL AND has_table_privilege('service_role', 'storage.objects'::regclass, p)),
-    'buckets', (SELECT coalesce(jsonb_agg(p ORDER BY p), '[]') FROM unnest(pg_temp.privs65()) p
-                 WHERE pg_catalog.to_regclass('storage.buckets') IS NOT NULL AND has_table_privilege('service_role', 'storage.buckets'::regclass, p)))
-$c$;
 -- ================================================================ baselines and the controls once before the apply
 DO $before4265$
 DECLARE res text; base jsonb := '{}';
@@ -1120,28 +1132,28 @@ BEGIN
       res := pg_temp.c01_privileges();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     base := base || jsonb_build_object('c01_privileges', res);
     BEGIN
       res := pg_temp.c02_statements_a_c();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     base := base || jsonb_build_object('c02_statements_a_c', res);
     BEGIN
       res := pg_temp.c14_statements_b();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     base := base || jsonb_build_object('c14_statements_b', res);
     BEGIN
       res := pg_temp.c15_sequence();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     base := base || jsonb_build_object('c15_sequence', res);
   PERFORM pg_temp.rec('neg_before', base);
@@ -1375,7 +1387,7 @@ BEGIN
       res := pg_temp.c01_privileges();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     base := base || jsonb_build_object('c01_privileges', res);
   PERFORM pg_temp.rec('controls', base);
@@ -1391,19 +1403,21 @@ BEGIN
       res := pg_temp.c01_privileges();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     o := o || jsonb_build_object('c01_privileges', res);
     BEGIN
       res := pg_temp.c14_statements_b();
       RAISE EXCEPTION 'undo-case';
     EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 400); END IF;
+      IF SQLERRM <> 'undo-case' THEN res := 'ERROR ' || SQLSTATE; END IF;
     END;
     o := o || jsonb_build_object('c14_statements_b', res);
     RAISE EXCEPTION 'undo-mutant';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+    IF SQLERRM <> 'undo-mutant' THEN
+      o := o || jsonb_build_object('error', CASE WHEN SQLERRM = 'MUTATION NOT APPLIED IN DB' THEN 'MUTATION NOT APPLIED IN DB' ELSE 'SQLSTATE ' || SQLSTATE END);
+    END IF;
   END;
   PERFORM pg_temp.rec('mutant:M01_mcp_settings_left', o || jsonb_build_object('applied', applied, 'want', 'red'));
   IF pg_temp.fingerprint65() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
@@ -1418,7 +1432,9 @@ BEGIN
     IF applied IS NOT TRUE THEN RAISE EXCEPTION 'MUTATION NOT APPLIED IN DB'; END IF;
     RAISE EXCEPTION 'undo-mutant';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-mutant' THEN o := o || jsonb_build_object('error', SQLERRM); END IF;
+    IF SQLERRM <> 'undo-mutant' THEN
+      o := o || jsonb_build_object('error', CASE WHEN SQLERRM = 'MUTATION NOT APPLIED IN DB' THEN 'MUTATION NOT APPLIED IN DB' ELSE 'SQLSTATE ' || SQLSTATE END);
+    END IF;
   END;
   PERFORM pg_temp.rec('mutant:N01_noop_probe', o || jsonb_build_object('applied', applied, 'want', 'not_applied'));
   IF pg_temp.fingerprint65() IS DISTINCT FROM (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'baseline_fp') THEN
@@ -1437,7 +1453,8 @@ BEGIN
 -- Undoes supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql: gives role service_role back the privileges it held on the 18 tables and
 -- 1 sequence before that migration (measured on the test database, 2026-11-24): on each table SELECT, INSERT, UPDATE,
 -- DELETE, TRUNCATE, REFERENCES, TRIGGER and MAINTAIN; on mcp_call_log_id_seq USAGE, SELECT and UPDATE; grantor postgres, no
--- grant option. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
+-- grant option. The restored set is the one recorded for the test database; the pre-check refuses on a server below
+-- PostgreSQL 17. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
 -- post-check hold. Privileges of every other role are unchanged (the post-check compares a fingerprint the pre-check
 -- takes).
 -- lock_timeout 3s is set before the first statement.
@@ -1521,7 +1538,7 @@ $post4265r$;
 $rbq$;
     PERFORM pg_temp.rec('rollback', to_jsonb('ok'::text));
   EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_temp.rec('rollback', to_jsonb('ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 900)));
+    PERFORM pg_temp.rec('rollback', to_jsonb('ERROR ' || SQLSTATE || CASE WHEN SQLERRM LIKE 'ROLLBACK%' THEN ' (its own check)' ELSE '' END));
   END;
 END
 $rb4265$;
@@ -1533,7 +1550,6 @@ BEGIN
     'other_roles_same', pg_temp.other_acl65() = (SELECT v #>> '{}' FROM pg_temp.t_out WHERE k = 'other_acl_before'),
     'ledger', (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '20261123160000')));
   PERFORM pg_temp.rec('report_cascade', pg_temp.r16_cascade());
-  PERFORM pg_temp.rec('report_storage', pg_temp.r17_storage());
   PERFORM pg_temp.rec('foreign_rows', pg_temp.foreign_rows65());
   PERFORM pg_temp.rec('t_end', to_jsonb(clock_timestamp()));
   RAISE EXCEPTION 'H4265_RESULT %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.t_out);

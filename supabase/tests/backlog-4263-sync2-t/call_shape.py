@@ -285,7 +285,13 @@ def gen_check(here, classes):
     """for a gen.py check: print the result, return True when the folder is clean. The classes passed in must equal
     the README's 'Call classes' table, so a class is never changed in the code alone."""
     import os
+    import importlib.util as _ilu
     probs = folder(here, classes)
+    # BACKLOG-4265: the result-detail rule, for folders whose ENABLED entry in result_detail.py is True
+    _rd = _ilu.spec_from_file_location('result_detail4265', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'result_detail.py'))
+    result_detail = _ilu.module_from_spec(_rd)
+    _rd.loader.exec_module(result_detail)
+    probs += result_detail.check(here)
     table = readme_classes(os.path.join(here, 'README.md'))
     if table != classes:
         probs.append('README.md call classes differ from the check\'s: %s' % sorted(

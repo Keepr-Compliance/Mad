@@ -6,11 +6,20 @@
  *    no other change; its pre-check and post-check.
  * 2. The rollback file: grants back exactly the measured prior privileges, nothing more.
  * 3. The prod post-check of 20261123160000 pins service_role holding nothing on each of the 19 relations (MUST HOLD).
- * 4. Tables created from version 20261123000000 on: each one, and the identity sequence of each identity column, is
- *    named in a REVOKE ALL ... FROM ... service_role of the same or a later migration, or is in EXEMPT.
- * 5. Migrations after 20261123160000 do not give service_role (directly, through PUBLIC, through a role membership or
- *    through default privileges) a privilege on the 19 relations, or EXECUTE on a function that writes one of them.
- * 4 and 5 are checked against a corpus of shapes first, each required red or green.
+ * 4. Relations created from version 20261123000000 on (see `created`): each one, and each sequence of a serial or
+ *    identity column, is named in a REVOKE ALL ... FROM ... service_role of the same or a later migration (under its
+ *    name or a later name), or is in EXEMPT. A CREATE TABLE the parser cannot read is red.
+ * 5. In migrations after 20261123160000, no statement (see `regrants`): grants service_role (directly, through PUBLIC,
+ *    through a role membership or through default privileges) a privilege on the 19 relations; grants EXECUTE on a
+ *    function whose body writes one of them (functions in SERVICE_ROLE_FUNCTIONS excepted); changes the owner of one of
+ *    them or of a function in SERVICE_ROLE_FUNCTIONS; or builds a grant to service_role by concatenation in a dollar body.
+ *    It cannot see a role name assembled from pieces, or SQL read from a table at run time.
+ * 6. In migrations after 20261123160000, every new SECURITY DEFINER function whose body names one of the 19 relations is
+ *    revoked in the same migration from PUBLIC and from service_role (from PUBLIC only for SERVICE_ROLE_FUNCTIONS), and
+ *    every new view or materialized view over them is revoked from service_role: views over these tables must carry the
+ *    same revoke.
+ * 7. The result-detail rule over backlog-4265's own SQL (R1, R2a and R2b of backlog-4263-sync2-t/result_detail.py).
+ * 4 to 7 are checked against a corpus of shapes first, each required red or green.
  */
 
 import { readFileSync, readdirSync } from 'fs';
@@ -131,7 +140,9 @@ export function writers(texts: string[]): Set<string> {
   return out;
 }
 
-/** findings for statements that give service_role something on the 19 relations or EXECUTE on a writer of them */
+/** findings for statements that give service_role something on the 19 relations or EXECUTE on a writer of them,
+ * change the owner of one of them or of a function in SERVICE_ROLE_FUNCTIONS, or build a grant to service_role by
+ * concatenation inside a dollar-quoted body */
 export function regrants(text: string, writerSet: Set<string>): string[] {
   const bad: string[] = [];
   for (const st of statements(text)) {
@@ -155,6 +166,12 @@ export function regrants(text: string, writerSet: Set<string>): string[] {
       if (hitsRole(m[2])) bad.push(s);
       continue;
     }
+    m = /^alter\s+(table|sequence|view|materialized\s+view|function|routine)\s+(if\s+exists\s+)?(only\s+)?([\w.]+)\s*(\([^)]*\))?\s+owner\s+to\s+(\w+)$/.exec(s);
+    if (m) {
+      const name = m[4].split('.').pop()!;
+      if (SENSITIVE.has(name) || SERVICE_ROLE_FUNCTIONS.includes(name)) bad.push(s);
+      continue;
+    }
     m = /^grant\s+([\w, ]+?)\s+to\s+(.+)$/.exec(s);
     if (m && !/\son\s/.test(` ${m[1]} `)) {
       if (grantees(m[2]).includes('service_role')) bad.push(s);
@@ -166,51 +183,183 @@ export function regrants(text: string, writerSet: Set<string>): string[] {
       for (const x of nb.matchAll(dyn)) {
         if (RELS.some((r) => new RegExp(`\\b${r}\\b`).test(x[0])) || /\ball tables\b/.test(x[0])) bad.push(`dynamic: ${x[0].slice(0, 160)}`);
       }
+      // a grant assembled by concatenation or format(): red whenever service_role is in the assembled text
+      const cat = /\bgrant\b[^;]{0,400}?\bservice_role\b/g;
+      for (const x of nb.matchAll(cat)) {
+        const around = nb.slice(Math.max(0, x.index! - 40), x.index! + x[0].length);
+        if (/\|\||\bformat\s*\(/.test(around)) bad.push(`concatenated: ${x[0].slice(0, 160)}`);
+      }
+    }
+  }
+  return [...new Set(bad)];
+}
+
+/** names (function name, view name) whose REVOKE in this text includes every role in `need` */
+function revokedNames(text: string, kind: 'function' | 'relation'): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const st of statements(text)) {
+    const s = norm(st.code);
+    const m = kind === 'function'
+      ? /^revoke\s+(all(\s+privileges)?|execute)\s+on\s+(function|routine)\s+(.+?)\s+from\s+(.+?)(\s+(cascade|restrict))?$/.exec(s)
+      : /^revoke\s+all(\s+privileges)?\s+on\s+(table\s+)?(.+?)\s+from\s+(.+?)(\s+(cascade|restrict))?$/.exec(s);
+    if (!m) continue;
+    const objs = kind === 'function' ? commas(m[4]).map((f) => f.replace(/\(.*$/, '').trim()) : commas(m[3]).map((o) => o.trim());
+    const roles = (kind === 'function' ? m[5] : m[4]).split(',').map((x) => x.trim());
+    for (const o of objs) {
+      const cur = out.get(o) ?? new Set<string>();
+      roles.forEach((r) => cur.add(r));
+      out.set(o, cur);
+    }
+  }
+  return out;
+}
+
+/** SECURITY DEFINER functions and views over the 19 relations in one migration, without the revoke they need */
+export function definersAndViews(text: string): string[] {
+  const bad: string[] = [];
+  const fnRevoked = revokedNames(text, 'function');
+  const relRevoked = revokedNames(text, 'relation');
+  const names = new RegExp(`\\b(${RELS.join('|')})\\b`, 'i');
+  for (const st of statements(text)) {
+    const f = /^create\s+(or\s+replace\s+)?function\s+(public\.)?("?)(\w+)\3\s*\(/i.exec(st.code);
+    if (f) {
+      const outside = st.code.replace(/\$([A-Za-z_][A-Za-z_0-9]*)?\$[\s\S]*?\$\1\$/g, ' ');
+      if (/\bsecurity\s+definer\b/i.test(outside) && st.bodies.some((b) => names.test(b))) {
+        const name = f[4].toLowerCase();
+        const roles = fnRevoked.get(name) ?? new Set<string>();
+        const need = SERVICE_ROLE_FUNCTIONS.includes(name) ? ['public'] : ['public', 'service_role'];
+        const miss = need.filter((r) => !roles.has(r));
+        if (miss.length) bad.push(`function ${name}: no revoke from ${miss.join(', ')}`);
+      }
+      continue;
+    }
+    const v = /^create\s+(or\s+replace\s+)?(materialized\s+)?view\s+(if\s+not\s+exists\s+)?(public\.)?("?)(\w+)\5\b/i.exec(st.code);
+    if (v && names.test(st.code.slice(v[0].length))) {
+      const name = v[6].toLowerCase();
+      if (!(relRevoked.get(name) ?? new Set<string>()).has('service_role')) bad.push(`view ${name}: no revoke from service_role`);
     }
   }
   return bad;
 }
 
-/** relations created in the given files (CREATE TABLE, CREATE SEQUENCE, identity sequences) */
-function created(text: string): string[] {
+/** relations created in one migration: tables (also AS, PARTITION OF, UNLOGGED, SELECT INTO, inside a DO body),
+ * materialized views, sequences, and the sequences of serial and identity columns (also added by ALTER TABLE);
+ * temporary tables are left out; a CREATE TABLE this cannot parse is returned as 'unparsed: ...' */
+export function created(text: string): string[] {
   const out: string[] = [];
-  for (const st of statements(text)) {
-    const m = /^create\s+table\s+(if\s+not\s+exists\s+)?(public\.)?("?)(\w+)\3\s*\(([\s\S]*)\)\s*$/i.exec(st.code);
-    if (m) {
-      const t = m[4].toLowerCase();
+  const name = (n: string) => n.replace(/"/g, '').split('.').pop()!.toLowerCase();
+  const tableStmt = (code: string) => {
+    const head = /^create\s+(global\s+|local\s+)?(temp|temporary|unlogged)?\s*table\s+(if\s+not\s+exists\s+)?((?:"?\w+"?\.)?"?\w+"?)\s*/i.exec(code);
+    if (!head) return;
+    if (head[2] && /^temp/i.test(head[2])) return;
+    const t = name(head[4]);
+    const rest = code.slice(head[0].length);
+    if (/^\(/.test(rest)) {
       out.push(t);
-      for (const col of commas(m[5])) {
-        const c = /^("?)(\w+)\1\s+\w+.*\bgenerated\s+(always|by\s+default)\s+as\s+identity\b/i.exec(col.trim());
-        if (c) out.push(`${t}_${c[2].toLowerCase()}_seq`);
+      for (const col of commas(rest.slice(1, rest.lastIndexOf(')')))) {
+        const c = /^("?)(\w+)\1\s+(\w+)([\s\S]*)$/i.exec(col.trim());
+        if (!c) continue;
+        if (/^(small|big)?serial$/i.test(c[3])) out.push(`${t}_${c[2].toLowerCase()}_seq`);
+        else if (/\bgenerated\s+(always|by\s+default)\s+as\s+identity\b/i.test(c[4])) out.push(`${t}_${c[2].toLowerCase()}_seq`);
+      }
+    } else if (/^(partition\s+of\b|as\b|of\b|\(\s*like\b)/i.test(rest) || /^with\b/i.test(rest)) out.push(t);
+    else out.push(`unparsed: ${code.slice(0, 80)}`);
+  };
+  const scan = (code: string) => {
+    if (/^create\s+(global\s+|local\s+)?(temp|temporary|unlogged)?\s*table\b/i.test(code)) tableStmt(code);
+    const mv = /^create\s+materialized\s+view\s+(if\s+not\s+exists\s+)?((?:"?\w+"?\.)?"?\w+"?)/i.exec(code);
+    if (mv) out.push(name(mv[2]));
+    const q = /^create\s+(temp\s+|temporary\s+)?sequence\s+(if\s+not\s+exists\s+)?((?:"?\w+"?\.)?"?\w+"?)/i.exec(code);
+    if (q && !q[1]) out.push(name(q[3]));
+    const si = /^select\b[\s\S]*?\binto\s+(unlogged\s+|temp\s+|temporary\s+)?(table\s+)?((?:"?\w+"?\.)?"?\w+"?)\s+from\b/i.exec(code);
+    if (si && !/^temp/i.test((si[1] ?? '').trim())) out.push(name(si[3]));
+    const alt = /^alter\s+table\s+(if\s+exists\s+)?(only\s+)?((?:"?\w+"?\.)?"?\w+"?)\s+([\s\S]*)$/i.exec(code);
+    if (alt) {
+      const t = name(alt[3]);
+      for (const part of commas(alt[4])) {
+        const add = /^add\s+(column\s+)?(if\s+not\s+exists\s+)?("?)(\w+)\3\s+(\w+)([\s\S]*)$/i.exec(part.trim());
+        if (add && (/^(small|big)?serial$/i.test(add[5]) || /\bgenerated\s+(always|by\s+default)\s+as\s+identity\b/i.test(add[6]))) {
+          out.push(`${t}_${add[4].toLowerCase()}_seq`);
+        }
+        const gen = /^alter\s+(column\s+)?("?)(\w+)\2\s+add\s+generated\s+(always|by\s+default)\s+as\s+identity\b/i.exec(part.trim());
+        if (gen) out.push(`${t}_${gen[3].toLowerCase()}_seq`);
       }
     }
-    const q = /^create\s+sequence\s+(if\s+not\s+exists\s+)?(public\.)?("?)(\w+)\3\b/i.exec(st.code);
-    if (q) out.push(q[4].toLowerCase());
+  };
+  for (const st of statements(text)) {
+    scan(st.code);
+    if (/^do\b/i.test(st.code)) {
+      // a table created by dynamic SQL in a DO body: its text, with the quotes of string literals removed
+      for (const b of st.bodies) for (const inner of statements(b.replace(/''/g, "'").replace(/'/g, ' '))) {
+        const k = inner.code.search(/\bcreate\s+((global|local)\s+)?((temp|temporary|unlogged)\s+)?table\b/i);
+        if (k >= 0) scan(inner.code.slice(k));
+      }
+    }
   }
   return out;
 }
 
-/** relations named in a REVOKE ALL ... FROM ... service_role */
+/** relations named in a REVOKE ALL ... FROM ... service_role, and the renames in one migration (old -> new) */
 function revokedFromServiceRole(text: string): Set<string> {
   const out = new Set<string>();
   for (const st of statements(text)) {
-    const m = /^revoke\s+all(\s+privileges)?\s+on\s+(table\s+|sequence\s+)?(.+?)\s+from\s+(.+?)(\s+(cascade|restrict))?$/.exec(norm(st.code));
+    const m = /^revoke\s+all(\s+privileges)?\s+on\s+(table\s+|sequence\s+|materialized\s+view\s+)?(.+?)\s+from\s+(.+?)(\s+(cascade|restrict))?$/.exec(norm(st.code));
     if (m && m[4].split(',').map((x) => x.trim()).includes('service_role')) for (const o of commas(m[3])) out.add(o.trim());
   }
   return out;
 }
+function renames(text: string): [string, string][] {
+  const out: [string, string][] = [];
+  for (const st of statements(text)) {
+    const m = /^alter\s+(table|sequence|materialized\s+view)\s+(if\s+exists\s+)?(\w+)\s+rename\s+to\s+(\w+)$/.exec(norm(st.code));
+    if (m) out.push([m[3], m[4]]);
+  }
+  return out;
+}
 
-/** future-table guard over ordered [version, text] pairs; returns the uncovered relations */
+/** future-table guard over ordered [version, text] pairs; returns the uncovered relations. A relation renamed later
+ * keeps its cover: a revoke under any of its names, in the same or a later migration, covers it. */
 export function uncovered(files: [string, string][], exempt: Record<string, string>): string[] {
   const bad: string[] = [];
   files.forEach(([v, text], idx) => {
     if (v < '20261123000000') return;
     for (const t of created(text)) {
+      if (t.startsWith('unparsed: ')) { bad.push(`${v} ${t}`); continue; }
       if (t in exempt) continue;
-      const covered = files.slice(idx).some(([, later]) => revokedFromServiceRole(later).has(t));
+      const names = new Set([t]);
+      for (const [, later] of files.slice(idx)) for (const [o, n] of renames(later)) if (names.has(o)) names.add(n);
+      const covered = files.slice(idx).some(([, later]) => [...revokedFromServiceRole(later)].some((r) => names.has(r)));
       if (!covered) bad.push(`${v} ${t}`);
     }
   });
+  return bad;
+}
+
+/** the result-detail rule (R1, R2a, R2b of supabase/tests/backlog-4263-sync2-t/result_detail.py), for one SQL text */
+export function detailFindings(sql: string): string[] {
+  const t = sql.replace(/--[^\n]*/g, (x) => ' '.repeat(x.length)).replace(/'(?:[^']|'')*'/g, (x) => `'${' '.repeat(x.length - 2)}'`);
+  const bad: string[] = [];
+  for (const m of t.matchAll(/\bSQLERRM\b/gi)) {
+    if (!/^\s*(=|<>|!=|(NOT\s+)?I?LIKE)\s*'/i.test(t.slice(m.index! + m[0].length))) bad.push(`R1 at ${m.index}`);
+  }
+  for (const body of t.split(/\$[A-Za-z_][A-Za-z_0-9]*\$/)) {
+    const rows = new Set<string>();
+    for (const d of body.matchAll(/\bDECLARE\b([\s\S]*?)\bBEGIN\b/gi)) {
+      for (const item of d[1].split(';')) {
+        const v = /^\s*([a-z_]\w*)\s+(jsonb|json|record|\w+%rowtype)\b/i.exec(item);
+        if (v) rows.add(v[1].toLowerCase());
+      }
+    }
+    for (const call of body.matchAll(/pg_temp\.(pass|rec)\s*\(|RETURN\s+'\s*/gi)) {
+      const seg = body.slice(call.index!, call.index! + 600).split(';')[0];
+      for (const c of seg.matchAll(/\b([a-z_]\w*)\s*::\s*text\b/gi)) {
+        if (rows.has(c[1].toLowerCase()) && seg[c.index! - 1] !== '.') bad.push(`R2a ${c[0]}`);
+      }
+      for (const c of seg.matchAll(/(\w*)\s*\(([^()]*)\)\s*::\s*text\b/gi)) {
+        if (!/^(jsonb_build_object|json_build_object|count|cardinality|length|jsonb_array_length|jsonb_typeof|md5|has_\w+_privilege)$/i.test(c[1])) bad.push(`R2b ${c[0].slice(0, 60)}`);
+      }
+    }
+  }
   return bad;
 }
 
@@ -310,6 +459,19 @@ describe('BACKLOG-4265 future-table guard', () => {
     ['a sequence never revoked', [['20261124000000', 'CREATE SEQUENCE IF NOT EXISTS public.s1 AS bigint;']], ['20261124000000 s1']],
     ['a quoted, unqualified name', [['20261124000000', 'CREATE TABLE "t1" (id uuid);\nREVOKE ALL ON TABLE "t1" FROM "service_role";']], []],
     ['before 20261123000000 is out of scope', [['20261122000000', 'CREATE TABLE public.t1 (id uuid);']], []],
+    ['CREATE TABLE AS', [['20261124000000', 'CREATE TABLE public.t1 AS SELECT 1 AS x;']], ['20261124000000 t1']],
+    ['PARTITION OF', [['20261124000000', "CREATE TABLE public.t1_p PARTITION OF public.t1 FOR VALUES IN ('a');"]], ['20261124000000 t1_p']],
+    ['UNLOGGED', [['20261124000000', 'CREATE UNLOGGED TABLE public.t1 (id uuid);']], ['20261124000000 t1']],
+    ['a temporary table is left out', [['20261124000000', 'CREATE TEMP TABLE t1 (id uuid);\nCREATE TEMPORARY TABLE t2 AS SELECT 1;']], []],
+    ['SELECT INTO', [['20261124000000', 'SELECT 1 AS x INTO public.t1 FROM public.t0;']], ['20261124000000 t1']],
+    ['inside a DO body', [['20261124000000', "DO $x$ BEGIN EXECUTE 'CREATE TABLE public.t1 (id uuid)'; END $x$;"]], ['20261124000000 t1']],
+    ['a serial column', [['20261124000000', 'CREATE TABLE public.t1 (id bigserial PRIMARY KEY);\nREVOKE ALL ON TABLE public.t1 FROM service_role;']], ['20261124000000 t1_id_seq']],
+    ['identity added by ALTER ... ADD COLUMN', [['20261124000000', 'ALTER TABLE public.t9 ADD COLUMN n bigint GENERATED BY DEFAULT AS IDENTITY;']], ['20261124000000 t9_n_seq']],
+    ['identity added by ALTER COLUMN ... ADD GENERATED', [['20261124000000', 'ALTER TABLE public.t9 ALTER COLUMN n ADD GENERATED ALWAYS AS IDENTITY;']], ['20261124000000 t9_n_seq']],
+    ['a materialized view', [['20261124000000', 'CREATE MATERIALIZED VIEW public.v1 AS SELECT 1;']], ['20261124000000 v1']],
+    ['renamed, revoked under the new name', [['20261124000000', 'CREATE TABLE public.t1 (id uuid);'], ['20261124000001', 'ALTER TABLE public.t1 RENAME TO t2;\nREVOKE ALL ON TABLE public.t2 FROM service_role;']], []],
+    ['renamed, revoked under the old name first', [['20261124000000', 'CREATE TABLE public.t1 (id uuid);\nREVOKE ALL ON TABLE public.t1 FROM service_role;\nALTER TABLE public.t1 RENAME TO t2;']], []],
+    ['a CREATE TABLE the parser cannot read', [['20261124000000', 'CREATE TABLE public.t1 OF some_type;']], ['20261124000000 t1']],
   ];
   it.each(corpus)('corpus: %s', (_name, files, want) => {
     expect(uncovered(files, {})).toEqual(want);
@@ -340,6 +502,10 @@ describe('BACKLOG-4265 no later privilege on the 19 relations for service_role',
     ['a role membership', 'GRANT authenticated TO service_role;'],
     ['EXECUTE on a function that writes one of them', 'GRANT EXECUTE ON FUNCTION public._mcp_bump(text, interval, integer) TO service_role;'],
     ['dynamic SQL in a DO block', "DO $x$ BEGIN EXECUTE 'GRANT SELECT ON public.cloud_deals TO service_role'; END $x$;"],
+    ['OWNER TO on one of them', 'ALTER TABLE public.cloud_blobs OWNER TO service_role;'],
+    ['OWNER TO on a service_role function', 'ALTER FUNCTION public.cloud_blob_erase_scrub(uuid, uuid, boolean, integer) OWNER TO someone;'],
+    ['a grant built by concatenation', "DO $x$ DECLARE t text := 'x'; BEGIN EXECUTE 'GRANT SELECT ON public.' || t || ' TO service_role'; END $x$;"],
+    ['a grant built by format()', "DO $x$ BEGIN EXECUTE format('GRANT SELECT ON %I TO service_role', 'x'); END $x$;"],
   ];
   const green: [string, string][] = [
     ['migration 20261123160000 itself', MIG],
@@ -357,9 +523,62 @@ describe('BACKLOG-4265 no later privilege on the 19 relations for service_role',
   });
   it.each(red)('red: %s', (_n, sql) => expect(regrants(sql, W)).toHaveLength(1));
   it.each(green)('green: %s', (_n, sql) => expect(regrants(sql, W)).toEqual([]));
+  it('OWNER TO on an unrelated table stays green', () => expect(regrants('ALTER TABLE public.unrelated OWNER TO postgres;', W)).toEqual([]));
   it('no migration after 20261123160000 has such a statement', () => {
     const later = LANE_FILES.filter(([v]) => v > VERSION);
     expect(later.length).toBeGreaterThan(0);
     expect(later.flatMap(([v, t]) => regrants(t, W).map((x) => `${v}: ${x}`))).toEqual([]);
   });
+});
+
+describe('BACKLOG-4265 SECURITY DEFINER functions and views over the 19 relations', () => {
+  const fn = (opts: string, body: string, after = '') =>
+    `CREATE OR REPLACE FUNCTION public.f1() RETURNS bigint LANGUAGE sql ${opts} SET search_path = '' AS $f$ ${body} $f$;\n${after}`;
+  const corpus: [string, string, number][] = [
+    ['definer reading a content table, no revoke', fn('SECURITY DEFINER', 'SELECT count(*) FROM public.cloud_deal_messages'), 1],
+    ['definer revoked from PUBLIC only', fn('SECURITY DEFINER', 'SELECT count(*) FROM public.mcp_tokens', 'REVOKE ALL ON FUNCTION public.f1() FROM PUBLIC;'), 1],
+    ['definer revoked from PUBLIC and service_role', fn('SECURITY DEFINER', 'SELECT count(*) FROM public.mcp_tokens', 'REVOKE ALL ON FUNCTION public.f1() FROM PUBLIC, anon, authenticated, service_role;'), 0],
+    ['definer revoked with REVOKE EXECUTE', fn('SECURITY DEFINER', 'SELECT count(*) FROM public.cloud_deals', 'REVOKE EXECUTE ON FUNCTION public.f1() FROM PUBLIC, service_role;'), 0],
+    ['invoker reading a content table', fn('SECURITY INVOKER', 'SELECT count(*) FROM public.cloud_deal_messages'), 0],
+    ['definer naming no relation of the 19', fn('SECURITY DEFINER', 'SELECT count(*) FROM public.other_table'), 0],
+    ['a function service_role runs, revoked from PUBLIC', `CREATE OR REPLACE FUNCTION public.cloud_blob_erase_scrub(p uuid) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $f$ BEGIN UPDATE public.cloud_deal_files SET removed_at = now(); RETURN '{}'; END $f$;
+REVOKE ALL ON FUNCTION public.cloud_blob_erase_scrub(uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_blob_erase_scrub(uuid) TO service_role;`, 0],
+    ['a view over a content table, no revoke', 'CREATE VIEW public.v1 AS SELECT id FROM public.cloud_deal_messages;', 1],
+    ['a materialized view over one of them, no revoke', 'CREATE MATERIALIZED VIEW public.v1 AS SELECT id FROM public.mcp_tokens;', 1],
+    ['a view with its revoke', 'CREATE OR REPLACE VIEW public.v1 AS SELECT id FROM public.cloud_deals;\nREVOKE ALL ON TABLE public.v1 FROM PUBLIC, anon, authenticated, service_role;', 0],
+    ['a view over another table', 'CREATE VIEW public.v1 AS SELECT 1 FROM public.other_table;', 0],
+  ];
+  it.each(corpus)('corpus: %s', (_n, sql, want) => expect(definersAndViews(sql)).toHaveLength(want));
+  it('no migration after 20261123160000 has one (and 20261123170000, a definer over mcp tables, is seen and revoked)', () => {
+    const later = LANE_FILES.filter(([v]) => v > VERSION);
+    expect(later.flatMap(([v, t]) => definersAndViews(t).map((x) => `${v}: ${x}`))).toEqual([]);
+    const cn = later.find(([v]) => v === '20261123170000')![1];
+    expect(definersAndViews(cn.replace(/REVOKE ALL ON FUNCTION public\.mcp_exchange_code\([^)]*\) FROM PUBLIC, anon, authenticated, service_role;/, ''))).toHaveLength(1);
+  });
+});
+
+describe('BACKLOG-4265 result-detail rule on backlog-4265', () => {
+  const DIR = 'supabase/tests/backlog-4265';
+  const composed = ['supabase/tests/backlog-4263-sync2-t/lib/helpers.sql', 'supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql'].map(read);
+  const own = (p: string) => composed.reduce((t, c) => t.split(c).join(''), read(p));
+  it.each(['lib/controls.sql', 'lib/helpers.sql', 'harness-4265.sql', 'harness-4265-structure.sql', 'harness-4265-fixtures.sql',
+    `rollback-${VERSION}.sql`])('%s: no finding', (f) => expect(detailFindings(own(`${DIR}/${f}`))).toEqual([]));
+  it('the rule is switched on for backlog-4265 only in the shared checker', () => {
+    const rd = read('supabase/tests/backlog-4263-sync2-t/result_detail.py');
+    expect(rd).toContain("'backlog-4265': True,");
+    expect((rd.match(/^ {4}'backlog-[\w-]+': (True|False),$/gm) ?? []).filter((l) => l.endsWith('True,'))).toEqual(["    'backlog-4265': True,"]);
+    expect(read('supabase/tests/backlog-4263-sync2-t/call_shape.py')).toContain('probs += result_detail.check(here)');
+  });
+  const red: [string, string][] = [
+    ['a JSON variable cast to text', "CREATE FUNCTION pg_temp.c() RETURNS text LANGUAGE plpgsql AS $c$ DECLARE cl jsonb; BEGIN RETURN pg_temp.pass(true, jsonb_build_object('claim', left(cl::text, 200))::text); END $c$;"],
+    ['SQLERRM recorded', "DO $x$ BEGIN NULL; EXCEPTION WHEN OTHERS THEN res := 'E ' || SQLERRM; END $x$;"],
+    ['a function result cast to text', "CREATE FUNCTION pg_temp.c() RETURNS text LANGUAGE plpgsql AS $c$ BEGIN RETURN pg_temp.pass(true, public.answer()::text); END $c$;"],
+  ];
+  const green: [string, string][] = [
+    ['type and keys only', "CREATE FUNCTION pg_temp.c() RETURNS text LANGUAGE plpgsql AS $c$ DECLARE cl jsonb; BEGIN RETURN pg_temp.pass(true, jsonb_build_object('type', jsonb_typeof(cl))::text); END $c$;"],
+    ['SQLERRM compared', "DO $x$ BEGIN NULL; EXCEPTION WHEN OTHERS THEN IF SQLERRM <> 'undo' THEN res := SQLSTATE; END IF; END $x$;"],
+  ];
+  it.each(red)('red: %s', (_n, sql) => expect(detailFindings(sql).length).toBeGreaterThan(0));
+  it.each(green)('green: %s', (_n, sql) => expect(detailFindings(sql)).toEqual([]));
 });

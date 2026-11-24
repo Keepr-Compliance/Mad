@@ -73,7 +73,7 @@ $rv$;
     a2 := (SELECT coalesce(jsonb_agg(jsonb_build_object('rel', l.relation::regclass::text, 'mode', l.mode) ORDER BY l.relation::regclass::text, l.mode), '[]') FROM pg_catalog.pg_locks l WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.relation = ANY (ARRAY[pg_catalog.to_regclass('public.cloud_deal_messages'), pg_catalog.to_regclass('public.cloud_deal_files'), pg_catalog.to_regclass('public.cloud_blobs'), pg_catalog.to_regclass('public.mcp_settings'), pg_catalog.to_regclass('public.mcp_redirect_allowlist'), pg_catalog.to_regclass('public.mcp_oauth_clients'), pg_catalog.to_regclass('public.mcp_authorization_requests'), pg_catalog.to_regclass('public.mcp_connections'), pg_catalog.to_regclass('public.mcp_authorization_codes'), pg_catalog.to_regclass('public.mcp_tokens'), pg_catalog.to_regclass('public.mcp_rate_counters'), pg_catalog.to_regclass('public.mcp_call_log'), pg_catalog.to_regclass('public.cloud_deals'), pg_catalog.to_regclass('public.cloud_deal_parties'), pg_catalog.to_regclass('public.cloud_deal_checklists'), pg_catalog.to_regclass('public.cloud_deal_checklist_items'), pg_catalog.to_regclass('public.cloud_autosave_settings'), pg_catalog.to_regclass('public.member_addons'), pg_catalog.to_regclass('public.mcp_call_log_id_seq')]::oid[]));
     RAISE EXCEPTION 'undo-probe';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM <> 'undo-probe' THEN err := SQLSTATE || ' ' || left(SQLERRM, 300); END IF;
+    IF SQLERRM <> 'undo-probe' THEN err := SQLSTATE; END IF;
   END;
   PERFORM set_config('keepr.h4265_probe', jsonb_build_object('before', b, 'after_revoke', a1, 'after_lock', a2, 'error', err,
     'control_seen', coalesce(a2 @> '[{"rel": "cloud_deal_messages", "mode": "AccessShareLock"}]'::jsonb, false),
@@ -364,7 +364,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     RESET ROLE;
     PERFORM pg_temp.clear_claims();
-    IF SQLERRM LIKE 'ROLE %' THEN RETURN SQLERRM; END IF;
+    IF SQLERRM LIKE 'ROLE %' THEN RETURN 'ROLE ' || coalesce(who, '?'); END IF;
     RETURN 'ERR ' || SQLSTATE;
   END;
 END $h$;
@@ -410,7 +410,8 @@ BEGIN
 END $h$;
 -- rows of the A, B and C tables and auth.users that existed before the fixtures. Left out: mcp_settings (the fixtures
 -- set its one row for this call), mcp_rate_counters (a tool call deletes counter windows older than one day, of any
--- bucket), and mcp_authorization_requests rows already expired.
+-- bucket), and mcp_authorization_requests rows already expired. auth.users is hashed on id, email and created_at only:
+-- a sign-in writes other columns of the row.
 CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE sql VOLATILE AS $h$
   SELECT 'cloud_deal_messages'::text, md5(x::text) FROM public.cloud_deal_messages x
   UNION ALL SELECT 'cloud_deal_files', md5(x::text) FROM public.cloud_deal_files x
@@ -428,7 +429,7 @@ CREATE FUNCTION pg_temp.row_hashes65() RETURNS TABLE (t text, h text) LANGUAGE s
   UNION ALL SELECT 'cloud_deal_checklist_items', md5(x::text) FROM public.cloud_deal_checklist_items x
   UNION ALL SELECT 'cloud_autosave_settings', md5(x::text) FROM public.cloud_autosave_settings x
   UNION ALL SELECT 'member_addons', md5(x::text) FROM public.member_addons x
-  UNION ALL SELECT 'auth.users', md5(x::text) FROM auth.users x
+  UNION ALL SELECT 'auth.users', md5(concat_ws('|', x.id::text, x.email::text, x.created_at::text)) FROM auth.users x
 $h$;
 CREATE TEMP TABLE t65_pre ON COMMIT DROP AS SELECT * FROM pg_temp.row_hashes65();
 CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS $h$
@@ -438,9 +439,19 @@ CREATE FUNCTION pg_temp.foreign_rows65() RETURNS jsonb LANGUAGE sql VOLATILE AS 
                           ('cloud_deals'), ('cloud_deal_parties'), ('cloud_deal_checklists'), ('cloud_deal_checklist_items'),
                           ('cloud_autosave_settings'), ('member_addons'), ('auth.users'))
   SELECT jsonb_object_agg(b.t, jsonb_build_object(
-           'before', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t),
            'gone_or_changed', (SELECT count(*) FROM pg_temp.t65_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h))))
     FROM tbls b
+$h$;
+-- result reducers: a call_as answer is either a JSON value or 'ERR <sqlstate> <message>'; only the SQLSTATE is kept
+CREATE FUNCTION pg_temp.state65(v jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'string' AND (v #>> '{}') LIKE 'ERR %' THEN split_part(v #>> '{}', ' ', 2) END
+$h$;
+CREATE FUNCTION pg_temp.short65(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN t ~ '^("[a-z_]+"|[0-9]+)$' THEN t WHEN t LIKE 'ERR %' THEN 'ERR ' || split_part(t, ' ', 2) ELSE 'other' END
+$h$;
+-- the sorted top-level keys of a JSON object (no values)
+CREATE FUNCTION pg_temp.keys65(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
+  SELECT CASE WHEN jsonb_typeof(v) = 'object' THEN (SELECT coalesce(jsonb_agg(k ORDER BY k), '[]') FROM jsonb_object_keys(v) k) END
 $h$;
 
 DO $t0_4265$ BEGIN PERFORM pg_temp.rec('t_fixture_start', to_jsonb(clock_timestamp())); END $t0_4265$;
@@ -772,7 +783,8 @@ $t1$), ('rollback', $t2$-- rollback-20261123160000.sql (generated by supabase/te
 -- Undoes supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql: gives role service_role back the privileges it held on the 18 tables and
 -- 1 sequence before that migration (measured on the test database, 2026-11-24): on each table SELECT, INSERT, UPDATE,
 -- DELETE, TRUNCATE, REFERENCES, TRIGGER and MAINTAIN; on mcp_call_log_id_seq USAGE, SELECT and UPDATE; grantor postgres, no
--- grant option. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
+-- grant option. The restored set is the one recorded for the test database; the pre-check refuses on a server below
+-- PostgreSQL 17. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
 -- post-check hold. Privileges of every other role are unchanged (the post-check compares a fingerprint the pre-check
 -- takes).
 -- lock_timeout 3s is set before the first statement.

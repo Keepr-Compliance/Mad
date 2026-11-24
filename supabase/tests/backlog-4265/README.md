@@ -33,6 +33,9 @@ fixture texts it composes (`../backlog-4263-sync2-t/lib/helpers.sql` and `fixtur
 | `lib/` | Helpers and controls the generator composes after `../backlog-4263-sync2-t/lib/helpers.sql` and `fixtures.sql`. |
 | `dryrun-foreign-rows.sql` | DRY-RUN DATABASE ONLY: rows of another invented user, put in front of every dry-run call (see below). Not generated; not part of any harness file. |
 
+**Results carry types, keys, counts and SQLSTATEs only.** A control's detail never holds a function result, a row or an
+error message; `../backlog-4263-sync2-t/result_detail.py` checks this folder's text (switched on in its `ENABLED`).
+
 **TEST DATABASE ONLY.** Every harness call ends in RAISE. Its first statement refuses any database that is not the
 test database.
 
@@ -84,8 +87,7 @@ the hour or at minute 23.
   | `c15_sequence` | No sequence privilege for service_role. |
   | `c18_precheck_role` | The migration's pre-check, run as mcp_reader, refuses with its current_user message. |
 
-  Report only, never a control: the rows of user B after B is removed (`report_cascade`), and service_role's
-  privileges on `storage.objects` and `storage.buckets` (`report_storage`).
+  Report only, never a control: the rows of user B after B is removed (`report_cascade`).
 - **Mutants,** each proven installed before its controls run, each required red:
   - `mcp_settings`, `mcp_connections` and `mcp_tokens` left granted, one at a time; `c01_privileges` must name exactly
     that relation;
@@ -108,12 +110,14 @@ the hour or at minute 23.
 **Rows that are not the fixture's.** The harness never asserts on rows that do not belong to its invented users. It
 does read them, for the row check below.
 - Before the fixtures, it takes an md5 of every existing row of these tables (`pg_temp.t65_pre`,
-  `lib/helpers.sql`): the 18 tables except `mcp_settings` and `mcp_rate_counters`, plus `auth.users`.
+  `lib/helpers.sql`): the 18 tables except `mcp_settings` and `mcp_rate_counters`, plus `auth.users`. `auth.users` is
+  hashed on `id`, `email` and `created_at` only, because a sign-in writes other columns of its row.
   - `mcp_settings` is left out because the fixtures set its one row for this call.
   - `mcp_rate_counters` is left out because a tool call deletes counter windows older than one day, of any bucket.
   - For `mcp_authorization_requests`, only rows not yet expired are hashed.
 - Just before its RAISE it checks that every one of those rows is still there, unchanged. The reporter prints this as
-  `rows that existed before the fixtures` and fails on any row gone or changed. Only counts are recorded.
+  `rows that existed before the fixtures` and fails on any row gone or changed. The result holds one number per table:
+  how many of those rows are gone or changed. No whole-table count is recorded.
 
 **Every dry run of this harness includes `dryrun-foreign-rows.sql`.** Put it in front of the harness text in the same
 call (`cat dryrun-foreign-rows.sql <guarded copy> > call.sql`). It inserts invented rows that are not the fixture's:
@@ -153,8 +157,7 @@ The selftest's own control: `python3 gen.py selftest --control-green-ok` must ex
    - the connect-notice sender;
    - an upload from a desktop;
    - the erase job;
-   - a scheduled cleanup;
-   - a sign-in.
+   - a scheduled cleanup (a sign-in no longer counts: the `auth.users` columns it writes are not hashed).
 
    Report the table name and the count only, never row content. A re-run needs a written diagnosis first.
 4. **Lock probe.** The positive control is missing, or a lock is held before the probe: STOP.

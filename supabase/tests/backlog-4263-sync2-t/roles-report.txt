@@ -248,7 +248,7 @@ ok supabase/tests/backlog-4263/apply-20261118100000.sql:63 _mcp_r_list_all_deals
 ok supabase/tests/backlog-4263/apply-20261118100000.sql:131 _mcp_r_list_all_deals owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263/apply-20261118100000.sql:132 _mcp_r_list_all_deals owner mcp_reader role mcp_reader
 ok supabase/tests/backlog-4263/rollback-4263.sql:25 _mcp_r_list_all_deals owner mcp_reader role mcp_reader
-ok supabase/tests/backlog-4265/harness-4265.sql:1901 _mcp_r_get_message owner mcp_reader role mcp_reader
+ok supabase/tests/backlog-4265/harness-4265.sql:1943 _mcp_r_get_message owner mcp_reader role mcp_reader
 input 764f834e4ba6bc32d53b7ad186d9bc5a supabase/tests/backlog-4236/concurrency/as-user.sql
 input 53073ed67d422af36d684b0d6cb36637 supabase/tests/backlog-4236/concurrency/assert.sql
 input 63e9315c09129767c26b615443110c94 supabase/tests/backlog-4236/concurrency/c1-newwrite-hold.sql
@@ -461,12 +461,12 @@ input 199466cbb6f4a76bd47d37a84e5244c8 supabase/tests/backlog-4263/lib/probes.sq
 input 6f26ed088d24c6ad906f2e48db86d8fb supabase/tests/backlog-4263/rollback-4263.sql
 input 2e52f6a9c83fda2dc3625112b85239c5 supabase/tests/backlog-4265/apply-20261123160000.sql
 input a6e666e20f6b15ef2996ed2aff4cb602 supabase/tests/backlog-4265/dryrun-foreign-rows.sql
-input 2cefa7e3f1dcc154d979d5c23c314aa3 supabase/tests/backlog-4265/harness-4265-fixtures.sql
-input 8a90f96b6445dbb01e423ac894b5842f supabase/tests/backlog-4265/harness-4265-structure.sql
-input 31bacfdcdbc36972b08a8cc62ade0cec supabase/tests/backlog-4265/harness-4265.sql
-input 7c571efb4dbecc09f7d554d2b154cfa0 supabase/tests/backlog-4265/lib/controls.sql
-input 6bce52419d6bec9bdc18665bb8921f71 supabase/tests/backlog-4265/lib/helpers.sql
-input 61f33bb7e56264ac842861bfc26ad038 supabase/tests/backlog-4265/rollback-20261123160000.sql
+input fbf91b766d35051edf4768baee5cd67b supabase/tests/backlog-4265/harness-4265-fixtures.sql
+input 4e8c4f84cb3da2754fa2cc04e440ca70 supabase/tests/backlog-4265/harness-4265-structure.sql
+input b6ce05dee1ada24112e912aefe69b3b4 supabase/tests/backlog-4265/harness-4265.sql
+input 0368a1dc09e1c8b96d6a62adf3c36bf8 supabase/tests/backlog-4265/lib/controls.sql
+input c18dfb3aafd05654b6d7aa700b141f3a supabase/tests/backlog-4265/lib/helpers.sql
+input 1392b54ffb29d55e9450bb6942a778a2 supabase/tests/backlog-4265/rollback-20261123160000.sql
 input 1ca8562005b7e859214c60b710969982 supabase/tests/backlog-4266/apply-20261123170000.sql
 input a2ff7c7b6e0243d6724c8645502e080d supabase/tests/backlog-4266/dryrun-foreign-rows.sql
 input 8a3daf9b997f8c62c35ebcf33129faba supabase/tests/backlog-4266/harness-4266-fixtures.sql

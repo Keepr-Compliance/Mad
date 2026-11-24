@@ -2,7 +2,8 @@
 -- Undoes supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql: gives role service_role back the privileges it held on the 18 tables and
 -- 1 sequence before that migration (measured on the test database, 2026-11-24): on each table SELECT, INSERT, UPDATE,
 -- DELETE, TRUNCATE, REFERENCES, TRIGGER and MAINTAIN; on mcp_call_log_id_seq USAGE, SELECT and UPDATE; grantor postgres, no
--- grant option. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
+-- grant option. The restored set is the one recorded for the test database; the pre-check refuses on a server below
+-- PostgreSQL 17. Removes the ledger row. One transaction; RAISEs (nothing changed) unless the pre-check and the
 -- post-check hold. Privileges of every other role are unchanged (the post-check compares a fingerprint the pre-check
 -- takes).
 -- lock_timeout 3s is set before the first statement.
