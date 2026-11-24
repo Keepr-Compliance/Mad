@@ -47,7 +47,8 @@ describe('BACKLOG-4263 erase harness run history', () => {
     expect(PY).toContain("v := pg_temp.p_rollback_refuses_history(%s, %s);");
     expect(PY).toContain("IF md5(%s) IS DISTINCT FROM %s THEN\\n      v := 'NOT APPLIED IN DB';");
     expect(PY).toContain('HISTORY_REFUSAL = "ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds "');
-    expect(PY).toContain("caught = HISTORY_REFUSAL in msg and 'P4263E_RESULT' not in msg");
+    // a refusal counts only as the database's own error (P0001) with the rollback's text
+    expect(PY).toContain("caught = ('P0001: ' + HISTORY_REFUSAL) in msg and 'P4263E_RESULT' not in msg");
   });
 
   it('the reporter refuses an empty expectation table and the selftest has its negative control', () => {
@@ -58,9 +59,33 @@ describe('BACKLOG-4263 erase harness run history', () => {
   });
 
   it('listing assertions say PRECONDITION when the database leaves no room, and the dry-run count is scoped', () => {
-    expect(HELPERS).toContain('CREATE FUNCTION pg_temp.room() RETURNS text');
-    expect((PROBES.match(/IF pg_temp\.room\(\) IS NOT NULL THEN RETURN pg_temp\.room\(\); END IF;/g) ?? []).length).toBe(3);
+    expect(HELPERS).toContain('CREATE FUNCTION pg_temp.room(kind text) RETURNS text');
+    for (const k of ['listing', 'rows', 'owners']) expect(HELPERS).toContain(`WHEN kind = '${k}' AND`);
+    // listing: c6a, c6b, c6e, c6f; owners: c6f, p_owners; rows: c6d; p_dry_run: rows and listing
+    expect((PROBES.match(/IF pg_temp\.room\('listing'\) IS NOT NULL THEN RETURN pg_temp\.room\('listing'\); END IF;/g) ?? []).length).toBe(4);
+    expect((PROBES.match(/IF pg_temp\.room\('owners'\) IS NOT NULL THEN RETURN pg_temp\.room\('owners'\); END IF;/g) ?? []).length).toBe(2);
+    expect(PROBES).toContain("IF pg_temp.room('rows') IS NOT NULL THEN RETURN pg_temp.room('rows'); END IF;");
+    expect(PROBES).toContain("IF coalesce(pg_temp.room('rows'), pg_temp.room('listing')) IS NOT NULL THEN");
     expect(PROBES).toContain("IF (SELECT count(*) FROM public.cloud_blob_erase_runs x WHERE NOT (x.id = ANY (runs_before))) <> 1 THEN");
     expect(PROBES).not.toContain('SELECT count(*) INTO runs_before FROM public.cloud_blob_erase_runs');
+  });
+
+  it('every call ends in its one final RAISE (otherwise it commits), checked by harness.py check', () => {
+    // the final block is the last part appended, then the parts are joined: nothing can follow it
+    const fin = "    parts.append(\"DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;\" % marker)\n    text = '\\n'.join(parts)";
+    expect(PY).toContain(fin);
+    expect(PY).toContain("probs += ends_in_raise(compose({'stage': st}, run='0' * 24), st)");
+    expect(PY).toContain('if len(fins) != 1 or st[-1] is not fins[0]:');
+    expect(PY).toContain('(COMMIT|END|ROLLBACK|ABORT|BEGIN|START');
+  });
+
+  it('the clearing locks both tables, runs then leases, before its first DELETE; the history mutant seeds its row', () => {
+    const clear = PY.slice(PY.indexOf('CLEAR_HISTORY = """'), PY.indexOf('$hist4263e$;"""'));
+    const lock = clear.indexOf('LOCK TABLE public.cloud_blob_erase_runs, public.cloud_blob_erase_leases IN ACCESS EXCLUSIVE MODE;');
+    expect(lock).toBeGreaterThan(0);
+    expect(lock).toBeLessThan(clear.indexOf('DELETE FROM'));
+    const seed = PY.slice(PY.indexOf('SEED_HISTORY = """'), PY.indexOf('$seed4263e$;"""'));
+    expect(seed).toContain("INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', jsonb_build_object('p4263e', '__RUN__'));");
+    expect(PROBES).toContain("IF t NOT LIKE 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds 1 rows %' THEN");
   });
 });
