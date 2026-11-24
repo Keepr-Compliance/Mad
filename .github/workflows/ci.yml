@@ -1416,7 +1416,9 @@ jobs:
           }
           gate "$T/backlog-4263-sync2-t/call_shape.py" selftest
           gate "$T/backlog-4263-sync2-t/call_shape.py" sites
-          for d in backlog-4263-sync2-s1 backlog-4263-sync2-s2 backlog-4263-sync2-t backlog-4263-sync2-n backlog-4266; do
+          gate "$T/backlog-4263-sync2-t/result_detail.py" selftest
+          negative "$T/backlog-4263-sync2-t/result_detail.py" selftest --control-green-ok
+          for d in backlog-4263-sync2-s1 backlog-4263-sync2-s2 backlog-4263-sync2-t backlog-4263-sync2-n backlog-4265 backlog-4266; do
             gate "$T/$d/gen.py" check
             gate "$T/$d/gen.py" selftest
             negative "$T/$d/gen.py" selftest --control-green-ok

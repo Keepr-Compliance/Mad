@@ -65,6 +65,10 @@
       "file": "supabase/migrations/20261123150000_backlog_4263_ai_approval_notice_2.sql",
       "file_md5": "6ee99e92af36fd211334d1e8287c9de5"
     },
+    "20261123160000": {
+      "file": "supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql",
+      "file_md5": "b538be73c1b85b55c2fcd897d79c7ad5"
+    },
     "20261123170000": {
       "file": "supabase/migrations/20261123170000_backlog_4266_connect_notice_with_exchange.sql",
       "file_md5": "50edd01572198dd6e9512ee05f5f3931"
@@ -422,6 +426,28 @@
       "mcp_update_todo(text,bytea,text,text,jsonb,text)",
       "mcp_write_access(text,bytea,text)"
     ],
+    "20261123160000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_message(text,bytea,text,text,integer)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_message_access(text,bytea,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
+    ],
     "20261123170000": [
       "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
       "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
@@ -576,6 +602,16 @@
       "mcp_list_my_message_reads(text,integer)"
     ],
     "20261123150000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connection_access()",
+      "mcp_list_my_connections()",
+      "mcp_list_my_message_reads(text,integer)"
+    ],
+    "20261123160000": [
       "mcp_authorize_approve(text,bytea,text,bytea)",
       "mcp_authorize_deny(text,bytea,text)",
       "mcp_authorize_view(text,bytea)",
@@ -19528,6 +19564,614 @@
         }
       }
     },
+    "20261123160000": {
+      "file": "postcheck-20261123160000.sql",
+      "counts": {
+        "functions": 0,
+        "functions_absent": 0,
+        "tables_or_sequences": 0,
+        "pre_lane_tables": 19,
+        "columns_added": 0,
+        "constraints": 0,
+        "indexes": 0,
+        "cron_jobs": 0,
+        "ledger_rows": 1,
+        "must_hold": 99,
+        "report_only": 19
+      },
+      "pins": {
+        "table cloud_deal_messages grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_messages grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_files grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_files grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_blobs grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_blobs grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_settings grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_settings grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_settings grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_settings grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_settings grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_settings grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_requests grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_connections grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_connections grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_connections grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_connections grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_connections grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_connections grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_tokens grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_rate_counters grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_call_log grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deals grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deals grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deals grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deals grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deals grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deals grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_parties grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_parties grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_checklists grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklists grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklists grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_checklists grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklists grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklists grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_checklist_items grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklist_items grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklist_items grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_checklist_items grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklist_items grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_checklist_items grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_autosave_settings grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_autosave_settings grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_autosave_settings grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_autosave_settings grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_autosave_settings grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_autosave_settings grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table member_addons grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table member_addons grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "ledger row 20261123160000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "anon-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "anon-callable list",
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_message(text,bytea,text,text,integer), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_message_access(text,bytea,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+        },
+        "authenticated-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "authenticated-callable list",
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connection_access(), mcp_list_my_connections(), mcp_list_my_message_reads(text,integer)"
+        },
+        "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
+          "label": "MUST HOLD",
+          "kind": "internal-prefix sweep",
+          "want": ""
+        }
+      }
+    },
     "20261123170000": {
       "file": "postcheck-20261123170000.sql",
       "counts": {
@@ -19662,14 +20306,14 @@
         "functions": 90,
         "functions_absent": 5,
         "tables_or_sequences": 13,
-        "pre_lane_tables": 8,
+        "pre_lane_tables": 19,
         "columns_added": 50,
         "constraints": 46,
         "indexes": 15,
         "cron_jobs": 4,
-        "ledger_rows": 17,
-        "must_hold": 1768,
-        "report_only": 145
+        "ledger_rows": 18,
+        "must_hold": 1832,
+        "report_only": 148
       },
       "pins": {
         "function _mcp_r_list_all_deals(text,date,date,uuid) exists": {
@@ -28188,8 +28832,8 @@
           "want": ""
         },
         "table mcp_call_log grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table mcp_call_log grants mcp_reader": {
@@ -28218,8 +28862,8 @@
           "want": "SELECT"
         },
         "table cloud_deals grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table cloud_deals grants mcp_reader": {
@@ -28248,8 +28892,8 @@
           "want": "SELECT"
         },
         "table cloud_deal_checklists grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table cloud_deal_checklists grants mcp_reader": {
@@ -28278,8 +28922,8 @@
           "want": "SELECT"
         },
         "table cloud_deal_checklist_items grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table cloud_deal_checklist_items grants mcp_reader": {
@@ -28308,8 +28952,8 @@
           "want": ""
         },
         "table mcp_authorization_requests grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table mcp_authorization_requests grants mcp_reader": {
@@ -28338,8 +28982,8 @@
           "want": ""
         },
         "table mcp_connections grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table mcp_connections grants mcp_reader": {
@@ -28368,8 +29012,8 @@
           "want": "SELECT"
         },
         "table cloud_autosave_settings grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table cloud_autosave_settings grants mcp_reader": {
@@ -28398,8 +29042,8 @@
           "want": ""
         },
         "table mcp_settings grants service_role": {
-          "label": "REPORT ONLY",
-          "kind": "pre-lane table grants to service_role",
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
           "want": ""
         },
         "table mcp_settings grants mcp_reader": {
@@ -28408,6 +29052,336 @@
           "want": ""
         },
         "table mcp_settings grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_messages grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_messages grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_messages grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_files grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_files grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_files grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_blobs grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_blobs grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_blobs grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_redirect_allowlist grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_oauth_clients grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_authorization_codes grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_tokens grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_tokens grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_rate_counters grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_rate_counters grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table mcp_call_log_id_seq grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table cloud_deal_parties grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table cloud_deal_parties grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table cloud_deal_parties grants other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "table member_addons grants PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants anon": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants authenticated": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": "SELECT"
+        },
+        "table member_addons grants service_role": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "pre-lane table grants api role",
+          "want": ""
+        },
+        "table member_addons grants other roles": {
           "label": "REPORT ONLY",
           "kind": "grants to other roles",
           "want": ""
@@ -29197,6 +30171,11 @@
           "kind": "ledger row",
           "want": "true"
         },
+        "ledger row 20261123160000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
         "ledger row 20261123170000": {
           "label": "MUST HOLD",
           "kind": "ledger row",
@@ -29310,6 +30289,12 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions",
@@ -29487,6 +30472,23 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
+        "function cloud_upsert_deal(uuid,jsonb) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function set_my_cloud_autosave(uuid,boolean,integer) exists",
+        "function cloud_upsert_parties(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_mark_deal_synced(uuid,uuid,uuid) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
         "function cloud_upsert_deal(uuid,jsonb) md5",
@@ -29551,6 +30553,12 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
         "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
         "anon-callable mcp_ functions",
@@ -29634,6 +30642,14 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
         "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
@@ -29679,6 +30695,10 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -29691,6 +30711,11 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -29710,6 +30735,10 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -29721,6 +30750,10 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
@@ -29738,6 +30771,10 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
         "anon-callable mcp_ functions",
@@ -29750,6 +30787,10 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
@@ -29781,6 +30822,14 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function cloud_register_blob(uuid,uuid,text,bigint,text) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
         "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
@@ -29799,6 +30848,10 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -29810,6 +30863,10 @@
         "authenticated-callable mcp_ functions"
       ],
       "20261123150000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123160000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
@@ -29827,6 +30884,10 @@
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -29836,11 +30897,15 @@
       "20261123150000": [
         "authenticated-callable mcp_ functions"
       ],
+      "20261123160000": [
+        "authenticated-callable mcp_ functions"
+      ],
       "20261123170000": [
         "authenticated-callable mcp_ functions"
       ]
     },
     "20261123150000": {},
+    "20261123160000": {},
     "20261123170000": {}
   },
   "expected_at_final_state": {
@@ -29965,6 +31030,7 @@
       "authenticated-callable mcp_ functions"
     ],
     "20261123150000": "ok",
+    "20261123160000": "ok",
     "20261123170000": "ok"
   },
   "report_only_expected_on_keepr_test": {
@@ -30013,17 +31079,9 @@
       "table mcp_connections grants service_role",
       "table mcp_settings grants service_role"
     ],
+    "20261123160000": [],
     "20261123170000": [],
-    "final-249": [
-      "table cloud_autosave_settings grants service_role",
-      "table cloud_deal_checklist_items grants service_role",
-      "table cloud_deal_checklists grants service_role",
-      "table cloud_deals grants service_role",
-      "table mcp_authorization_requests grants service_role",
-      "table mcp_call_log grants service_role",
-      "table mcp_connections grants service_role",
-      "table mcp_settings grants service_role"
-    ]
+    "final-249": []
   },
   "controls": {
     "B1_body_one_character": {
@@ -30271,6 +31329,72 @@
       "PUBLIC": "",
       "anon": "",
       "authenticated": "",
+      "mcp_reader": ""
+    },
+    "cloud_deal_messages": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "SELECT",
+      "mcp_reader": ""
+    },
+    "cloud_deal_files": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "SELECT",
+      "mcp_reader": ""
+    },
+    "cloud_blobs": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "SELECT",
+      "mcp_reader": ""
+    },
+    "mcp_redirect_allowlist": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "mcp_oauth_clients": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "mcp_authorization_codes": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "mcp_tokens": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "mcp_rate_counters": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "mcp_call_log_id_seq": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "",
+      "mcp_reader": ""
+    },
+    "cloud_deal_parties": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "SELECT",
+      "mcp_reader": ""
+    },
+    "member_addons": {
+      "PUBLIC": "",
+      "anon": "",
+      "authenticated": "SELECT",
       "mcp_reader": ""
     }
   }

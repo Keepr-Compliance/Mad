@@ -1,0 +1,207 @@
+{
+  "migration": "supabase/migrations/20261123160000_backlog_4265_api_role_table_privileges.sql",
+  "migration_md5": "b538be73c1b85b55c2fcd897d79c7ad5",
+  "relations": {
+    "A": [
+      "cloud_deal_messages",
+      "cloud_deal_files",
+      "cloud_blobs"
+    ],
+    "B": [
+      "mcp_settings",
+      "mcp_redirect_allowlist",
+      "mcp_oauth_clients",
+      "mcp_authorization_requests",
+      "mcp_connections",
+      "mcp_authorization_codes",
+      "mcp_tokens",
+      "mcp_rate_counters",
+      "mcp_call_log"
+    ],
+    "C": [
+      "cloud_deals",
+      "cloud_deal_parties",
+      "cloud_deal_checklists",
+      "cloud_deal_checklist_items",
+      "cloud_autosave_settings",
+      "member_addons"
+    ]
+  },
+  "sequence": "mcp_call_log_id_seq",
+  "prior_service_role_items": {
+    "table": "postgres:DELETE:false,postgres:INSERT:false,postgres:MAINTAIN:false,postgres:REFERENCES:false,postgres:SELECT:false,postgres:TRIGGER:false,postgres:TRUNCATE:false,postgres:UPDATE:false",
+    "sequence": "postgres:SELECT:false,postgres:UPDATE:false,postgres:USAGE:false",
+    "measured": "test database, 2026-11-24, read-only catalogue call"
+  },
+  "fixtures_from": {
+    "supabase/tests/backlog-4263-sync2-t/lib/helpers.sql": "a0cae17c45c61bdcf1198c84f3c4dd61",
+    "supabase/tests/backlog-4263-sync2-t/lib/fixtures.sql": "aa730c67c67fe7a2209af7b5286838c9"
+  },
+  "controls": [
+    "c01_privileges",
+    "c02_statements_a_c",
+    "c03_rerun",
+    "c04_erase_as_service_role",
+    "c05_tools_as_anon",
+    "c06_upload_as_authenticated",
+    "c07_function_execute",
+    "c08_default_privileges",
+    "c10_rollback",
+    "c13_other_roles",
+    "c14_statements_b",
+    "c15_sequence",
+    "c18_precheck_role"
+  ],
+  "controls_before_apply_must_fail": [
+    "c01_privileges",
+    "c02_statements_a_c",
+    "c14_statements_b",
+    "c15_sequence"
+  ],
+  "mutants": {
+    "M01_mcp_settings_left": {
+      "primary": {
+        "c01_privileges": "mcp_settings",
+        "c14_statements_b": null
+      }
+    },
+    "M01_mcp_connections_left": {
+      "primary": {
+        "c01_privileges": "mcp_connections",
+        "c14_statements_b": null
+      }
+    },
+    "M01_mcp_tokens_left": {
+      "primary": {
+        "c01_privileges": "mcp_tokens",
+        "c14_statements_b": null
+      }
+    },
+    "M02_block_A_left": {
+      "primary": {
+        "c01_privileges": "cloud_blobs,cloud_deal_files,cloud_deal_messages",
+        "c02_statements_a_c": null
+      }
+    },
+    "M02_block_B_left": {
+      "primary": {
+        "c01_privileges": "mcp_authorization_codes,mcp_authorization_requests,mcp_call_log,mcp_call_log_id_seq,mcp_connections,mcp_oauth_clients,mcp_rate_counters,mcp_redirect_allowlist,mcp_settings,mcp_tokens",
+        "c14_statements_b": null,
+        "c15_sequence": null
+      }
+    },
+    "M02_block_C_left": {
+      "primary": {
+        "c01_privileges": "cloud_autosave_settings,cloud_deal_checklist_items,cloud_deal_checklists,cloud_deal_parties,cloud_deals,member_addons",
+        "c02_statements_a_c": null
+      }
+    },
+    "M03_types_left": {
+      "primary": {
+        "c01_privileges": "cloud_deal_messages"
+      }
+    },
+    "M04_column_left": {
+      "primary": {
+        "c01_privileges": "cloud_deals",
+        "c02_statements_a_c": null
+      }
+    },
+    "M05_public_select": {
+      "primary": {
+        "c01_privileges": "cloud_blobs",
+        "c02_statements_a_c": null,
+        "c13_other_roles": null
+      }
+    },
+    "M06_select_left": {
+      "primary": {
+        "c02_statements_a_c": null
+      }
+    },
+    "M07_insert_left": {
+      "primary": {
+        "c14_statements_b": null
+      }
+    },
+    "M08_sequence_left": {
+      "primary": {
+        "c15_sequence": null,
+        "c01_privileges": "mcp_call_log_id_seq"
+      }
+    },
+    "M09_scrub_invoker": {
+      "primary": {
+        "c04_erase_as_service_role": null,
+        "c07_function_execute": null
+      }
+    },
+    "M10_reader_table_revoked": {
+      "primary": {
+        "c05_tools_as_anon": null,
+        "c13_other_roles": null
+      }
+    },
+    "M11_upload_invoker": {
+      "primary": {
+        "c06_upload_as_authenticated": null,
+        "c07_function_execute": null
+      }
+    },
+    "M12_reader_executable": {
+      "primary": {
+        "c07_function_execute": null
+      }
+    },
+    "M13_tool_executable": {
+      "primary": {
+        "c07_function_execute": null
+      }
+    },
+    "M14_default_privileges": {
+      "primary": {
+        "c08_default_privileges": null
+      }
+    },
+    "M15_rollback_grant_option": {
+      "primary": {
+        "c10_rollback": null
+      }
+    },
+    "M16_rollback_grants_anon": {
+      "primary": {
+        "c10_rollback": null
+      }
+    },
+    "M17_rollback_without_truncate": {
+      "primary": {
+        "c10_rollback": null
+      }
+    },
+    "M18_authenticated_revoked": {
+      "primary": {
+        "c13_other_roles": null
+      }
+    },
+    "M19_precheck_role_dropped": {
+      "primary": {
+        "c18_precheck_role": null
+      }
+    },
+    "M20_rerun_refused": {
+      "primary": {
+        "c03_rerun": null
+      }
+    }
+  },
+  "negative_control": "N01_noop_probe",
+  "apply_md5": "2e52f6a9c83fda2dc3625112b85239c5",
+  "rollback_md5": "1392b54ffb29d55e9450bb6942a778a2",
+  "files": {
+    "apply-20261123160000.sql": "2e52f6a9c83fda2dc3625112b85239c5",
+    "rollback-20261123160000.sql": "1392b54ffb29d55e9450bb6942a778a2",
+    "harness-4265.sql": "b6ce05dee1ada24112e912aefe69b3b4",
+    "harness-4265-structure.sql": "4e8c4f84cb3da2754fa2cc04e440ca70",
+    "harness-4265-fixtures.sql": "fbf91b766d35051edf4768baee5cd67b"
+  }
+}
