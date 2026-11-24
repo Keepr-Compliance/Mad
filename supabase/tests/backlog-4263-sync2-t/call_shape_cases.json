@@ -472,5 +472,59 @@
    "compose_outputs": []
   },
   "ok": false
+ },
+ {
+  "name": "sites: a raw -c call through $K_REAL",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n\"$K_REAL\" -c \"select 1\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a raw -c call through $SQL_TRANSPORT",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n$SQL_TRANSPORT -c \"select 1\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a raw -c call through the hosted transport's path",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n~/.claude/bin/kt-sql -c \"select 1\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
  }
 ]
