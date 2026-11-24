@@ -243,9 +243,25 @@ function checkerClasses(folder: string): Record<string, string> {
 
 type Sites = { non_calls: string[]; helpers: string[]; producer: string; hand_built: string[]; compose_outputs: string[] };
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** the line without its shell comment: a # at the start of a word, outside quotes (call_shape._sh_code) */
+function shCode(line: string): string {
+  let q: string | null = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (q === '"' && c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (q) {
+      if (c === q) q = null;
+    } else if (c === "'" || c === '"') q = c;
+    else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i).trimEnd();
+  }
+  return line.trimEnd();
+}
 /** the same reading of a run.sh as call_shape.transport_sites: [sent file names, problems] */
 function transportSites(text: string, rules: Sites): [string[], string[]] {
-  const code = text.replace(/\r\n/g, '\n').split('\n').map((x) => x.replace(/(^|\s)#(\s.*)?$/, '$1').trimEnd());
+  const code = text.replace(/\r\n/g, '\n').split('\n').map(shCode);
   const stripped = code.map((x) => x.trim());
   const bad = new Set<string>();
   const sent: [number, string][] = [];
@@ -254,7 +270,7 @@ function transportSites(text: string, rules: Sites): [string[], string[]] {
     const no = k + 1;
     const m = /^\s*([A-Za-z_]\w*)\(\)\s*\{/.exec(x);
     if (m) func = m[1];
-    const mentions = (x.match(/\$\{?K\}?(?![A-Za-z0-9_])/g) ?? []).length;
+    const mentions = (x.match(/\$\{?(?:K|K_REAL|SQL_TRANSPORT|T4263N_RUNNER)(?![A-Za-z0-9_])|\.claude\/bin\/kt-sql/g) ?? []).length;
     const names = [...x.matchAll(/(?:^|[\s(;&|])"?\$K"?\s+"\$tmp\/([A-Za-z0-9_.$-]+)"/g)].map((y) => y[1]);
     if (mentions > names.length && !rules.non_calls.includes(x.trim())) bad.add(`run.sh:${no}: a mention of $K that is neither an invocation of a guarded file nor a pinned non-call`);
     for (const nm of names) {
@@ -276,7 +292,9 @@ function transportSites(text: string, rules: Sites): [string[], string[]] {
     const produced = rules.compose_outputs.includes(nm)
       || stripped.some((c) => new RegExp(`${rules.producer.replace('{N}', e)}(?=[\\s;]|$)`).test(c)) || rules.hand_built.some((h) => w.test(h));
     if (!produced) bad.add(`run.sh:${no}: ${nm} is sent but built by no guarded helper`);
-    for (const c of stripped) if (w.test(c) && !rules.hand_built.includes(c)) bad.add(`${nm} is written outside the guarded helpers: ${c.slice(0, 90)}`);
+    const touch = new RegExp(`\\$\\{?tmp\\}?/${e}(?![\\w.-])`);
+    const invokes = (c: string): boolean => [...c.matchAll(/(?:^|[\s(;&|])"?\$K"?\s+"\$tmp\/([A-Za-z0-9_.$-]+)"/g)].some((y) => y[1] === nm);
+    for (const c of stripped) if (touch.test(c) && !rules.hand_built.includes(c) && !invokes(c)) bad.add(`${nm} is touched outside the guarded helpers and its call: ${c.slice(0, 90)}`);
   }
   const uniq = [...new Set(sent.map(([, n]) => n))].sort();
   if (uniq.length < 5) bad.add(`only ${uniq.length} sent files found: the scan is not reading this run.sh`);
@@ -330,9 +348,12 @@ describe('BACKLOG-4263 call shape', () => {
   });
 
   it('the shared cases (call_shape_cases.json) get the same verdict here as in call_shape.py selftest', () => {
-    const cases: { name: string; kind: string; text: string; ok: boolean }[] = JSON.parse(read('backlog-4263-sync2-t/call_shape_cases.json'));
-    expect(cases.length).toBeGreaterThan(30);
-    for (const c of cases) expect(`${c.name}: ${problems(c.kind, c.text).length === 0}`).toBe(`${c.name}: ${c.ok}`);
+    const cases: { name: string; kind: string; text: string; ok: boolean; rules?: Sites }[] = JSON.parse(read('backlog-4263-sync2-t/call_shape_cases.json'));
+    expect(cases.length).toBeGreaterThan(50);
+    for (const c of cases) {
+      const n = c.kind === 'sites' ? transportSites(c.text, c.rules as Sites)[1].length : problems(c.kind, c.text).length;
+      expect(`${c.name}: ${n === 0}`).toBe(`${c.name}: ${c.ok}`);
+    }
   });
 
   it('the rule sees the shapes that would commit', () => {

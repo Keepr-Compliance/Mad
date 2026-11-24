@@ -75,8 +75,9 @@ the clearing was added:
 - the `cloud_release_switches` row (the scrub holds it FOR SHARE; a control's switch UPDATE, `lib/helpers.sql:116`);
 - real file rows (the scrub holds them FOR UPDATE; the live claim inside a control takes file rows FOR UPDATE without
   SKIP LOCKED, E1 `:186`);
-- real orphan blob rows (the scrub's fence holds them FOR UPDATE; the live claim fences orphan blobs through
-  `_cloud_fence_unreferenced`, E1 `:193`, also without SKIP LOCKED).
+- real blob rows (the scrub's fence holds them FOR UPDATE, E1 `:454`; the live claim fences blobs through the same
+  `_cloud_fence_unreferenced`, E1 `:193`, `:208` and the orphans at `:219`, which locks them FOR UPDATE without SKIP
+  LOCKED, `20261112190000:412-414`).
 
 PostgreSQL aborts whichever side's deadlock check fires after the cycle forms, so a `40P01` can land on the job's side
 as well as on this call's. **Rule: this harness is never sent to a database whose erase job runs in LIVE mode. Every

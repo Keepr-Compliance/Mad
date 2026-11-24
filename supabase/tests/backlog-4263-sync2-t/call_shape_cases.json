@@ -256,5 +256,221 @@
   "kind": "fragment",
   "text": "/* a /* b */ c */ COMMIT;\n",
   "ok": false
+ },
+ {
+  "name": "a word BEGIN used as an alias, then a handler on the outermost block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN PERFORM 1 AS begin; RAISE EXCEPTION 'X_RESULT %', 1; EXCEPTION WHEN OTHERS THEN NULL; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a handler on the outermost block whose last statement is a RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a word LOOP used as an alias, then a labelled EXIT",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ <<o>> BEGIN PERFORM 1 AS loop; EXIT o; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "sites: every call sent through the guarded helper",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": true
+ },
+ {
+  "name": "sites: a commented-out raw call",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n# $K \"$tmp/raw.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": true
+ },
+ {
+  "name": "sites: a raw call on a path never taken",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n[ -n \"${NEVER:-}\" ] && $K \"$tmp/raw.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a call through $K_REAL",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n\"$K_REAL\" \"$tmp/a1.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a call through $SQL_TRANSPORT",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n$SQL_TRANSPORT \"$tmp/a1.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a call through the hosted transport's path",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n~/.claude/bin/kt-sql \"$tmp/a1.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a raw call after a # inside a quoted string",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\necho \"a # b\"; $K \"$tmp/raw.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a guarded file overwritten by cp after its build",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\ncp /dev/null \"$tmp/a1.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a guarded file edited by sed -i after its build",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\nsed -i '' 's/x/y/' \"$tmp/a1.sql\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: a raw -c call",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n$K -c \"select 1\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
+ },
+ {
+  "name": "sites: the guarded helper without the guard",
+  "kind": "sites",
+  "text": "K=\"${SQL_TRANSPORT:-x}\"\ng() {\n  { cat \"$here/$1\"; } > \"$tmp/$2\"\n}\ng t1.sql a1.sql; $K \"$tmp/a1.sql\" > \"$tmp/a1.out\"\ng t2.sql a2.sql; $K \"$tmp/a2.sql\" > \"$tmp/a2.out\"\ng t3.sql a3.sql; $K \"$tmp/a3.sql\" > \"$tmp/a3.out\"\ng t4.sql a4.sql; $K \"$tmp/a4.sql\" > \"$tmp/a4.out\"\ng t5.sql a5.sql; $K \"$tmp/a5.sql\" > \"$tmp/a5.out\"\n",
+  "rules": {
+   "non_calls": [
+    "K=\"${SQL_TRANSPORT:-x}\""
+   ],
+   "helpers": [
+    "g() {",
+    "{ cat \"$here/guard.sql\"; cat \"$here/$1\"; } > \"$tmp/$2\""
+   ],
+   "producer": "\\bg \\S+ {N}",
+   "hand_built": [],
+   "compose_outputs": []
+  },
+  "ok": false
  }
 ]

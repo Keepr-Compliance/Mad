@@ -363,7 +363,27 @@ def concurrency_checks(folder, readme_text, recorded):
     return out
 
 
-MENTION = re.compile(r'\$\{?K\}?(?![A-Za-z0-9_])')
+# the transport: $K, the variables it is taken from, or the hosted transport's path
+MENTION = re.compile(r'\$\{?(?:K|K_REAL|SQL_TRANSPORT|T4263N_RUNNER)(?![A-Za-z0-9_])|\.claude/bin/kt-sql')
+
+
+def _sh_code(line):
+    """the line without its shell comment: a # at the start of a word, outside quotes"""
+    q, i = None, 0
+    while i < len(line):
+        c = line[i]
+        if q == '"' and c == '\\':
+            i += 2
+            continue
+        if q:
+            if c == q:
+                q = None
+        elif c in '\'"':
+            q = c
+        elif c == '#' and (i == 0 or line[i - 1].isspace()):
+            return line[:i].rstrip()
+        i += 1
+    return line.rstrip()
 INVOKE = re.compile(r'(?:^|[\s(;&|])"?\$K"?\s+"\$tmp/([A-Za-z0-9_.$-]+)"')
 FUNC = re.compile(r'^\s*([A-Za-z_]\w*)\(\)\s*\{')
 
@@ -376,7 +396,7 @@ def transport_sites(text, rules):
     output (rules['compose_outputs']), and no other line writes it. The helpers' own lines (rules['helpers']) are
     pinned exactly, so the guard stays first in what they build. A new raw call site anywhere, run or not, is red."""
     lines = text.replace('\r\n', '\n').split('\n')
-    code = [re.sub(r'(^|\s)#(\s.*)?$', r'\1', x).rstrip() for x in lines]
+    code = [_sh_code(x) for x in lines]
     stripped = [x.strip() for x in code]
     bad, sent, func = [], [], None
     for no, x in enumerate(code, 1):
@@ -410,8 +430,8 @@ def transport_sites(text, rules):
         if not produced:
             bad.append('run.sh:%d: %s is sent but built by no guarded helper' % (no, nm))
         for c in stripped:
-            if re.search(r'>\s*"\$tmp/%s"' % e, c) and c not in rules['hand_built']:
-                bad.append('%s is written outside the guarded helpers: %s' % (nm, c[:90]))
+            if re.search(r'\$\{?tmp\}?/%s(?![\w.-])' % e, c) and c not in rules['hand_built'] and nm not in INVOKE.findall(c):
+                bad.append('%s is touched outside the guarded helpers and its call: %s' % (nm, c[:90]))
     names = sorted(set(n for _, n in sent))
     if len(names) < 5:
         bad.append('only %d sent files found: the scan is not reading this run.sh' % len(names))
@@ -431,7 +451,7 @@ def selftest():
     cases = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'call_shape_cases.json'), encoding='utf-8'))
     wrong = 0
     for c in cases:
-        probs = KINDS[c['kind']](c['text'])
+        probs = transport_sites(c['text'], c['rules'])[1] if c['kind'] == 'sites' else KINDS[c['kind']](c['text'])
         good = (not probs) == c['ok']
         wrong += not good
         print('%s %s (%s): %s' % ('ok  ' if good else 'FAIL', c['name'], c['kind'], '; '.join(probs) or 'no problem'))
