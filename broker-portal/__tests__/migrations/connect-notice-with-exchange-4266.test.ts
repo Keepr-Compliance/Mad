@@ -130,7 +130,79 @@ describe('BACKLOG-4266 migration 20261123170000', () => {
     }
     const full = read(join(DIR, 'harness-4266.sql'));
     expect(full.split(APPLY)).toHaveLength(2);
+    // the dry-run-only prefix is never part of a harness file and refuses the test database's marker
+    const prefix = read(join(DIR, 'dryrun-foreign-rows.sql'));
+    expect(prefix).toContain("md5(u.id::text) = 'bbde4ef0aae0710f8ce0c22454224882'");
+    expect(prefix).toContain("OR EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = '53a385187695375e2e8695625a20a77a') THEN");
+    expect(full).not.toContain('h4266-foreign');
+    // no assertion counts a whole table: every count over ai_app_connect_notices in the harness is scoped to the fixture users
+    expect(full).not.toMatch(/count\(\*\) FROM public\.ai_app_connect_notices\)/);
+    expect(full).toContain("pg_temp.rec('foreign_rows', pg_temp.foreign_rows())");
     expect(Object.keys(FACTS.mutants)).toEqual(expect.arrayContaining(['M01_swallow_restored', 'M03_reraised_as_mc001', 'M04_no_row_count_check',
       'M05_token_fail_answer', 'M02_warning_then_continue', 'N01_noop_probe']));
+  });
+
+  describe('the row check is pinned (rows that existed before the fixtures)', () => {
+    const FILES = ['harness-4266.sql', 'harness-4266-structure.sql', 'harness-4266-fixtures.sql'];
+    // [label, table] — the label each hashed row carries must be the table it is read from
+    const TABLES: [string, string][] = [
+      ['ai_app_connect_notices', 'public.ai_app_connect_notices'],
+      ['mcp_connections', 'public.mcp_connections'],
+      ['mcp_tokens', 'public.mcp_tokens'],
+      ['mcp_authorization_codes', 'public.mcp_authorization_codes'],
+      ['mcp_authorization_requests', 'public.mcp_authorization_requests'],
+      ['mcp_call_log', 'public.mcp_call_log'],
+      ['mcp_oauth_clients', 'public.mcp_oauth_clients'],
+      ['auth.users', 'auth.users'],
+    ];
+    const LINES = [
+      "  SELECT 'ai_app_connect_notices'::text, md5(x::text) FROM public.ai_app_connect_notices x",
+      "  UNION ALL SELECT 'mcp_connections', md5(x::text) FROM public.mcp_connections x",
+      "  UNION ALL SELECT 'mcp_tokens', md5(x::text) FROM public.mcp_tokens x",
+      "  UNION ALL SELECT 'mcp_authorization_codes', md5(x::text) FROM public.mcp_authorization_codes x",
+      "  UNION ALL SELECT 'mcp_authorization_requests', md5(x::text) FROM public.mcp_authorization_requests x WHERE x.expires_at >= now()",
+      "  UNION ALL SELECT 'mcp_call_log', md5(x::text) FROM public.mcp_call_log x",
+      "  UNION ALL SELECT 'mcp_oauth_clients', md5(x::text) FROM public.mcp_oauth_clients x",
+      "  UNION ALL SELECT 'auth.users', md5(x::text) FROM auth.users x",
+    ];
+    const SCOPED =
+      "  PERFORM pg_temp.rec('fx_notices_before', to_jsonb((SELECT count(*) FROM public.ai_app_connect_notices n\n" +
+      '                                                     WHERE n.user_id IN (pg_temp.uid(1), pg_temp.uid(2), pg_temp.uid(3)))));';
+
+    it.each(FILES)('%s hashes exactly the 8 tables, each under its own name', (f) => {
+      const t = read(join(DIR, f));
+      const fn = t.slice(t.indexOf('CREATE FUNCTION pg_temp.row_hashes()'), t.indexOf('CREATE TEMP TABLE t66_pre AS SELECT * FROM pg_temp.row_hashes();'));
+      expect(fn.length).toBeGreaterThan(0);
+      const body = fn.slice(fn.indexOf('AS $h$\n') + 7, fn.indexOf('\n$h$;'));
+      expect(body.split('\n')).toEqual(LINES);
+      const pairs = body.split('\n').map((l) => {
+        const m = /SELECT '([^']+)'(?:::text)?, md5\(x::text\) FROM (\S+) x/.exec(l);
+        return m ? [m[1], m[2]] : null;
+      });
+      expect(pairs).toEqual(TABLES);
+      for (const [label, table] of TABLES) expect(table.endsWith(label.includes('.') ? label : `.${label}`)).toBe(true);
+      const tbls = /tbls\(t\) AS \(VALUES ([^)]*\)(?:, \([^)]*\))*)\)/.exec(t.replace(/\n\s+/g, ' '));
+      expect(tbls).not.toBeNull();
+      expect([...(tbls as RegExpExecArray)[1].matchAll(/'([^']+)'/g)].map((m) => m[1])).toEqual(TABLES.map((x) => x[0]));
+    });
+
+    it('the reporter names the same 8 tables', () => {
+      const gen = read(join(DIR, 'gen.py'));
+      const m = /FOREIGN_TABLES = \[([^\]]*)\]/.exec(gen);
+      expect(m).not.toBeNull();
+      expect([...(m as RegExpExecArray)[1].matchAll(/'([^']+)'/g)].map((x) => x[1])).toEqual(TABLES.map((x) => x[0]));
+    });
+
+    it.each(FILES)('%s counts only the fixture users’ notices before the fixtures, and records the row check before its RAISE', (f) => {
+      const t = read(join(DIR, f));
+      expect(t.split(SCOPED)).toHaveLength(2);
+      const marker = f === 'harness-4266-fixtures.sql' ? "RAISE EXCEPTION 'H4266_FIXTURES %'" : "RAISE EXCEPTION 'H4266_RESULT %'";
+      const rec = t.lastIndexOf("PERFORM pg_temp.rec('foreign_rows', pg_temp.foreign_rows());");
+      expect(rec).toBeGreaterThan(t.lastIndexOf('CREATE TEMP TABLE t66_pre AS SELECT * FROM pg_temp.row_hashes();'));
+      expect(rec).toBeLessThan(t.lastIndexOf(marker));
+      expect(t.slice(rec, t.lastIndexOf(marker))).not.toMatch(/\n(?:DO |CREATE |INSERT )/);
+      expect(t.split('CREATE TEMP TABLE t66_pre AS SELECT * FROM pg_temp.row_hashes();')).toHaveLength(2);
+      expect(t.indexOf('CREATE TEMP TABLE t66_pre AS')).toBeLessThan(t.indexOf('DO $fx4266$'));
+    });
   });
 });
