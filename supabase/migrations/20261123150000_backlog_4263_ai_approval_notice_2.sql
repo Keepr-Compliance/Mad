@@ -1,0 +1,183 @@
+-- ============================================================================
+-- Migration: AI-app approval page version 2 (BACKLOG-4263 sync 2.49, P11 / T-N)
+--
+-- Changed data: mcp_settings.notice_version 1 -> 2 (the approval page version that a new connection is stamped with
+--   at approval, mcp_authorize_approve). A connection approved on version 2 or later may use the email and text tools
+--   (_mcp_conn_reads_messages, 20261123140000). Existing connections keep the version they were approved on.
+-- New (no existing function is replaced or changed):
+--   trigger   mcp_settings_notice_change_expires_requests, AFTER UPDATE ON mcp_settings, for each row whose
+--             notice_version changed: _mcp_notice_change_expires_requests() locks mcp_authorization_requests
+--             (EXCLUSIVE) and sets expires_at = now() on every pending request that has not expired. A notice-version
+--             change therefore expires pending requests, whichever statement makes it. In this migration the 1 -> 2
+--             UPDATE below is that statement; there is no other expiry here.
+--   trigger   mcp_connections_version_fixed, BEFORE UPDATE ON mcp_connections, for each row whose notice_version
+--             changes: _mcp_connection_version_fixed() raises, so an UPDATE never changes a connection's version.
+--   Limit: neither trigger covers an INSERT of a connection row that already carries version 2, nor TRUNCATE.
+--   signed in mcp_list_my_connection_access(): the person's active connections, each with messages = the email and
+--             text permission of that connection (approved on version 2 or later; the switch messages_upload is not
+--             part of it). Refuses signed-out callers and support sessions.
+--   Both trigger functions: SECURITY DEFINER, owner postgres, empty search_path, EXECUTE for no API role; each raises
+--   unless it runs as its own trigger.
+-- Answers: mcp_list_my_connection_access() -> {ok:true, connections:[{id, messages}]} (newest approval first)
+--   errors: not_signed_in | impersonating
+-- Order: catalogue pre-check; lock_timeout 3s; LOCK TABLE mcp_authorization_requests IN EXCLUSIVE MODE (begin, view,
+--   approve and deny wait until commit; plain reads do not); the triggers; the reader; the version bump; post-check.
+-- Locks: EXCLUSIVE on mcp_authorization_requests until commit; CREATE TRIGGER takes SHARE ROW EXCLUSIVE on mcp_settings
+--   and mcp_connections until commit (MCP calls that write last_used_at wait). If a lock is not obtained within 3
+--   seconds the migration fails and nothing is applied.
+-- Re-runnable: CREATE OR REPLACE (functions and triggers); the bump runs only at version 1 (at 2 nothing changes and
+--   no request is expired); any other version refuses.
+-- Deploy order: the portal that renders approval page versions 1 and 2 is deployed first, then this migration.
+-- Requires 20261123140000 (the pre-check refuses otherwise).
+-- Rollback: supabase/tests/backlog-4263-sync2-n/rollback-20261123150000.sql (refuses while any connection holds
+--   version 2 or later).
+-- ============================================================================
+
+DO $pre4263n$
+DECLARE r record; v_missing text := '';
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('public._mcp_conn_reads_messages(uuid)', '1906af9a3b208f2bb779e092bcc93fa4'),
+      ('public.mcp_authorize_approve(text,bytea,text,bytea)', 'bddeb78139828a444715cc77d4482d78'),
+      ('public.mcp_authorize_view(text,bytea)', '18bd5cc8788ff45288733b57ce9d4d65')) x(sig, want) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure(r.sig) AND md5(p.prosrc) = r.want) THEN
+      v_missing := v_missing || r.sig || ' ';
+    END IF;
+  END LOOP;
+  v_missing := v_missing || coalesce((SELECT string_agg(s, ' ') FROM unnest(ARRAY[
+      'public.mcp_list_my_message_reads(text,integer)', 'public._mcp_impersonating(uuid)', 'public._mcp_refuse(text)']) s
+      WHERE to_regprocedure(s) IS NULL), '');
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = to_regclass('public.mcp_settings')
+                    AND a.attname = 'notice_version' AND NOT a.attisdropped)
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = to_regclass('public.mcp_connections')
+                    AND a.attname = 'notice_version' AND NOT a.attisdropped) THEN
+    v_missing := v_missing || 'notice_version ';
+  END IF;
+  IF v_missing <> '' THEN
+    RAISE EXCEPTION 'BACKLOG-4263 T-N: apply 20261123140000 first; missing or not at the expected body: %', v_missing;
+  END IF;
+END
+$pre4263n$;
+SET LOCAL lock_timeout = '3s';
+LOCK TABLE public.mcp_authorization_requests IN EXCLUSIVE MODE;
+
+-- ============================================================================ a notice-version change expires pending requests
+CREATE OR REPLACE FUNCTION public._mcp_notice_change_expires_requests()
+RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
+BEGIN
+  IF (TG_OP = 'UPDATE' AND TG_WHEN = 'AFTER' AND TG_LEVEL = 'ROW' AND TG_TABLE_SCHEMA = 'public'
+      AND TG_TABLE_NAME = 'mcp_settings') IS NOT TRUE THEN
+    RAISE EXCEPTION '_mcp_notice_change_expires_requests runs only as the mcp_settings trigger';
+  END IF;
+  IF NEW.notice_version IS DISTINCT FROM OLD.notice_version THEN
+    LOCK TABLE public.mcp_authorization_requests IN EXCLUSIVE MODE;                          /*EXPIRE:lock*/
+    UPDATE public.mcp_authorization_requests r
+       SET expires_at = now()
+     WHERE r.status = 'pending' AND r.expires_at > now();                                    /*EXPIRE:pending*/
+  END IF;
+  RETURN NULL;
+END
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_notice_change_expires_requests() FROM PUBLIC, anon, authenticated, service_role;
+CREATE OR REPLACE TRIGGER mcp_settings_notice_change_expires_requests
+  AFTER UPDATE ON public.mcp_settings
+  FOR EACH ROW WHEN (OLD.notice_version IS DISTINCT FROM NEW.notice_version)
+  EXECUTE FUNCTION public._mcp_notice_change_expires_requests();
+
+-- ============================================================================ a connection's version never changes
+CREATE OR REPLACE FUNCTION public._mcp_connection_version_fixed()
+RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
+BEGIN
+  IF (TG_OP = 'UPDATE' AND TG_WHEN = 'BEFORE' AND TG_LEVEL = 'ROW' AND TG_TABLE_SCHEMA = 'public'
+      AND TG_TABLE_NAME = 'mcp_connections') IS NOT TRUE THEN
+    RAISE EXCEPTION '_mcp_connection_version_fixed runs only as the mcp_connections trigger';
+  END IF;
+  IF NEW.notice_version IS DISTINCT FROM OLD.notice_version THEN
+    RAISE EXCEPTION 'mcp_connections.notice_version cannot be changed (connection %)', OLD.id;    /*FIXED:raise*/
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_connection_version_fixed() FROM PUBLIC, anon, authenticated, service_role;
+CREATE OR REPLACE TRIGGER mcp_connections_version_fixed
+  BEFORE UPDATE ON public.mcp_connections
+  FOR EACH ROW WHEN (OLD.notice_version IS DISTINCT FROM NEW.notice_version)
+  EXECUTE FUNCTION public._mcp_connection_version_fixed();
+
+-- ============================================================================ the person's connections and their message permission
+-- Returns {ok:true, connections:[{id, messages}]}
+-- errors: not_signed_in | impersonating
+CREATE OR REPLACE FUNCTION public.mcp_list_my_connection_access()
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE
+  v_uid uuid := auth.uid();
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN public._mcp_refuse('not_signed_in');
+  END IF;
+  IF public._mcp_impersonating(v_uid) IS NOT FALSE THEN                                        /*ACCESSLIST:support*/
+    RETURN public._mcp_refuse('impersonating');
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'connections', coalesce((
+    SELECT jsonb_agg(jsonb_build_object(
+             'id', c.id,
+             'messages', public._mcp_conn_reads_messages(c.id) IS TRUE)                        /*ACCESSLIST:permission*/
+             ORDER BY c.consented_at DESC, c.id)
+      FROM public.mcp_connections c
+     WHERE c.user_id = v_uid AND c.status = 'active'), '[]'::jsonb));                          /*ACCESSLIST:own*/
+END
+$fn$;
+REVOKE ALL ON FUNCTION public.mcp_list_my_connection_access() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.mcp_list_my_connection_access() TO authenticated;
+
+-- ============================================================================ the bump (version 1 only)
+DO $bump4263n$
+DECLARE
+  v smallint;
+BEGIN
+  PERFORM set_config('t4263n.bumped', 'off', true);
+  SELECT s.notice_version INTO v FROM public.mcp_settings s WHERE s.id FOR UPDATE;
+  IF v IS NULL THEN
+    RAISE EXCEPTION 'BACKLOG-4263 T-N: the mcp_settings row is missing';
+  ELSIF v = 1 THEN
+    UPDATE public.mcp_settings s SET notice_version = 2, updated_at = now() WHERE s.id;       /*BUMP:update*/
+    PERFORM set_config('t4263n.bumped', 'on', true);
+  ELSIF v <> 2 THEN
+    RAISE EXCEPTION 'BACKLOG-4263 T-N: mcp_settings.notice_version is %, expected 1 or 2', v;  /*BUMP:refuse*/
+  END IF;
+END
+$bump4263n$;
+
+-- ============================================================================ post-check
+DO $post4263n$
+DECLARE
+  r jsonb;
+BEGIN
+  SELECT jsonb_build_object(
+    'functions', (SELECT count(*) FROM pg_catalog.pg_proc p
+                   WHERE p.oid IN (to_regprocedure('public._mcp_notice_change_expires_requests()'),
+                                   to_regprocedure('public._mcp_connection_version_fixed()'),
+                                   to_regprocedure('public.mcp_list_my_connection_access()'))
+                     AND p.proowner = 'postgres'::regrole::oid AND p.prosecdef
+                     AND array_to_string(p.proconfig, ',') = 'search_path=""'
+                     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+                     AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+                     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                         = (p.oid = to_regprocedure('public.mcp_list_my_connection_access()'))),
+    'triggers', (SELECT count(*) FROM pg_catalog.pg_trigger t
+                  WHERE NOT t.tgisinternal AND t.tgenabled = 'O'
+                    AND ((t.tgname = 'mcp_settings_notice_change_expires_requests' AND t.tgrelid = 'public.mcp_settings'::regclass
+                          AND t.tgfoid = to_regprocedure('public._mcp_notice_change_expires_requests()'))
+                      OR (t.tgname = 'mcp_connections_version_fixed' AND t.tgrelid = 'public.mcp_connections'::regclass
+                          AND t.tgfoid = to_regprocedure('public._mcp_connection_version_fixed()')))),
+    'version', (SELECT s.notice_version FROM public.mcp_settings s WHERE s.id),
+    'live_pending', CASE WHEN current_setting('t4263n.bumped', true) = 'on'
+                         THEN (SELECT count(*) FROM public.mcp_authorization_requests q
+                                WHERE q.status = 'pending' AND q.expires_at > now()) ELSE 0 END)
+    INTO r;
+  IF (r ->> 'functions')::int <> 3 OR (r ->> 'triggers')::int <> 2 OR (r ->> 'version')::int <> 2
+     OR (r ->> 'live_pending')::int <> 0 THEN
+    RAISE EXCEPTION 'BACKLOG-4263 T-N post-check failed: %', r;
+  END IF;
+END
+$post4263n$;

@@ -164,6 +164,8 @@ const ALLOWED_KEYWORDS = new Set<string>(['all', 'and', 'as', 'else', 'exists', 
 const ALLOWED_ALIASES = new Set<string>([
   'anon_want', 'auth_want', 'cdef', 'checks', 'col', 'con', 'fn', 'fx', 'gone', 'idx', 'ipred', 'job', 'led', 'rel',
   'rule', 'rx', 'sweep_want', 'u', 'x',
+  // BACKLOG-4263 P11: the trigger and data-value assertions (postcheck-20261123150000.sql, postcheck-final-249.sql)
+  'trg', 'dat',
 ]);
 const COLS = String.raw`\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*\s*\)`;
 /**
