@@ -217,7 +217,8 @@ def pre_lane_function(name):
     return [f for f in PRE_LANE if pat.search(open(os.path.join(MIGDIR, f), encoding='utf-8').read())]
 
 
-state = {'fn': {}, 'dropped': set(), 'tables': {}, 'cols': {}, 'cons': {}, 'conexpr': {}, 'idx': {}, 'cron': {}, 'ledger': set(), 'trg': {}}
+state = {'fn': {}, 'dropped': set(), 'tables': {}, 'cols': {}, 'cons': {}, 'conexpr': {}, 'idx': {}, 'cron': {}, 'ledger': set(), 'trg': {},
+         'sr_revoked': set()}
 # data values a migration sets and its post-check pins (one row of a settings table; no personal data): version -> [(name, value)]
 DATA_SET = {'20261123150000': [('mcp_settings.notice_version', '2')],
             # BACKLOG-4266: the notice row the exchange must write passes the notice table's provider CHECK for every
@@ -297,14 +298,21 @@ for f in MIGS:
                 state['fn'][sig]['execute'] = (ex | set(roles)) if verb.upper() == 'GRANT' else (ex - set(roles))
                 touch(v, 'fn', sig)
             elif kind.upper() in ('TABLE', 'SEQUENCE'):
-                t = obj.replace('public.', '')
-                assert verb.upper() == 'REVOKE' and t in state['tables'], s
-                privs = state['tables'][t]['privs']
-                for r in roles:
-                    if priv.upper() == 'ALL':
-                        privs.pop(r, None)
-                    else:
-                        privs.get(r, set()).discard(priv.upper())
+                objs = [o.strip() for o in obj.split(',')]
+                assert verb.upper() == 'REVOKE' and all(o.startswith('public.') for o in objs), s
+                for t in (o[len('public.'):] for o in objs):
+                    if t not in state['tables']:
+                        # a relation created before the lane: only REVOKE ALL ... FROM service_role (BACKLOG-4265)
+                        assert priv.upper() == 'ALL' and roles == ['service_role'], s
+                        state['sr_revoked'].add(t)
+                        touch(v, 'pretables', t)
+                        continue
+                    privs = state['tables'][t]['privs']
+                    for r in roles:
+                        if priv.upper() == 'ALL':
+                            privs.pop(r, None)
+                        else:
+                            privs.get(r, set()).discard(priv.upper())
             else:
                 assert obj == 'public' and priv.upper() == 'CREATE' and roles == ['mcp_reader'], s
             continue
@@ -532,8 +540,15 @@ def checkdef(st, k):
 
 
 # ------------------------------------------------------------------------------------------------ pre-lane table grants
+# pre-lane sequences: no grant statement names them; ACL entries of the API roles other than service_role measured on
+# keepr-test (2026-11-24, BACKLOG-4265 catalogue call: owner and service_role entries only)
+PRE_LANE_SEQUENCES = {'mcp_call_log_id_seq': {'PUBLIC': '', 'anon': '', 'authenticated': '', 'mcp_reader': ''}}
+
+
 def pre_lane_table_grants(t):
     """Grants of PUBLIC/anon/authenticated/mcp_reader on a pre-lane table, replayed from the pre-lane migrations."""
+    if t in PRE_LANE_SEQUENCES:
+        return dict(PRE_LANE_SEQUENCES[t])
     g = {'PUBLIC': set(), 'anon': {'ALL'}, 'authenticated': {'ALL'}, 'mcp_reader': set()}
     pat = re.compile(r'^\s*(GRANT|REVOKE) ([A-Z, ]+?) ON (?:TABLE )?public\.' + re.escape(t) + r' (TO|FROM) ([\w, ]+);', re.M)
     seen = False
@@ -618,7 +633,7 @@ def facts(st, keys):
         g = PRE_GRANTS[t]
         for r in API_ROLES:
             if r == 'service_role':
-                out[f'table {t} grants service_role'] = (SERVICE_ROLE_EXCEPTION, '')
+                out[f'table {t} grants service_role'] = (('pre-lane table grants api role' if t in st['sr_revoked'] else SERVICE_ROLE_EXCEPTION), '')
             else:
                 out[f'table {t} grants {r}'] = ('pre-lane table grants api role', g[r])
         out[f'table {t} grants other roles'] = ('grants to other roles', '')
@@ -787,8 +802,7 @@ def render(k):
         rx_rows.append(row(t, 'relation', '*', '', 'grants to other roles'))
     for t in keys['pretables']:
         for r in API_ROLES:
-            kind = SERVICE_ROLE_EXCEPTION if r == 'service_role' else 'pre-lane table grants api role'
-            rx_rows.append(row(t, 'table', r, WANT[k][f'table {t} grants {r}'][1], kind))
+            rx_rows.append(row(t, 'table', r, WANT[k][f'table {t} grants {r}'][1], WANT[k][f'table {t} grants {r}'][0]))
         rx_rows.append(row(t, 'table', '*', '', 'grants to other roles'))
     col_rows = [row(c.split('.')[0], c.split('.')[1], want['column ' + c]) for c in keys['cols']]
     con_rows = [row(c.split('.')[0], c.split('.')[1], want['constraint ' + c]) for c in keys['cons']]

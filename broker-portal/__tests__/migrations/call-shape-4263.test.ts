@@ -211,6 +211,10 @@ const FOLDERS: Record<string, Record<string, string>> = {
     'harness-4266.sql': 'rolled_back', 'harness-4266-fixtures.sql': 'rolled_back', 'harness-4266-structure.sql': 'rolled_back',
     'apply-20261123170000.sql': 'commits', 'rollback-20261123170000.sql': 'commits', 'dryrun-foreign-rows.sql': 'fragment',
   },
+  'backlog-4265': {
+    'harness-4265.sql': 'rolled_back', 'harness-4265-fixtures.sql': 'rolled_back', 'harness-4265-structure.sql': 'rolled_back',
+    'apply-20261123160000.sql': 'commits', 'rollback-20261123160000.sql': 'commits', 'dryrun-foreign-rows.sql': 'fragment',
+  },
   'backlog-4263-sync2-erase': {
     'apply-20261123110000.sql': 'commits', 'rollback-20261123110000.sql': 'commits', 'rollback-20261123120000.sql': 'commits',
   },

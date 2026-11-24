@@ -218,8 +218,9 @@ describe('BACKLOG-4263 production post-checks', () => {
     const pc = read(FILE(v));
     const defined = bodies(MIG.get(v)!);
     const pins = pinned(pc);
-    // a schedule-only migration defines no function; its post-check pins the cron job instead
-    if (defined.size === 0) expect(cte(pc, 'job(name, want)').length).toBeGreaterThan(0);
+    // a schedule-only migration defines no function; its post-check pins the cron job instead. A migration that only
+    // revokes table privileges (BACKLOG-4265) pins the grants of the relations it names.
+    if (defined.size === 0) expect(cte(pc, 'job(name, want)').length + cte(pc, 'rx(name, src, role, want, kind)').length).toBeGreaterThan(0);
     else expect(defined.size).toBeGreaterThan(0);
     expect([...pins.keys()].sort()).toEqual([...defined.keys()].sort());
     for (const [name, body] of defined) expect(`${name} ${pins.get(name)}`).toBe(`${name} ${md5(body)}`);
