@@ -11,6 +11,7 @@
 --   one PENDING authorization request that expires in one hour;
 --   three ai_app_connect_notices rows of F: due, sent and failed;
 --   three mcp_call_log rows of F.
+-- Sent ALONE it COMMITS its rows (it has no RAISE of its own): only ever send it composed in front of a harness file.
 -- Guard: refuses unless the dry-run database's marker row is present and the hosted test database's marker row is not.
 DO $guard4266fr$
 BEGIN

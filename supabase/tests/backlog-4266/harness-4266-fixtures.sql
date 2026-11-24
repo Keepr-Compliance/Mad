@@ -11,7 +11,11 @@
 --   (three invented auth.users rows and their mcp_* rows, one mcp_oauth_clients row) and on the ONE mcp_settings row
 --   until the call ends (a portal-secret change waits); the pg_proc row of mcp_exchange_code (CREATE OR REPLACE) until
 --   the call ends; inside each control or mutant only, ACCESS EXCLUSIVE / SHARE ROW EXCLUSIVE on
---   ai_app_connect_notices (ADD CONSTRAINT, CREATE TRIGGER), released when that subtransaction is undone.
+--   ai_app_connect_notices (ADD CONSTRAINT, CREATE TRIGGER), released when that subtransaction is undone; the row check
+--   (pg_temp.row_hashes, lib/helpers.sql) reads every row of ai_app_connect_notices, mcp_connections, mcp_tokens,
+--   mcp_authorization_codes, mcp_authorization_requests, mcp_call_log, mcp_oauth_clients and auth.users and so holds
+--   ACCESS SHARE on each of them until the call ends (it blocks only ALTER / DROP / TRUNCATE / VACUUM FULL of those
+--   tables from another session; no row is locked by it).
 -- statement_timeout 240s.
 DO $guard4266$
 DECLARE n bigint := 0;

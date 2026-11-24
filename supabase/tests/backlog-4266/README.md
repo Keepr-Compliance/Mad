@@ -46,8 +46,8 @@ Read each result with `python3 gen.py report <out> fixtures|structure|full`.
   - full: `controls=9 mutant_entries=20 (real=19 + negative_control_required_not_applied=1) problems=0`.
 - The string `H4266_FIXTURES_OK` never appears in a database answer.
 
-**Rows that are not the fixture's.** The harness never counts or reads rows that do not belong to its three invented
-users, its one app registration, or its own codes.
+**Rows that are not the fixture's.** The harness never asserts on rows that do not belong to its three invented
+users, its one app registration, or its own codes. It does read them, for the row check below.
 - Before the fixtures, it takes an md5 of every existing row of eight tables (`pg_temp.t66_pre`, `lib/helpers.sql`):
   - `ai_app_connect_notices`
   - `mcp_connections`
@@ -82,3 +82,25 @@ subtransaction, `public.ai_app_connect_notices` gets one of four additions:
 - a BEFORE INSERT trigger that raises 40P01;
 - a BEFORE INSERT trigger that raises 55P03;
 - a BEFORE INSERT trigger that returns NULL (zero rows, no error).
+
+## Stop rules (for every call of this harness on a shared database)
+
+1. **Reporter problems.** Any `NOT OK`, `problems=` above 0, `NOT_APPLIED`, `NOT_CAUGHT`, `CRASH`, `NEG_FAILED` or
+   `transport:` line: STOP. Send nothing further: not the later stages, and not this file again.
+2. **HTTP 200.** A `kt-sql: HTTP 200` line (or two status lines) means the call COMMITTED. STOP and escalate at once.
+   Fixture rows may have persisted; count them by the fixture ids only.
+3. **Non-zero `gone_or_changed`.** STOP. Do NOT re-send. A row that existed before the call was deleted or changed
+   while the call ran. Either:
+   - the call itself did it: a defect in the product or the harness; or
+   - another session wrote during the call. Each statement sees a fresh snapshot, so the final check sees other
+     sessions' commits.
+
+   Writers that can do the second:
+   - any AI-app call (it updates a connection's last-used time and the call log);
+   - a token refresh;
+   - the connect-notice sender;
+   - a request being claimed or approved;
+   - a scheduled cleanup;
+   - a sign-in.
+
+   Report the table name and the count only, never row content. A re-run needs a written diagnosis first.
