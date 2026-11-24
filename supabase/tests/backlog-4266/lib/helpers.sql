@@ -45,3 +45,30 @@ CREATE FUNCTION pg_temp.all_of(VARIADIC r text[]) RETURNS text LANGUAGE sql IMMU
               ELSE 'FAIL: ' || string_agg(CASE WHEN x <> 'PASS' THEN '#' || o || ' ' || x END, ' | ') END
     FROM unnest(r) WITH ORDINALITY t(x, o)
 $h$;
+
+-- Rows that exist before this call's fixtures: one md5 of each row's text per table, taken here, before any fixture
+-- row exists. pg_temp.foreign_rows() compares them with the tables at the moment it is called: every one of them must
+-- still be there, unchanged. No row content is kept or printed; only counts. Not included, because this call changes
+-- them on purpose or the product's own cleanup may: the ONE mcp_settings row (the fixtures set the portal secret, then
+-- the final RAISE restores it), mcp_rate_counters (_mcp_bump deletes stale buckets), and authorization requests that
+-- had already expired when the call began (mcp_authorize_begin deletes those). All of them come back with the RAISE.
+CREATE FUNCTION pg_temp.row_hashes() RETURNS TABLE (t text, h text) LANGUAGE sql VOLATILE AS $h$
+  SELECT 'ai_app_connect_notices'::text, md5(x::text) FROM public.ai_app_connect_notices x
+  UNION ALL SELECT 'mcp_connections', md5(x::text) FROM public.mcp_connections x
+  UNION ALL SELECT 'mcp_tokens', md5(x::text) FROM public.mcp_tokens x
+  UNION ALL SELECT 'mcp_authorization_codes', md5(x::text) FROM public.mcp_authorization_codes x
+  UNION ALL SELECT 'mcp_authorization_requests', md5(x::text) FROM public.mcp_authorization_requests x WHERE x.expires_at >= now()
+  UNION ALL SELECT 'mcp_call_log', md5(x::text) FROM public.mcp_call_log x
+  UNION ALL SELECT 'mcp_oauth_clients', md5(x::text) FROM public.mcp_oauth_clients x
+  UNION ALL SELECT 'auth.users', md5(x::text) FROM auth.users x
+$h$;
+CREATE TEMP TABLE t66_pre AS SELECT * FROM pg_temp.row_hashes();
+CREATE FUNCTION pg_temp.foreign_rows() RETURNS jsonb LANGUAGE sql VOLATILE AS $h$
+  WITH now_ AS (SELECT * FROM pg_temp.row_hashes()),
+       tbls(t) AS (VALUES ('ai_app_connect_notices'), ('mcp_connections'), ('mcp_tokens'), ('mcp_authorization_codes'),
+                          ('mcp_authorization_requests'), ('mcp_call_log'), ('mcp_oauth_clients'), ('auth.users'))
+  SELECT jsonb_object_agg(b.t, jsonb_build_object(
+           'before', (SELECT count(*) FROM pg_temp.t66_pre p WHERE p.t = b.t),
+           'gone_or_changed', (SELECT count(*) FROM pg_temp.t66_pre p WHERE p.t = b.t AND NOT EXISTS (SELECT 1 FROM now_ n WHERE n.t = p.t AND n.h = p.h))))
+    FROM tbls b
+$h$;

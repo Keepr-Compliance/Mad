@@ -130,6 +130,14 @@ describe('BACKLOG-4266 migration 20261123170000', () => {
     }
     const full = read(join(DIR, 'harness-4266.sql'));
     expect(full.split(APPLY)).toHaveLength(2);
+    // the dry-run-only prefix is never part of a harness file and refuses the test database's marker
+    const prefix = read(join(DIR, 'dryrun-foreign-rows.sql'));
+    expect(prefix).toContain("md5(u.id::text) = 'bbde4ef0aae0710f8ce0c22454224882'");
+    expect(prefix).toContain("OR EXISTS (SELECT 1 FROM auth.users u WHERE md5(u.id::text) = '53a385187695375e2e8695625a20a77a') THEN");
+    expect(full).not.toContain('h4266-foreign');
+    // no assertion counts a whole table: every count over ai_app_connect_notices in the harness is scoped to the fixture users
+    expect(full).not.toMatch(/count\(\*\) FROM public\.ai_app_connect_notices\)/);
+    expect(full).toContain("pg_temp.rec('foreign_rows', pg_temp.foreign_rows())");
     expect(Object.keys(FACTS.mutants)).toEqual(expect.arrayContaining(['M01_swallow_restored', 'M03_reraised_as_mc001', 'M04_no_row_count_check',
       'M05_token_fail_answer', 'M02_warning_then_continue', 'N01_noop_probe']));
   });

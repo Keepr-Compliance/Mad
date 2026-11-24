@@ -120,6 +120,8 @@ BEGIN
     'anthropic', EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = pg_temp.redir('anthropic') AND a.provider = 'anthropic'),
     'openai', EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = pg_temp.redir('openai') AND a.provider = 'openai')));
   PERFORM pg_temp.rec('fx_users', to_jsonb((SELECT count(*) FROM auth.users u WHERE u.id IN (pg_temp.uid(1), pg_temp.uid(2), pg_temp.uid(3)))));
-  PERFORM pg_temp.rec('fx_notices_before', to_jsonb((SELECT count(*) FROM public.ai_app_connect_notices)));
+  -- the fixture users' own notices (none can exist: the users were created above); rows of other users are not counted
+  PERFORM pg_temp.rec('fx_notices_before', to_jsonb((SELECT count(*) FROM public.ai_app_connect_notices n
+                                                     WHERE n.user_id IN (pg_temp.uid(1), pg_temp.uid(2), pg_temp.uid(3)))));
 END
 $fx4266$;
