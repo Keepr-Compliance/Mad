@@ -9,8 +9,9 @@ Usage: harness.py run [--print] [--stage=fixtures|structure|controls|mutants|ful
 `harness.py write` writes apply-20261123110000.sql (E1's text unchanged + its ledger row); `harness.py check` (offline)
 also fails when that file differs from what E1 gives now.
 
-Needs on the test project: 20261123100000 (S1) applied (E1 refuses without it). E1/E3 need not be applied: the call
-runs both rollback files first, then E1 from the working tree, so it always tests this checkout.
+Needs on the test project: 20261123100000 (S1) and E1 20261123110000 applied: the call runs both rollback files first,
+then E1 from the working tree, so it always tests this checkout, and the E1 rollback's pre-check refuses unless E1's six
+functions are there at the bodies E1 wrote. E3 need not be applied (its rollback is re-runnable).
 
 Order in a call: the guard (refuses any database that is not the test database); lock and statement timeouts; the run
 history cleared (every cloud_blob_erase_runs and cloud_blob_erase_leases row deleted, counts recorded as history_cleared,
@@ -171,8 +172,18 @@ $guard4263e$;"""
 # the run history: deleted inside this call (undone by its final RAISE) so the embedded E1 rollback does not refuse;
 # the counts are reported, never asserted
 CLEAR_HISTORY = """DO $hist4263e$
-DECLARE nr bigint := 0; nl bigint := 0;
+DECLARE nr bigint := 0; nl bigint := 0; lk jsonb := '{}';
 BEGIN
+  -- the lock the embedded E1 rollback's DROP takes, taken first: before any row lock, so a job tick only waits (or this
+  -- call gets 55P03). Order runs, then leases: every E1 function touches runs before leases (the claim inserts its run
+  -- row, then leases; finish reads its run row, then deletes leases), so a tick holding runs never waits for us on leases.
+  IF pg_catalog.to_regclass('public.cloud_blob_erase_runs') IS NOT NULL AND pg_catalog.to_regclass('public.cloud_blob_erase_leases') IS NOT NULL THEN
+    LOCK TABLE public.cloud_blob_erase_runs, public.cloud_blob_erase_leases IN ACCESS EXCLUSIVE MODE;   /*HISTORY:lock*/
+    SELECT jsonb_object_agg(c.relname::text, true) INTO lk FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation
+     WHERE l.pid = pg_catalog.pg_backend_pid() AND l.granted AND l.mode = 'AccessExclusiveLock'
+       AND c.oid IN ('public.cloud_blob_erase_runs'::regclass, 'public.cloud_blob_erase_leases'::regclass);
+  END IF;
+  INSERT INTO pg_temp.p4263e_out VALUES ('history_lock', coalesce(lk, '{}')::text);
   IF pg_catalog.to_regclass('public.cloud_blob_erase_leases') IS NOT NULL THEN
     DELETE FROM public.cloud_blob_erase_leases;                                                /*HISTORY:leases*/
     GET DIAGNOSTICS nl = ROW_COUNT;
@@ -290,7 +301,7 @@ BEGIN
   c := pg_temp.claim(true);
   INSERT INTO pg_temp.p4263e_out VALUES ('dry_claim_ms', ceil(extract(epoch FROM clock_timestamp() - t0) * 1000)::text);
   INSERT INTO pg_temp.p4263e_out VALUES ('dry_claim_counts', (c -> 'counts')::text);
-  r := pg_temp.room();
+  r := coalesce(pg_temp.room('listing'), pg_temp.room('rows'), pg_temp.room('owners'));
   INSERT INTO pg_temp.p4263e_out VALUES ('room', coalesce(r, 'ok'));
 END
 $fxt4263e$;"""
@@ -365,7 +376,7 @@ def report(stdout, stderr='', out=print, stage=None):
     except Exception:
         pass
     if stage == 'history_mutant':
-        caught = HISTORY_REFUSAL in msg and 'P4263E_RESULT' not in msg
+        caught = ('P0001: ' + HISTORY_REFUSAL) in msg and 'P4263E_RESULT' not in msg
         out('%-7s M_History_not_cleared (call level) -> %s' % ('CAUGHT' if caught else 'MISSED', msg.split('\n')[0][:300]))
         return 0 if caught else 1
     if stage == 'fixtures':
@@ -375,8 +386,8 @@ def report(stdout, stderr='', out=print, stage=None):
             return 2
         res = json.loads(m.group(1))
         ok = res.get('mode') == 'fixtures' and res.get('room') == 'ok' and 'history_cleared' in res
-        out('fixtures: setup %s ms, dry claim %s ms, room %s, history_cleared %s, dry claim counts %s'
-            % (res.get('setup_ms'), res.get('dry_claim_ms'), res.get('room'), res.get('history_cleared'), res.get('dry_claim_counts')))
+        out('fixtures: setup %s ms, dry claim %s ms, room %s, history_cleared %s, history_lock %s, dry claim counts %s'
+            % (res.get('setup_ms'), res.get('dry_claim_ms'), res.get('room'), res.get('history_cleared'), res.get('history_lock'), res.get('dry_claim_counts')))
         out('fixtures: %s' % ('OK' if ok else 'NOT OK'))
         return 0 if ok else 1
     m = re.search(r'P4263E_RESULT (\{.*\})\s*\nCONTEXT', msg, re.S)
@@ -387,7 +398,7 @@ def report(stdout, stderr='', out=print, stage=None):
     if stage and res.get('mode') != stage:
         out('NOT OK: this is the %s call, expected %s' % (res.get('mode'), stage))
         return 5
-    out('mode: %s; history_cleared: %s (report only)' % (res.get('mode'), res.get('history_cleared')))
+    out('mode: %s; history_cleared: %s; history_lock: %s (report only)' % (res.get('mode'), res.get('history_cleared'), res.get('history_lock')))
     bad = n_ctl = n_mut = 0
     for k in sorted(res):
         v = res[k]
@@ -459,7 +470,12 @@ def selftest(green_ok=False):
     print('%-4s no result line: exit %d (want 2)' % ('ok' if got == 2 else 'BAD', got))
     refusal = ('{"message":"Failed to run sql query: ERROR:  P0001: ' + HISTORY_REFUSAL + '1 rows (the erase job\'s run history); keep a '
                'copy, then delete them first\\nCONTEXT:  x"}\nkt-sql: HTTP 400\n')
+    guard_refusal = ('{"message":"Failed to run sql query: ERROR:  P0001: erase harness refuses to run: TEST DATABASE ONLY (test database marker absent)'
+                     ' ' + HISTORY_REFUSAL + '\\nCONTEXT:  x"}\nkt-sql: HTTP 400\n')
     for label, raw, want in (('history mutant refused (CAUGHT)', refusal, 0),
+                             ('history mutant: the guard refused (MISSED)', guard_refusal, 1),
+                             ('history mutant: transport failure (MISSED)', '{"message": "transport failure (exit 255): ' + HISTORY_REFUSAL + '"}\nkt-sql: HTTP 599\n', 1),
+                             ('history mutant: the text under another SQLSTATE (MISSED)', '{"message":"Failed to run sql query: ERROR:  42501: ' + HISTORY_REFUSAL + '"}\nkt-sql: HTTP 400\n', 1),
                              ('history mutant gave a result (MISSED)', _canned({'C_p_a': 'PASS'}), 1),
                              ('history mutant: another error (MISSED)', '{"message":"Failed to run sql query: ERROR:  55P03: lock timeout"}\nkt-sql: HTTP 400\n', 1)):
         got = report(raw, out=lambda *_: None, stage='history_mutant')
@@ -476,6 +492,66 @@ def selftest(green_ok=False):
     return 1 if bad else 0
 
 
+
+
+def top_statements(text):
+    """top-level statements (comments dropped, string and dollar-quoted text kept), split on top-level semicolons"""
+    out, cur, i, n = [], [], 0, len(text)
+    while i < n:
+        if text.startswith('--', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        c = text[i]
+        if c == "'":
+            j = i + 1
+            while True:
+                j = text.find("'", j)
+                if j < 0 or text[j + 1:j + 2] != "'":
+                    break
+                j += 2
+            j = n - 1 if j < 0 else j
+            cur.append(text[i:j + 1]); i = j + 1
+            continue
+        if c == '$' and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')):
+            m = re.match(r'\$([A-Za-z_][A-Za-z0-9_]*)?\$', text[i:])
+            if m:
+                tag = m.group(0)
+                j = text.find(tag, i + len(tag))
+                j = n - len(tag) if j < 0 else j
+                cur.append(text[i:j + len(tag)]); i = j + len(tag)
+                continue
+        if c == ';':
+            st = ''.join(cur).strip()
+            if st:
+                out.append(st)
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    tail = ''.join(cur).strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def ends_in_raise(text, label):
+    """the call must end in its final RAISE (otherwise it COMMITS): exactly one final block, last, a DO that raises,
+    nothing after it, and no top-level transaction control anywhere"""
+    st = top_statements(text)
+    bad = []
+    fins = [x for x in st if x.startswith('DO $fin4263e$')]
+    if len(fins) != 1 or st[-1] is not fins[0]:
+        bad.append('%s call: the last statement is not its one final DO $fin4263e$ block' % label)
+    elif not re.search(r"\bRAISE EXCEPTION '(P4263E_RESULT|P4263E_FIXTURES_OK) %'", st[-1]):
+        bad.append('%s call: the final block does not RAISE' % label)
+    if text.rstrip()[-len('$fin4263e$;'):] != '$fin4263e$;':
+        bad.append('%s call: text follows the final block' % label)
+    for x in st:
+        if re.match(r'(?i)(COMMIT|END|ROLLBACK|ABORT|BEGIN|START\s+TRANSACTION|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b', x):
+            bad.append('%s call: top-level transaction control: %s' % (label, x[:40]))
+    return bad
 
 
 # ------------------------------------------------------------------------------------------------ offline structure check
@@ -638,6 +714,13 @@ if __name__ == '__main__':
         blocks = re.findall(r"  v := NULL;\n  BEGIN\n.*?  INSERT INTO pg_temp\.p4263e_out VALUES \('[CM]_\w+', coalesce\(v, 'NULL \(body set nothing\)'\)\);\n", drv, re.S)
         if len(blocks) != len(STRUCTURE['controls']) + len(STRUCTURE['mutants']) or any(b not in full for b in blocks):
             probs.append('structure call: %d blocks, not all byte-identical to the full call' % len(blocks))
+        if SEED_HISTORY.count("INSERT INTO public.cloud_blob_erase_runs (mode, counts) VALUES ('live', jsonb_build_object('p4263e', '__RUN__'));") != 1:
+            probs.append('the history mutant seeds no run row')
+        if CLEAR_HISTORY.count('LOCK TABLE public.cloud_blob_erase_runs, public.cloud_blob_erase_leases IN ACCESS EXCLUSIVE MODE;') != 1 \
+                or CLEAR_HISTORY.index('LOCK TABLE') > CLEAR_HISTORY.index('DELETE FROM'):
+            probs.append('the history clearing does not lock both tables (runs, then leases) before its first DELETE')
+        for st in STAGES:
+            probs += ends_in_raise(compose({'stage': st}, run='0' * 24), st)
         for stmt in ('DELETE FROM public.cloud_blob_erase_leases;', 'DELETE FROM public.cloud_blob_erase_runs;'):
             if CLEAR_HISTORY.count(stmt) != 1:
                 probs.append('the history clearing lacks: ' + stmt)
@@ -679,8 +762,10 @@ if __name__ == '__main__':
             sel['mutants'] = True
         elif x.startswith('--only='):
             sel['only'] = x.split('=')[1].split(',')
-    if guard != GUARD_MD5 and not transport:
+    if guard != GUARD_MD5 and (not transport or os.path.realpath(transport) == os.path.realpath(os.path.expanduser('~/.claude/bin/kt-sql'))):
         print('refusing: --marker is only for a non-default --transport'); sys.exit(2)
+    if sel.get('only') and (sel.get('controls') or sel.get('mutants') or sel.get('stage')):
+        print('refusing: --only runs the named mutants on their own; it does not combine with --controls, --mutants or --stage'); sys.exit(2)
     if not re.fullmatch(r'[0-9a-f]{32}', guard):
         print('refusing: --marker must be 32 lowercase hex characters'); sys.exit(2)
     if transport and not (os.path.isfile(transport) and os.access(transport, os.X_OK)):

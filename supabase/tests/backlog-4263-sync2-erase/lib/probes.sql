@@ -82,7 +82,7 @@ END $p$;
 CREATE FUNCTION pg_temp.p_c6a() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(11); b uuid; c jsonb; f jsonb; dry jsonb;
 BEGIN
-  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
+  IF pg_temp.room('listing') IS NOT NULL THEN RETURN pg_temp.room('listing'); END IF;
   b := pg_temp.mk_blob(u, 'c6a', now() - interval '3 days', now() - interval '3 days', now() - interval '1 hour');
   PERFORM pg_temp.mk_obj(pg_temp.path(b), now() - interval '3 days');
   c := pg_temp.claim(false);
@@ -112,6 +112,8 @@ END $p$;
 CREATE FUNCTION pg_temp.p_c6b() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(12); d uuid; b uuid; c jsonb;
 BEGIN
+  -- "not listed" proves nothing while the listing is full of other blobs
+  IF pg_temp.room('listing') IS NOT NULL THEN RETURN pg_temp.room('listing'); END IF;
   d := pg_temp.mk_deal(u, pg_temp.fx(1201), 'c6b');
   b := pg_temp.mk_blob(u, 'c6b', now() - interval '3 days', now() - interval '3 days', NULL);
   PERFORM pg_temp.mk_file(u, d, 'c6b', NULL, b, NULL);
@@ -163,6 +165,7 @@ CREATE FUNCTION pg_temp.p_c6d() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(14); d uuid; m_old uuid; m_young uuid; m_live uuid; f_dep uuid; f_old uuid; f_young uuid;
         b uuid; bad text := '';
 BEGIN
+  IF pg_temp.room('rows') IS NOT NULL THEN RETURN pg_temp.room('rows'); END IF;
   d := pg_temp.mk_deal(u, pg_temp.fx(1401), 'c6d');
   m_old   := pg_temp.mk_msg(u, d, 'c6d-old',   now() - interval '25 hours');
   m_young := pg_temp.mk_msg(u, d, 'c6d-young', now() - interval '23 hours');
@@ -190,7 +193,7 @@ CREATE FUNCTION pg_temp.p_c6e() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(15); k uuid := pg_temp.mk_user(16); b_old uuid; b_young uuid; b_kept uuid;
         n_old text; n_young text; n_kept text; c jsonb; bad text := '';
 BEGIN
-  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
+  IF pg_temp.room('listing') IS NOT NULL THEN RETURN pg_temp.room('listing'); END IF;
   b_old   := pg_temp.mk_blob(u, 'c6e-old',   now() - interval '3 days', now() - interval '3 days', NULL);
   b_young := pg_temp.mk_blob(u, 'c6e-young', now() - interval '2 hours', now() - interval '2 hours', NULL);
   b_kept  := pg_temp.mk_blob(k, 'c6e-kept',  now() - interval '3 days', now() - interval '3 days', now() - interval '1 hour');
@@ -214,7 +217,8 @@ CREATE FUNCTION pg_temp.p_c6f() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(17); ia uuid := pg_temp.fx(1701); io uuid := pg_temp.fx(1702);
         da uuid; dob uuid; ma uuid; shared uuid; own uuid; fa uuid; c jsonb; r jsonb; run uuid; i int; bad text := '';
 BEGIN
-  IF pg_temp.room() IS NOT NULL THEN RETURN pg_temp.room(); END IF;
+  IF pg_temp.room('listing') IS NOT NULL THEN RETURN pg_temp.room('listing'); END IF;
+  IF pg_temp.room('owners') IS NOT NULL THEN RETURN pg_temp.room('owners'); END IF;
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(u, ia, now() - interval '1 hour');
   da := pg_temp.mk_deal(u, ia, 'c6f-active'); dob := pg_temp.mk_deal(u, io, 'c6f-old');
@@ -319,6 +323,7 @@ END $p$;
 CREATE FUNCTION pg_temp.p_owners() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE a uuid := pg_temp.mk_user(21); b uuid := pg_temp.mk_user(22); c uuid := pg_temp.mk_user(23); j jsonb; pa int; pb int;
 BEGIN
+  IF pg_temp.room('owners') IS NOT NULL THEN RETURN pg_temp.room('owners'); END IF;
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(a, pg_temp.fx(2101), '2000-01-02'::timestamptz);
   PERFORM pg_temp.mk_settings(b, pg_temp.fx(2201), '2000-01-01'::timestamptz);
@@ -374,6 +379,7 @@ CREATE FUNCTION pg_temp.p_dry_run() RETURNS text LANGUAGE plpgsql AS $p$
 DECLARE u uuid := pg_temp.mk_user(25); k uuid := pg_temp.mk_user(26); ia uuid := pg_temp.fx(2501); d uuid; dob uuid; m uuid;
         b_orphan uuid; b_fenced uuid; b_live uuid; b_old uuid; before text; after text; c jsonb; r jsonb; runs_before uuid[];
 BEGIN
+  IF coalesce(pg_temp.room('rows'), pg_temp.room('listing')) IS NOT NULL THEN RETURN coalesce(pg_temp.room('rows'), pg_temp.room('listing')); END IF;
   PERFORM pg_temp.switch(true);
   PERFORM pg_temp.mk_settings(u, ia, now() - interval '2 hours');
   d := pg_temp.mk_deal(u, ia, 'dry'); dob := pg_temp.mk_deal(u, pg_temp.fx(2502), 'dry-old');
@@ -464,6 +470,10 @@ BEGIN
   END;
   IF t NOT LIKE 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds % rows (the erase job''s run history); keep a copy, then delete them first' THEN
     RETURN 'FAIL refused for another reason: ' || left(t, 200);
+  END IF;
+  -- the table was created inside this call, so the only row is this probe's
+  IF t NOT LIKE 'ROLLBACK 20261123110000: public.cloud_blob_erase_runs holds 1 rows %' THEN
+    RETURN 'FAIL the refusal counted other rows: ' || left(t, 200);
   END IF;
   DELETE FROM public.cloud_blob_erase_runs x WHERE x.counts ->> 'p4263e' = '__RUN__';
   BEGIN
