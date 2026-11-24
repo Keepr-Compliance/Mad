@@ -8,8 +8,11 @@ usage: verdict.py <attach|c6g_skip|c6g_wait> <mutant name or ''> <a.out> <b.out>
        verdict.py fkcounts <label> <fk.out>   -> one line per table holding rows of the fixture user, then 'total=<n> setnull=<m>'
 Prints one line. Exit 0 only for PASS (pristine) or CAUGHT (mutant).
 
-A kt-sql output is the Management API's body (a JSON array of rows, or {"message": "Failed to run sql query: ERROR: ..."}
-for an error, including an expected RAISE) followed on an error by 'kt-sql: HTTP <code>'. Each session ends with one
+       verdict.py col <key> < out             -> one value of the call's tagged answer (run.sh's reader)
+A transport output is one JSON line (an array of rows, or {"message": "Failed to run sql query: ERROR: ..."} for an
+error, including an expected RAISE) and on an error 'kt-sql: HTTP <code>'; stderr may be captured with stdout. A call
+that does not RAISE answers with one tagged json (final SELECT ... AS a); tagged() reads it from both row shapes (the
+final SELECT's column, or every statement's output line). Each session ends with one
 marker line written from the database clock:
   session A: attach commits and answers a row {t_start, t_hold, t_end, txn}; c6g_skip / c6g_wait RAISE 'P_A {json}'.
   session B: RAISE 'P_B {json}' with t_start (after the gate), t_end and the case's value (fenced / answer).
@@ -19,8 +22,10 @@ starting inside A's hold with at least OVERLAP_S seconds of it left. With overla
 hold ended, i.e. after A's locks) is decided by the locks alone, so timing cannot make correct code FAIL.
 """
 import json
+import os
 import re
 import sys
+import tempfile
 from datetime import datetime
 
 SWITCH_WAIT_S = 0.5  # c6g_skip: B's own writes before the scrub must not wait longer than this
@@ -28,19 +33,56 @@ OVERLAP_S = 1.5  # B must start at least this long before A's hold ends (hold 4 
 CASES = {'attach': 'single_statement_fence', 'c6g_skip': 'no_skip_locked', 'c6g_wait': 'read_before_lock'}
 
 
+def envelope(path):
+    """The transport's JSON line: the first line of the output that parses as a JSON array or object (stderr may be
+    captured with stdout, in any order, so other lines are skipped). None when there is none."""
+    for line in open(path, encoding='utf-8').read().replace('\r\n', '\n').split('\n'):
+        line = line.strip()
+        if line[:1] in ('[', '{'):
+            try:
+                v = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(v, (list, dict)):
+                return v
+    return None
+
+
+def tagged(rows_):
+    """The last tagged answer {"tag": ...} among a call's rows. Two row shapes, one answer: a transport that returns
+    the final SELECT's json column as {"a": {...}} (or {"a": "<json text>"}), and one that returns every output line of
+    every statement as {"line": "<text>"}."""
+    for r in reversed(rows_):
+        if not isinstance(r, dict):
+            continue
+        for key in ('a', 'line'):
+            v = r.get(key)
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except ValueError:
+                    v = None
+            if isinstance(v, dict) and 'tag' in v:
+                return v
+    return None
+
+
 def body(path):
     """(rows, message): the JSON rows of a success, or the message text of an error; (None, None) when unreadable."""
-    t = open(path, encoding='utf-8').read()
-    b = t.split('\nkt-sql:')[0].strip()
-    try:
-        v = json.loads(b)
-    except Exception:
-        return None, None
+    v = envelope(path)
     if isinstance(v, list):
         return v, None
     if isinstance(v, dict) and isinstance(v.get('message'), str):
         return None, v['message']
     return None, None
+
+
+def answer(path, tag=None):
+    rows_, msg = body(path)
+    a = tagged(rows_) if rows_ else None
+    if a is None or (tag and a.get('tag') != tag):
+        return None
+    return a
 
 
 SAFE = re.compile(r'(P_GATE_TIMEOUT|canceling statement due to (lock|statement) timeout|deadlock detected)')
@@ -52,8 +94,10 @@ def safe(path):
     deadlock messages, that message; otherwise '(message withheld)'. A row answer prints its column names only."""
     rows_, msg = body(path)
     if rows_ is not None:
-        cols = sorted({k for r in rows_ if isinstance(r, dict) for k in r})
-        return f'{len(rows_)} row(s), columns {", ".join(cols)}'
+        a = tagged(rows_)
+        if a is not None:
+            return f"answer {a.get('tag')}, keys {', '.join(sorted(k for k in a if k != 'tag'))}"
+        return f'{len(rows_)} row(s), no tagged answer'
     if msg is None:
         return 'no readable answer'
     for name in ('P_A', 'P_B'):
@@ -100,8 +144,7 @@ def verdict(case, mut, fa, fb):
     if mut and mut != CASES[case]:
         return f'INCONCLUSIVE: {case} has no mutant {mut}'
     if case == 'attach':
-        rows, msg = body(fa)
-        a = rows[-1] if rows and isinstance(rows[-1], dict) else None
+        a = answer(fa, 'attach_a')
         if a is None or a.get('txn') != 'one':
             return 'INCONCLUSIVE: session A did not answer its row from one transaction: ' + safe(fa)
     else:
@@ -160,13 +203,10 @@ def fk_lines(label, fk):
     return lines + [f'total={total} setnull={kept}']
 
 
-def probe(rows_, need):
-    """(ok, line) for the first call. ok only when it proves one call = one transaction and the shape (exactly one row,
-    the last statement's), read committed, readable per-table counts that are all 0, and nothing left behind."""
-    if not isinstance(rows_, list) or len(rows_) != 1 or not isinstance(rows_[0], dict):
-        n = len(rows_) if isinstance(rows_, list) else 0
-        return False, f'the probe answered {n} rows, not exactly 1: one call = one transaction (last statement only) not proven'
-    r = rows_[0]
+def probe(r, need):
+    """(ok, line) for the first call's tagged answer. ok only when it proves one call = one transaction (a local setting
+    set by an earlier statement is still visible), read committed, readable per-table counts that are all 0, and nothing
+    left behind."""
     if r.get('txn') != 'one':
         return False, f"one call = one transaction NOT proven (txn {r.get('txn')!r}); nothing was created"
     if r.get('iso') != 'read committed':
@@ -190,9 +230,24 @@ def probe(rows_, need):
                   f"fk_columns={len(fk)}")
 
 
+def timing(case, fa, fb):
+    """One line of the measured times (database clock), for the record; never part of the verdict."""
+    a = answer(fa, 'attach_a') if case == 'attach' else marker(fa, 'P_A')
+    b = marker(fb, 'P_B')
+    if not a or not b:
+        return 'timing: unreadable'
+    t = {k: ts(v) for k, v in (('a0', a.get('t_start')), ('ah', a.get('t_hold') or a.get('t_start')), ('ae', a.get('t_end')),
+                                ('b0', b.get('t_start')), ('be', b.get('t_end')))}
+    if None in t.values():
+        return 'timing: unreadable'
+    s = lambda x, y: f"{(t[y] - t[x]).total_seconds():.3f}"
+    return (f"timing: session A {s('a0', 'ae')} s (hold {s('ah', 'ae')} s); session B {s('b0', 'be')} s; "
+            f"overlap: B started {s('b0', 'ae')} s before A's hold ended; B ended {s('ae', 'be')} s after it")
+
+
 def precheck(path, case):
-    rows_, msg = body(path)
-    if rows_ is None:
+    a = answer(path, 'probe')
+    if a is None:
         return False, 'precheck failed: ' + safe(path)
 
     def need(r):
@@ -203,20 +258,20 @@ def precheck(path, case):
         return [(f'{runs} cloud_blob_erase_runs row(s) marked p4263c exist', runs),
                 (f'{orph} unreferenced blobs older than 24 h (attach needs fewer than 900, or blob X may not be listed)',
                  case == 'attach' and orph >= 900)]
-    return probe(rows_, need)
+    return probe(a, need)
 
 
 def applied(name, path):
-    rows, msg = body(path)
-    m = rows[-1].get('m') if rows and isinstance(rows[-1], dict) else None
+    a = answer(path, 'md5')
+    m = a.get('m') if a else None
     if not (isinstance(m, str) and re.fullmatch(r'[0-9a-f]{32}', m)):
-        return f'ERROR: {name} not proven created: {msg or ("md5 " + repr(m))}'[:300]
+        return f'ERROR: {name} not proven created: {safe(path)} (md5 {m!r})'[:300]
     return f'MUTATION APPLIED {name} md5 {m}'
 
 
 def fkcounts(label, path):
-    rows_, msg = body(path)
-    fk = fk_rows(rows_) if rows_ is not None else None
+    a = answer(path, 'fkcount')
+    fk = fk_rows(a.get('fk')) if a else None
     if fk is None:
         return [f'  {label}: per-table counts unreadable ({safe(path)})', 'unreadable'], False
     return fk_lines(label, fk), True
@@ -224,6 +279,17 @@ def fkcounts(label, path):
 
 if __name__ == '__main__':
     a = sys.argv[1:]
+    if len(a) == 2 and a[0] == 'col':
+        with tempfile.NamedTemporaryFile('w', delete=False) as fh:
+            fh.write(sys.stdin.read())
+        try:
+            v = answer(fh.name)
+        finally:
+            os.unlink(fh.name)
+        if v is None or a[1] not in v:
+            sys.exit(1)
+        print(v[a[1]])
+        sys.exit(0)
     if len(a) == 3 and a[0] == 'precheck':
         ok, out = precheck(a[1], a[2])
         print(out.replace('\n', ' '))
@@ -232,6 +298,9 @@ if __name__ == '__main__':
         out = applied(a[1], a[2]).replace('\n', ' ')
         print(out)
         sys.exit(0 if out.startswith('MUTATION APPLIED ') else 1)
+    if len(a) == 4 and a[0] == 'timing':
+        print(timing(a[1], a[2], a[3]))
+        sys.exit(0)
     if len(a) == 2 and a[0] == 'summary':
         print(safe(a[1]).replace('\n', ' '))
         sys.exit(0)

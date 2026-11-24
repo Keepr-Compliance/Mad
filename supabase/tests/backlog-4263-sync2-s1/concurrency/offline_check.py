@@ -27,10 +27,14 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 FOLDER = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else HERE
 MARKER_MAX = 900
-K_LINE = 'K=~/.claude/bin/kt-sql'
+K_LINE = 'K="${SQL_TRANSPORT:-$HOME/.claude/bin/kt-sql}"'
 RUN = '0123456789abcdef'
 USER = str(uuid.uuid4())  # a fresh invented id per offline run; never the nil id (run.sh refuses that)
-FAKE_ROW = 'fakerowvalue4263'  # planted in a stubbed error body; must never reach the output
+FAKE_ROW = 'fakerowvalue4263'
+HOSTED = '53a385187695375e2e8695625a20a77a'
+GUARD_HEAD = '-- guard.sql'
+NOEXEC = os.path.join(tempfile.mkdtemp(), 'noexec')
+open(NOEXEC, 'w').write('#!/bin/bash\n')  # planted in a stubbed error body; must never reach the output
 STUB = r"""import json, os, re, sys, time
 out = os.environ['STUB_OUT']
 sql = sys.argv[2] if sys.argv[1] == '-c' else open(sys.argv[1]).read()
@@ -54,28 +58,39 @@ if sql.startswith('/*p_hold:') and 'answer_a' in cfg:
     sys.stdout.write(cfg['answer_a'] + '\n'); sys.exit(0)
 if 'P_B' in sql and 'answer_b' in cfg:
     sys.stdout.write(cfg['answer_b'] + '\n'); sys.stdout.flush(); sys.stderr.write('kt-sql: HTTP 400\n'); sys.exit(1)
-if '/*t:precheck*/' in sql:
-    if 'probe_rows' in cfg:
-        p(cfg['probe_rows'])
+def ans(obj):
+    # the call's tagged answer in the configured transport shape
+    if cfg.get('shape') == 'dry':
+        p([{'line': 'SET'}, {'line': '{"sub" : "x", "role" : "authenticated"}'}, {'line': 'DO'},
+           {'line': json.dumps(obj, separators=(', ', ' : '))}])
+        print('kt-sql: HTTP 200', flush=True)
     else:
-        r = {'txn': 'one', 'iso': 'read committed', 'track_size': '1kB', 'bypassrls': True, 'by_id': 0, 'by_pattern': 0,
+        p([{'a': obj}])
+tags = re.findall(r"'tag', '(\w+)'", sql)
+tag = tags[-1] if tags else None
+if tag == 'probe':
+    if 'probe_raw' in cfg:
+        p(cfg['probe_raw'])
+    else:
+        r = {'tag': 'probe', 'txn': 'one', 'iso': 'read committed', 'track_size': '1kB', 'bypassrls': True, 'by_id': 0, 'by_pattern': 0,
              'pattern_emails': None, 'mutants': 0, 'mutant_names': None, 'marked_runs': 0, 'auth_users': 25, 'orphans': 0,
              'one_computer': True, 'fk': [{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': cfg.get('fk_pre', 0)}]}
-        r.update(cfg.get('pre', {})); p([r])
-elif '/*t:fkcount*/' in sql:
+        r.update(cfg.get('pre', {})); ans(r)
+elif tag == 'fkcount':
     done = any(re.search(r'/\*t:(teardown|delete)\*/', open(os.path.join(out, f)).read()) for f in os.listdir(out))
-    p([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': cfg.get('fk', 0) if done else 0},
-       {'tbl': 'app_lifecycle_events', 'col': 'user_id', 'del': 'n', 'n': 0 if done else cfg.get('setnull', 0)}])
-elif '/*t:authcount*/' in sql: p([{'n': cfg.get('auth_after', 25)}])
-elif '/*t:verify*/' in sql: p([{'verdict': 'clean'}])
-elif '/*t:residue*/' in sql: p([{'n': 0, 'auth_users': cfg.get('auth_after', 25)}])
-elif '/*t:setup*/' in sql: p([{'blob': Z, 'one_computer': True, 'x': Z, 'd1': Z}])
-elif re.search(r'\bAS left\b', sql): p([{'left': cfg.get('left', 0)}])
-elif re.search(r'\bAS m\b', sql): p([{'m': None if cfg.get('md5_none') else '0' * 32}])
+    ans({'tag': 'fkcount', 'fk': [{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': cfg.get('fk', 0) if done else 0},
+                                  {'tbl': 'app_lifecycle_events', 'col': 'user_id', 'del': 'n', 'n': 0 if done else cfg.get('setnull', 0)}]})
+elif tag == 'authcount': ans({'tag': tag, 'n': cfg.get('auth_after', 25)})
+elif tag == 'verify': ans({'tag': tag, 'verdict': 'clean'})
+elif tag == 'residue': ans({'tag': tag, 'n': 0, 'auth_users': cfg.get('auth_after', 25)})
+elif tag == 'setup': ans({'tag': tag, 'blob': Z, 'one_computer': True, 'x': Z, 'd1': Z})
+elif tag == 'left': ans({'tag': tag, 'left': cfg.get('left', 0)})
+elif tag == 'md5': ans({'tag': tag, 'm': None if cfg.get('md5_none') else '0' * 32})
 elif 'P_B' in sql and cfg.get('b_error'):
     fail('ERROR:  23505: duplicate key value violates unique constraint "x_key"\nDETAIL:  Failing row contains (' + cfg['b_error'] + ').\nCONTEXT:  PL/pgSQL function inline_code_block line 7 at assignment\n')
-elif 'AS j' in sql: p([{'j': {}}])
-elif 'AS mine' in sql: p([{'n': 0, 'mine': 1, 'total': 26}])
+elif tag == 'state': ans({'tag': tag, 'j': {}})
+elif tag == 'own': ans({'tag': tag, 'n': 0, 'mine': 1, 'total': 26})
+elif tag in ('session', 'attach_a', 'reset'): ans({'tag': tag, 'r': {}})
 else: p([{'r': {}}])
 """
 results = []
@@ -98,15 +113,21 @@ def drive(args, cfg=None, sig=None):
         wrapper = os.path.join(d, 'stub-kt')
         open(wrapper, 'w').write(f'#!/bin/bash\nexec /usr/bin/python3 -I {stub} "$@"\n')
         os.chmod(wrapper, 0o700)
-        assert run.count(K_LINE + '\n') == 1
-        run = run.replace(K_LINE + '\n', f'K={wrapper}\n')
         for a, b in REPLACE.items():
             assert run.count(a) == 1
             run = run.replace(a, b)
         open(os.path.join(dst, 'run.sh'), 'w').write(run)
         outdir = os.path.join(d, 'sent')
         os.mkdir(outdir)
-        env = dict(os.environ, STUB_OUT=outdir, STUB_CFG=json.dumps(cfg or {}))
+        env = dict(os.environ, STUB_OUT=outdir, STUB_CFG=json.dumps(cfg or {}), SQL_TRANSPORT=wrapper)
+        env.pop('GUARD_MARKER_MD5', None)
+        env.update((cfg or {}).get('env', {}))
+        if (cfg or {}).get('fake_default'):
+            dflt = os.path.join(env['HOME'], '.claude', 'bin', 'kt-sql')
+            shutil.copy(wrapper, dflt)
+            os.chmod(dflt, 0o700)
+        for k in [k for k, v in env.items() if v is None]:
+            env.pop(k)
         pr = subprocess.Popen(['/bin/bash', os.path.join(dst, 'run.sh')] + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, env=env)
         delay = None
@@ -168,8 +189,24 @@ def common_checks():
         check(f'bash -n {f} ({ver})', r.returncode == 0, r.stderr.strip()[:200])
     src = open(os.path.join(FOLDER, 'run.sh')).read()
     code = '\n'.join(l for l in src.splitlines() if not l.lstrip().startswith('#'))
-    check('transport: one K= line, kt-sql only through $K, no psql/curl',
-          code.count(K_LINE) == 1 and code.count('kt-sql') == 1 and not re.search(r'\b(psql|curl)\b', code))
+    check('transport: one K= line (SQL_TRANSPORT, default kt-sql), every call through $K, no psql/curl',
+          code.count(K_LINE) == 1 and code.count('.claude/bin/kt-sql') == 2 and not re.search(r'\b(psql|curl)\b', code)
+          and not re.search(r'kt-sql\s+-c|\bkt-sql\s+"', code))
+    for what, env in (('missing', {'SQL_TRANSPORT': '/nonexistent/transport'}), ('not executable', {'SQL_TRANSPORT': NOEXEC})):
+        rc, out, texts, _ = drive(GOOD_ARGS, {'env': env})
+        check(f'transport: {what} -> refused with {len(texts)} calls', rc != 0 and len(texts) == 0 and 'transport' in out)
+    rc, out, texts, _ = drive(GOOD_ARGS, {'env': {'GUARD_MARKER_MD5': 'f' * 32}})
+    g = [x for x in texts if 'refuses to run: TEST DATABASE ONLY (test database marker absent)' in x]
+    check(f'guard: GUARD_MARKER_MD5 with a non-default transport -> substituted in all {len(g)} guarded texts, hosted literal gone',
+          len(g) == len(texts) > 3 and all("md5(u.id::text) = '" + 'f' * 32 + "'" in x and HOSTED not in x for x in g))
+    rc, out, texts, _ = drive(GOOD_ARGS)
+    check('guard: every call starts with the guard (after the hold marker in session A), hosted marker by default',
+          len(texts) > 3 and all(re.sub(r'^/\*p_hold:[0-9a-f]{16}\*/\n(-- (?!guard\.sql)[^\n]*\n)*', '', x).startswith(GUARD_HEAD) and HOSTED in x for x in texts))
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, '.claude', 'bin'))
+        rc, out, texts, _ = drive(GOOD_ARGS, {'env': {'SQL_TRANSPORT': None, 'GUARD_MARKER_MD5': 'f' * 32, 'HOME': home}, 'fake_default': True})
+        check(f'guard: GUARD_MARKER_MD5 with the default transport -> refused with {len(texts)} calls', rc != 0 and len(texts) == 0
+              and 'only for a non-default SQL_TRANSPORT' in out)
 
 
 def tags_of(texts):
@@ -177,8 +214,10 @@ def tags_of(texts):
 
 
 def probe_checks(args):
-    rc, out, texts, _ = drive(args, {'probe_rows': [{'probe_set': 'one'}, {'txn': 'one', 'iso': 'read committed'}]})
-    check(f'probe: two rows returned (not last-statement-only) -> {len(texts)} call(s), refused', rc != 0 and len(texts) == 1 and 'not proven' in out)
+    rc, out, texts, _ = drive(args, {'probe_raw': [{'a': {'txn': 'one', 'iso': 'read committed'}}]})
+    check(f'probe: answer without its tag -> {len(texts)} call(s), refused', rc != 0 and len(texts) == 1)
+    rc, out, texts, _ = drive(args, {'shape': 'dry'})
+    check('probe: every statement\'s lines returned (statement-by-statement transport) -> the run goes on', len(texts) > 3 and 'probe: ok' in out)
     rc, out, texts, _ = drive(args, {'pre': {'txn': None}})
     check(f'probe: local setting lost (not one transaction) -> {len(texts)} call(s), refused', rc != 0 and len(texts) == 1 and 'NOT proven' in out)
     rc, out, texts, _ = drive(args, {'pre': {'iso': 'repeatable read'}})
@@ -192,8 +231,55 @@ def probe_checks(args):
     rc, out, texts, _ = drive(args)
     check('probe: one transaction proven -> the run goes on and prints the probe line', len(texts) > 3
           and 'probe: ok' in out and 'txn=one' in out and 'track_activity_query_size=' in out and 'bypassrls=' in out)
+def statements(text):
+    """Split a call into statements the way a client that submits statement by statement does: at ';' outside
+    quotes, dollar quotes and comments; each statement's text starts after the previous ';' with leading whitespace
+    removed, comments kept (observed on the dry-run database: '/*m*/ SELECT pg_sleep(3);' and, for a first statement,
+    '/*m*/\n-- c\nDO $a$ ... $a$;')."""
+    out, i, start, n = [], 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith('--', i):
+            j = text.find('\n', i); i = n if j < 0 else j + 1; continue
+        if text.startswith('/*', i):
+            j = text.find('*/', i + 2); i = n if j < 0 else j + 2; continue
+        if c == "'":
+            j = i + 1
+            while j < n:
+                if text[j] == "'" and text[j + 1:j + 2] == "'":
+                    j += 2; continue
+                if text[j] == "'":
+                    break
+                j += 1
+            i = j + 1; continue
+        m = re.match(r'\$(\w*)\$', text[i:])
+        if m and (i == 0 or not re.match(r'\w', text[i - 1])):
+            tag = m.group(0)
+            j = text.find(tag, i + len(tag)); i = n if j < 0 else j + len(tag); continue
+        if c == ';':
+            out.append(text[start:i + 1].lstrip()); start = i + 1
+        i += 1
+    rest = text[start:].strip()
+    if rest:
+        out.append(rest)
+    return out
+
+
+def like(pattern_body, s):
+    """pg LIKE '%<body>%' (no wildcards inside the body)."""
+    return pattern_body in s
+
+
+def activity_views(call, holding):
+    """What pg_stat_activity.query shows while the holding statement runs: (whole call, first 1024 bytes) for a
+    transport that submits the call as one text, (the holding statement) for one that submits statement by statement."""
+    hosted = call.encode()[:1024].decode(errors='ignore')
+    dry = [s for s in statements(call) if holding(s)]
+    return hosted, dry
+
 
 REPLACE = {}
+GOOD_ARGS = ['R1', RUN, USER]
 common_checks()
 for mode in (['R1', RUN], ['R2', RUN], ['cleanup', RUN]):
     for what, bad in BAD_IDS:
@@ -207,13 +293,27 @@ probe_checks(['R1', RUN, USER])
 CASES = [(c, m) for c in ('R1', 'R2', 'R3', 'R4', 'R5', 'R6') for m in ('', '--mutant') if not (m and c in ('R1', 'R5'))]
 WRITES = re.compile(r'/\*t:(setup|teardown|sessA|sessB)\*/|^CREATE FUNCTION|^DROP FUNCTION', re.M)
 mark = f'p_hold:{RUN}*/'
-for case, mut in CASES:
-    rc, out, texts, _ = drive([case, RUN, USER] + ([mut] if mut else []))
-    label = f'{case}{" " + mut if mut else ""}'
+for (case, mut), shape in [(c, s) for c in CASES for s in ('hosted', 'dry')]:
+    rc, out, texts, _ = drive([case, RUN, USER] + ([mut] if mut else []), {'shape': shape})
+    label = f'{case}{" " + mut if mut else ""} [{shape}]'
+    run_id = RUN
     holders = [t for t in texts if mark in t]
     ends = [len(t.encode()[:t.encode().index(mark.encode()) + len(mark)]) for t in holders]
     check(f'marker {label}: one holder call, marker ends at byte {ends} <= {MARKER_MAX}, gate sent',
           len(holders) == 1 and all(e <= MARKER_MAX for e in ends) and any("'%p_hold:' ||" in t for t in texts))
+    holding = lambda s: 'pg_sleep(4)' in s or 'cloud_blob_erase_scrub_m4263(run' in s
+    if holders:
+        hosted, dry = activity_views(holders[0], holding)
+        check(f'gate {label}: the activity text shows the marker on both transports (whole call: first 1 kB; per statement: '
+              f'{len(dry)} holding statement(s) start with it)', like(mark, hosted) and dry and all(s.startswith('/*' + mark) for s in dry))
+    gates = [t for t in texts if "'%p_hold:' ||" in t]
+    gw = [re.sub(r'\s+', ' ', w) for g in gates for w in re.findall(r'WHILE NOT EXISTS \(SELECT 1 FROM pg_catalog\.pg_stat_activity\s+WHERE(.*?)\)\s*LOOP', g, re.S)]
+    check(f'gate {label}: the gate waits for ANOTHER backend that is SLEEPING with the marker (pid, PgSleep and marker in one WHERE)',
+          len(gw) == 1 and 'pid <> pg_backend_pid()' in gw[0] and "wait_event = 'PgSleep'" in gw[0]
+          and "query LIKE '%p_hold:' || '" + run_id + "' || '*/%'" in gw[0]
+          and re.fullmatch(r"\s*pid <> pg_backend_pid\(\) AND wait_event = 'PgSleep' AND query LIKE '%p_hold:' \|\| '[0-9a-f]{16}' \|\| '\*/%'\s*", gw[0]) is not None)
+    check(f'gate {label}: session 2 never matches its own gate (whole call and every statement)',
+          len(gates) == 1 and not like(mark, gates[0]) and not any(like(mark, s) for s in statements(gates[0])))
     created = [m for t in texts for m in re.findall(r'CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(', t)]
     lock = copies_locked_down(texts)
     check(f'copies {label}: created {created or "none"}; revoked from all four roles, no GRANT {lock or ""}',

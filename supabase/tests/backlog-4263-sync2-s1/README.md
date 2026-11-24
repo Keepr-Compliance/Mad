@@ -100,11 +100,55 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
 - **One run at a time.** A second run started alongside would have its mutant dropped by the first run's trap; the
   precheck and `setup.sql` refuse while any fixture user or `_m4263` function exists. Two starts within the same
   second can both pass these checks; do not start two.
-- **Gate marker:** the first line of session 1's call is `/*p_hold:<run-id>*/` (`hold-marker.sql`), before
-  `guard.sql`. `pg_stat_activity.query` keeps only the first `track_activity_query_size` bytes of a call (1 kB on the
-  test project, `../backlog-4236/concurrency/c3-marker.sql`); before this change the marker ended at bytes 1455–1640
-  and every case would have ended in `P_GATE_TIMEOUT`. It now ends at byte 27; `concurrency/offline_check.py` fails
-  when it ends past byte 900.
+- **Transport.** `SQL_TRANSPORT` names the executable that sends one call: it takes `<file.sql>` or `-c "<sql>"` and
+  prints kt-sql's envelope (one JSON line; on an error a `kt-sql: HTTP <code>` line). Default: `~/.claude/bin/kt-sql`
+  (the hosted test database). A self-hosted dry-run database is reached through a dry-run transport wrapper kept
+  outside the repository. A transport path that does not exist or is not executable is refused before any call.
+- **Guard marker.** `guard.sql` (first in every call) refuses any database without the hosted test database's marker
+  user. `GUARD_MARKER_MD5` (32 hex characters) replaces that one literal in every text sent. The override is refused
+  unless a non-default `SQL_TRANSPORT` is named. The script cannot know where a transport points: with an override,
+  the remaining protection is the transport's own fixed target and `guard.sql`'s refusal of any database holding more
+  than 100 tracker rows. Chosen over guarded copies because every repository file then stays byte-identical between
+  the dry run and the hosted run; only the environment differs. The dry-run marker's value is not in the repository.
+- **Answers.** Every call that does not end in RAISE answers with ONE final `SELECT json_build_object('tag', …) AS a`.
+  `verdict.py` reads the last tagged answer of the call, from either row shape: the final SELECT's column (a
+  transport that returns the last statement's rows) or every statement's output line (a transport that returns every
+  line, including command tags). No reader depends on which statements' rows come back. Raising sessions carry their
+  answer in the RAISE text, which both transports return the same way.
+- **Gate and the activity text.** The holding statement itself starts with `/*p_hold:<run>*/`, and the call starts
+  with it too (`hold-marker.sql`, before `guard.sql`). What `pg_stat_activity.query` shows while the hold runs:
+  - a transport that submits the whole call as one text (the hosted API): the call text, cut at
+    `track_activity_query_size` (1 kB on the hosted test database, `../backlog-4236/concurrency/c3-marker.sql`); the
+    marker ends at byte 27. Not measured on the hosted database by this change.
+  - a transport that submits statement by statement inside one transaction (the dry run): the current statement only,
+    which starts with the marker. Measured on the dry-run database during a run: `/*p_hold:<run>*/ SELECT pg_sleep(4);`
+    (S1 session 1, erase attach A), and `/*p_hold:<run>*/\n-- The holding statement …\nDO $a$ …` (erase c6g A).
+  Session 2's gate text holds the marker split (`'%p_hold:' || '<run>' || '*/%'`), so it never matches itself on
+  either transport. `offline_check.py` checks both views of every holder call.
+- **Calls that COMMIT** (everything else is read-only or ends in RAISE): mutant create (`--mutant`: one function
+  `public.*_m4263`), setup (the fixture rows below), session 1 and session 2 (each writes only through the case's
+  function, on the fixture user's rows: R1 one deal and the take-over; R2 the take-over; R3 IA's claim; R4 the
+  take-over with its move and notice; R5 the turn-off, which deletes the fixture user's deals and todo rows; R6 the
+  take-over; mutants as their red shape says), mutant drop, teardown (deletes the fixture rows), and the last call's
+  `pg_stat_statements_reset()` (statistics only). Read-only: the probe, md5, state, verify, per-table counts,
+  `auth.users` total, cleanup's ownership check.
+- **Dry run** (self-hosted dry-run database, 2026-11-24), every teardown clean (`auth.users` 1 before, 1 after; no
+  `_m4263` function left), session 2 starting 2.89–3.03 s before the hold ended in every case:
+  - switch off: R1 PASS, R2 PASS, R2 `--mutant` RED; a SIGTERM during the hold waited 8 s, dropped the mutant and
+    tore down clean; R3 refused before setup.
+  - switch on: R1 PASS, R2 PASS, R2 `--mutant` RED (with the switch on, the take-over also records a move: `moves` 1
+    instead of 0, gone with the fixture user); R3 PASS, R4 PASS, R5 PASS, R6 PASS; R3 `--mutant` RED (the read-before-
+    lock mutant; the earlier FOR-UPDATE-removed mutant read ERROR, see the mutant table); R4 `--mutant` RED (the
+    turn-off waited for the take-over, then turned off and deleted both deals); R6 `--mutant` RED.
+  That each mutant is correct when run serially is reasoned from the code, not run.
+- **The first read-only call on the hosted test database must confirm** (the dry run could not show these): that
+  one call is one transaction there (the probe's `txn = one`) and which rows the Management API returns for a
+  multi-statement call; `track_activity_query_size`; that the whole call text is what `pg_stat_activity.query` shows;
+  real timings (gate, holds, the live claim's runtime over real rows); whether the API cancels a query when the client
+  disconnects (interrupt paths); that the session role holds EXECUTE on the four live S1 functions
+  (`cloud_claim_install`, `cloud_confirm_blob`, `set_my_cloud_autosave`, `cloud_upsert_deal`); and, by reading the
+  probe call's own `pg_stat_activity.query` back, whether the transport prefixes the call text, so the marker's byte
+  position on that transport is measured, not assumed. The probe prints the first three as `probe:`.
 - **Overlap and timing:** session 1 records `t_start`, `t_hold` (after its call) and `t_end` (after its 4 s hold, before
   its locks are released); session 2 records `t_start` (after the gate) and `t_end`, all from the database clock.
   Launch offset 1 s, hold 4 s: session 2 starts about 3 s before session 1's hold ends; the verdict needs at least
@@ -152,13 +196,16 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   | Case | File | Function created (REVOKEd from every API role, granted to none) |
   |---|---|---|
   | R2 | `mutant-confirm-nolock.sql` | `public.cloud_confirm_blob_m4263(uuid, uuid, uuid)` |
-  | R3 | `mutant-claim-nolock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
+  | R3 | `mutant-claim-read-before-lock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
   | R4 | `mutant-off-check-before-lock.sql` | `public.set_my_cloud_autosave_m4263(uuid, boolean, integer, uuid)` |
   | R6 | `mutant-deal-gate-before-lock.sql` | `public.cloud_upsert_deal_m4263(uuid, jsonb)` |
 
   The live functions are never replaced; only the session files of that case call the `_m4263` name. R1 has no
   claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE);
-  R3 carries `mutant-claim-nolock.sql`. R5 has no mutant.
+  R3 carries `mutant-claim-read-before-lock.sql` (the claim's read moved before its INSERT … ON CONFLICT, no FOR UPDATE). The
+  earlier R3 mutant, FOR UPDATE removed alone, read ERROR on the dry-run database: session 2 waited at the INSERT … ON
+  CONFLICT for session 1's uncommitted row version, then read IA active and refused, as the live code does, so it was
+  not a race mutant. R5 has no mutant.
 - **`cleanup`** removes one fixture user's leftovers: it refuses unless the user with that id has that run's fixture
   email, drops any `_m4263` function, then runs the same teardown and checks. There is no pattern-keyed sweep.
 - **Offline check:** `python3 -I concurrency/offline_check.py` drives `run.sh` against a local stub that records every

@@ -22,13 +22,14 @@
 # switch is never flipped here (it is a shared row; the coordinator flips it).
 #   R1  IA writes a new deal and holds its transaction 4 s; IB claims with replace.
 #       Expect: the claim waits for the write (ends after the holder's t_end), the write applied, IB active.
-#       No claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE); R3 carries mutant-claim-nolock.sql.
+#       No claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE); R3 carries mutant-claim-read-before-lock.sql.
 #   R2  IA confirms its blob and holds 4 s; IB claims with replace.
 #       Expect: the claim waits; confirm answered object_missing; IB active afterwards.
 #       --mutant: mutant-confirm-nolock.sql (confirm without its settings FOR SHARE) -> no wait -> RED.
 #   R3  (needs one_computer ON) no active computer; IA claims and holds 4 s; IB claims without replace.
 #       Expect: IB waits, IA ok, IB computer_not_active, IA active (exactly one active).
-#       --mutant: mutant-claim-nolock.sql in both sessions -> both see no active computer -> both ok -> RED.
+#       --mutant: mutant-claim-read-before-lock.sql in both sessions (the read before the INSERT that waits, no FOR UPDATE)
+#       -> both see no active computer -> both ok -> RED
 #   R4  (needs one_computer ON) IA active; IB takes over and holds 4 s; IA's owed turn-off (with IA's install).
 #       Expect: the turn-off waits, then answers computer_not_active; both deals still there; Keepr Cloud still on.
 #       --mutant: mutant-off-check-before-lock.sql (the active check read before the settings lock; serially it still
@@ -63,7 +64,17 @@
 # ONE RUN AT A TIME: the precheck and setup refuse while any p4263s1cc-*@example.test fixture user exists.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-K=~/.claude/bin/kt-sql
+# Transport: SQL_TRANSPORT names an executable taking <file.sql> or -c "<sql>" and printing kt-sql's envelope (one JSON
+# line; on an error a 'kt-sql: HTTP <code>' line). Default: kt-sql (the hosted test database). A self-hosted dry-run
+# database is reached through a dry-run transport wrapper kept outside the repository. Refused before any call when
+# it does not exist or is not executable.
+K="${SQL_TRANSPORT:-$HOME/.claude/bin/kt-sql}"
+# Guard marker: guard.sql refuses any database without the hosted test database's marker user. GUARD_MARKER_MD5 replaces
+# GUARD_MARKER_MD5 replaces that one literal in every text sent (32 hex characters); refused unless a non-default
+# SQL_TRANSPORT is named. The script cannot know where a transport points: with an override, what remains is the
+# transport's own fixed target and guard.sql's refusal of a database holding more than 100 tracker rows.
+HOSTED_MARKER=53a385187695375e2e8695625a20a77a
+MARKER="${GUARD_MARKER_MD5:-$HOSTED_MARKER}"
 usage() { sed -n '2,10p' "$0"; exit 2; }
 CASE="${1:-}"; RUN="${2:-}"; A="${3:-}"; MUT="${4:-}"
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -73,6 +84,12 @@ case "$CASE" in R1|R2|R3|R4|R5|R6|cleanup) ;; *) usage ;; esac
 # never the nil id or any id made of one repeated digit (a sentinel elsewhere in the schema): a fresh uuid4 only
 _hex="${A//-/}"; [ -z "${_hex//${_hex:0:1}/}" ] && { echo "refusing the fixture id ${A}: one repeated digit (use a fresh uuid4)" >&2; exit 2; }
 case "$MUT" in ""|--mutant) ;; *) usage ;; esac
+[ -f "$K" ] && [ -x "$K" ] || { echo "refusing: the transport ${K} does not exist or is not executable" >&2; exit 2; }
+[[ "$MARKER" =~ ^[0-9a-f]{32}$ ]] || { echo "refusing: GUARD_MARKER_MD5 must be 32 lowercase hex characters" >&2; exit 2; }
+if [ "$MARKER" != "$HOSTED_MARKER" ]; then
+  [ -n "${SQL_TRANSPORT:-}" ] && [ "$K" != "$HOME/.claude/bin/kt-sql" ] || { echo "refusing: GUARD_MARKER_MD5 is only for a non-default SQL_TRANSPORT" >&2; exit 2; }
+  echo "guard marker substituted for a non-default transport (${K##*/})"
+fi
 umask 077
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -81,7 +98,8 @@ fill() {
   sed -e "s/__A__/${A:-}/g" -e "s/__O__/${O:-}/g" \
     -e "s/__M__/${M:-}/g" -e "s/__IA__/${IA:-}/g" -e "s/__IB__/${IB:-}/g" -e "s/__RUN__/${RUN}/g" -e "s/__BLOB__/${BLOB:-}/g" \
     -e "s/__ACTIVE__/${ACTIVE:-}/g" -e "s/__CLAIM_FN__/${CLAIM_FN:-}/g" -e "s/__CONFIRM_FN__/${CONFIRM_FN:-}/g" \
-    -e "s/__OFF_FN__/${OFF_FN:-}/g" -e "s/__DEAL_FN__/${DEAL_FN:-}/g"
+    -e "s/__OFF_FN__/${OFF_FN:-}/g" -e "s/__DEAL_FN__/${DEAL_FN:-}/g" -e "s/__MUTANT_SIG__/${MUTANT_SIG:-}/g" \
+    -e "s/${HOSTED_MARKER}/${MARKER}/g"
 }
 guarded() {  # guarded <out> <template>... : guard.sql first, then the templates, placeholders filled
   local out="$1"; shift
@@ -91,7 +109,7 @@ holder() {  # holder <out> <template>... : the hold marker first, then guard.sql
   local out="$1"; shift
   { cat "$here/hold-marker.sql"; cat "$here/guard.sql"; echo; for f in "$@"; do cat "$here/$f"; echo; done; } | fill > "$tmp/$out"
 }
-col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[-1][sys.argv[1]])' "$1"; }
+col() { python3 -I "$here/verdict.py" col "$1"; }  # col <key> < output: one value of the call's tagged answer (both transports)
 mutants_left() { guarded dm.sql lock-timeout.sql drop-mutants.sql; $K "$tmp/dm.sql" | col left; }
 fk_counts() {  # fk_counts <label>: prints the non-zero per-table counts of the fixture user; the last line is the total
   guarded fk.sql fk-counts.sql
@@ -99,7 +117,7 @@ fk_counts() {  # fk_counts <label>: prints the non-zero per-table counts of the 
   python3 -I "$here/verdict.py" fkcounts "$1" "$tmp/fk.out"
 }
 auth_total() { guarded ac.sql auth-count.sql; $K "$tmp/ac.sql" | col n; }
-stats_reset() { $K -c "select extensions.pg_stat_statements_reset()" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
+stats_reset() { guarded sr.sql stats-reset.sql; $K "$tmp/sr.sql" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
 teardown() {  # 0 when clean; otherwise TEARDOWN NOT CLEAN with the ids and the counts left
   local v total after before kept
   before="$(fk_counts "before the delete, rows of ${A}" | tee /dev/stderr | tail -1)" || before=unreadable
@@ -107,7 +125,7 @@ teardown() {  # 0 when clean; otherwise TEARDOWN NOT CLEAN with the ids and the 
   guarded teardown.filled.sql lock-timeout.sql teardown.sql
   $K "$tmp/teardown.filled.sql" > "$tmp/teardown.out" 2>&1 || true
   guarded verify.filled.sql verify.sql
-  v="$($K "$tmp/verify.filled.sql" 2>/dev/null | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin) if "verdict" in r][-1]["verdict"])' 2>/dev/null || echo unreadable)"
+  v="$($K "$tmp/verify.filled.sql" 2>/dev/null | col verdict 2>/dev/null || echo unreadable)"
   total="$(fk_counts "after the delete" | tail -1)" || total=unreadable
   after="$(auth_total 2>/dev/null || echo unreadable)"
   if [ "$v" = clean ] && [ "$total" = "total=0 setnull=0" ] && [ "$kept" = 0 ] && [ "$after" = "$AUTH_BEFORE" ]; then
@@ -128,9 +146,7 @@ precheck() {  # one read-only call; sets AUTH_BEFORE and ON; refuses (exit 1) un
 
 if [ "$CASE" = cleanup ]; then
   echo "CLEANUP run ${RUN}, fixture user ${A} (only if its email is p4263s1cc-${RUN}@example.test), and any public.*_m4263 function"
-  guarded own.sql
-  printf '%s\n' "SELECT (SELECT count(*) FROM auth.users WHERE id = '${A}'::uuid AND email IS DISTINCT FROM 'p4263s1cc-${RUN}@example.test') AS n," \
-    "       (SELECT count(*) FROM auth.users WHERE id = '${A}'::uuid) AS mine, (SELECT count(*) FROM auth.users) AS total;" >> "$tmp/own.sql"
+  guarded own.sql own.sql
   $K "$tmp/own.sql" > "$tmp/own.out"
   [ "$(col n < "$tmp/own.out")" = 0 ] || { echo "refusing: ${A} is not the fixture user of run ${RUN}" >&2; exit 3; }
   AUTH_BEFORE=$(( $(col total < "$tmp/own.out") - $(col mine < "$tmp/own.out") ))
@@ -144,7 +160,7 @@ MUTANT_FILE=""
 if [ "$MUT" = --mutant ]; then
   case "$CASE" in
     R2) MUTANT_FILE=mutant-confirm-nolock.sql ;;
-    R3) MUTANT_FILE=mutant-claim-nolock.sql ;;
+    R3) MUTANT_FILE=mutant-claim-read-before-lock.sql ;;
     R4) MUTANT_FILE=mutant-off-check-before-lock.sql ;;
     R6) MUTANT_FILE=mutant-deal-gate-before-lock.sql ;;
     *) echo "${CASE} has no mutant" >&2; exit 2 ;;
@@ -154,14 +170,13 @@ CLAIM_FN=cloud_claim_install; CONFIRM_FN=cloud_confirm_blob; OFF_FN=set_my_cloud
 MUTANT_SIG=""
 case "$MUTANT_FILE" in
   mutant-confirm-nolock.sql) CONFIRM_FN=cloud_confirm_blob_m4263; MUTANT_SIG='cloud_confirm_blob_m4263(uuid,uuid,uuid)' ;;
-  mutant-claim-nolock.sql) CLAIM_FN=cloud_claim_install_m4263; MUTANT_SIG='cloud_claim_install_m4263(uuid,uuid,boolean)' ;;
+  mutant-claim-read-before-lock.sql) CLAIM_FN=cloud_claim_install_m4263; MUTANT_SIG='cloud_claim_install_m4263(uuid,uuid,boolean)' ;;
   mutant-off-check-before-lock.sql) OFF_FN=set_my_cloud_autosave_m4263; MUTANT_SIG='set_my_cloud_autosave_m4263(uuid,boolean,integer,uuid)' ;;
   mutant-deal-gate-before-lock.sql) DEAL_FN=cloud_upsert_deal_m4263; MUTANT_SIG='cloud_upsert_deal_m4263(uuid,jsonb)' ;;
 esac
 MODE=pristine; [ -n "$MUTANT_FILE" ] && MODE=mutant
 mutant_md5() {  # mutant_md5 <out>: md5(prosrc) of the mutant function, through verdict.py applied
-  printf '%s\n' "SELECT (SELECT md5(p.prosrc) FROM pg_catalog.pg_proc p WHERE p.oid = to_regprocedure('public.${MUTANT_SIG}')) AS m;" > "$tmp/md5.tpl"
-  { cat "$here/guard.sql"; echo; cat "$tmp/md5.tpl"; } > "$tmp/md5.sql"
+  guarded md5.sql md5.sql
   $K "$tmp/md5.sql" > "$tmp/$1" 2>&1 || true
   python3 -I "$here/verdict.py" applied "${MUTANT_SIG%%(*}" "$tmp/$1"
 }
@@ -211,9 +226,9 @@ if [ -n "$MUTANT_FILE" ]; then
 fi
 guarded setup.filled.sql lock-timeout.sql setup.sql
 SETUP_DONE=1
-out="$($K "$tmp/setup.filled.sql")"
-BLOB="$(echo "$out" | col blob)"; ON="$(echo "$out" | col one_computer)"
-[ -n "$BLOB" ] || { echo "setup failed: $out" >&2; exit 1; }
+out="$($K "$tmp/setup.filled.sql" 2>&1)" || true
+BLOB="$(echo "$out" | col blob 2>/dev/null)" || BLOB=""; ON="$(echo "$out" | col one_computer 2>/dev/null)" || ON=""
+[ -n "$BLOB" ] && [ "$BLOB" != None ] || { echo "setup failed: ${out:0:600}" >&2; exit 1; }
 case "$CASE" in R3|R4|R5|R6) [ "$ON" = "True" ] || { echo "${CASE} needs one_computer on (it is ${ON}); not run" >&2; exit 1; } ;; esac
 
 pair() {
@@ -243,5 +258,6 @@ guarded assert.filled.sql assert.sql
 $K "$tmp/assert.filled.sql" > "$tmp/state.out" 2>&1 || true
 echo "state:  $(cat "$tmp/state.out")"
 
+python3 -I "$here/verdict.py" timing "$tmp/first.out" "$tmp/second.out" || true
 VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MODE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" "$IA" "$IB" || true)"
 [ -n "$VERDICT" ] || VERDICT="ERROR: no verdict"
