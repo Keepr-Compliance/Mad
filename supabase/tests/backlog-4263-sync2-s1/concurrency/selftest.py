@@ -25,7 +25,8 @@ B0_BEFORE = '2026-11-23 10:00:00.15+00'   # session 2 start before session 1's c
 
 
 def ok(rows):
-    return json.dumps(rows)
+    """A successful call whose final SELECT answers these rows (encoded per transport shape by enc())."""
+    return ('OK', rows)
 
 
 def err(msg):
@@ -72,6 +73,9 @@ CASES = [  # (label, case, mode, first, second, state, expected first word)
      'INCONCLUSIVE'),
     ('R1 session 2 time missing', 'R1', 'pristine', first(applied_deal), ok([{'r': {'ok': True}, 't_end': LATE}]), state(deal_r1=1, deals=3),
      'INCONCLUSIVE'),
+    ('R1 hold ended early (2 s, not 4): overlap from the real hold end, not start + 4 s', 'R1', 'pristine',
+     first(applied_deal, t_end='2026-11-23 10:00:02.21+00'), second({'ok': True}, t_end='2026-11-23 10:00:02.3+00'),
+     state(deal_r1=1, deals=3), 'INCONCLUSIVE'),
     ('R2 pass', 'R2', 'pristine', first(OM), second({'ok': True, 'active': True}), state(), 'PASS'),
     ('R2 mutant red', 'R2', 'mutant', first(OM), second({'ok': True, 'active': True}, t_end=EARLY), state(), 'RED'),
     ('R2 mutant but waited', 'R2', 'mutant', first(OM), second({'ok': True}), state(), 'ERROR'),
@@ -121,12 +125,22 @@ PRECHECK = [  # (label, output, need_on, expected exit)
     ('switch off, case needs it', ok([dict(PRE, one_computer=False)]), '1', 1),
     ('switch off, case does not need it', ok([dict(PRE, one_computer=False)]), '0', 0),
     ('not one transaction (setting lost)', ok([dict(PRE, txn=None)]), '0', 1),
-    ('two rows returned', ok([{'probe_set': 'one'}, PRE]), '0', 1),
+    ('answer missing its tag', 'RAW:' + json.dumps([{'a': dict(PRE)}]), '0', 1),
+    ('a reply from another call (wrong tag)', ok([dict(PRE, tag='verify')]), '0', 1),
     ('isolation repeatable read', ok([dict(PRE, iso='repeatable read')]), '0', 1),
     ('per-table counts unreadable', ok([dict(PRE, fk=None)]), '0', 1),
     ('a row already references the id', ok([dict(PRE, fk=[dict(FKROWS[0], n=1)])]), '0', 1),
     ('precheck error', LOCK_TIMEOUT, '0', 1),
     ('precheck row unreadable', ok([{'txn': 'one', 'iso': 'read committed', 'by_id': 0}]), '0', 1),
+]
+COL = [  # (label, output, key, expected value or None)
+    ('last tagged line wins (an earlier tagged line in the same call)',
+     'RAW:' + json.dumps([{'line': json.dumps({'tag': 'left', 'left': 9})}, {'line': 'DO'}, {'line': json.dumps({'tag': 'left', 'left': 0})}]), 'left', '0'),
+    ('an untagged JSON line after the answer is not the answer',
+     'RAW:' + json.dumps([{'line': json.dumps({'tag': 'left', 'left': 0})}, {'line': json.dumps({'sub': 'x', 'left': 7})}]), 'left', '0'),
+    ('count', ok([{'left': 0}]), 'left', '0'),
+    ('missing key', ok([{'left': 0}]), 'right', None),
+    ('error', LOCK_TIMEOUT, 'left', None),
 ]
 FK = [  # (label, output, expected last line)
     ('all zero', ok([{'tbl': 'cloud_deals', 'col': 'owner_user_id', 'del': 'c', 'n': 0}, {'tbl': 'cloud_blobs', 'col': 'owner_user_id', 'del': 'c', 'n': 0}]),
@@ -143,38 +157,68 @@ def run(args):
     return r.returncode, r.stdout.strip()
 
 
+SHAPES = ('hosted', 'dry')
+
+
+def enc(x, tag, shape):
+    """Canned output in a transport's shape. hosted: the final SELECT's json column a, one row. dry: every statement's
+    output line, including command tags and the earlier set_config rows, the tagged answer last."""
+    if isinstance(x, str):
+        return x[4:] if x.startswith('RAW:') else x
+    rows = x[1]
+    if tag == 'fkcount':
+        v = {'tag': 'fkcount', 'fk': rows}
+        rows = [v]
+    else:
+        rows = [r if 'tag' in r else dict(r, tag=tag) for r in rows]
+    if shape == 'hosted':
+        return json.dumps([{'a': rows[-1]}])
+    lines = [{'line': 'SET'}, {'line': '{"sub" : "x", "role" : "authenticated"}'}, {'line': 'DO'}]
+    lines += [{'line': json.dumps(r, separators=(', ', ' : '))} for r in rows]
+    return 'transport stderr line\n' + json.dumps(lines) + '\nkt-sql: HTTP 200\n'
+
+
 bad = 0
+n_out = 0
 with tempfile.TemporaryDirectory() as d:
+  for shape in SHAPES:
     for label, case, mode, f1, f2, fs, want in CASES:
         paths = []
-        for n, txt in (('1', f1), ('2', f2), ('s', fs)):
+        for n, txt, tag in (('1', f1, 'session'), ('2', f2, 'session'), ('s', fs, 'state')):
             p = os.path.join(d, n)
-            open(p, 'w').write(txt)
+            open(p, 'w').write(enc(txt, tag, shape))
             paths.append(p)
         rc, out = run([case, mode] + paths + [IA, IB])
         good = out.split(':')[0].split(' ')[0] == want and (rc == 0) == (want in ('PASS', 'RED'))
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'{label}: {out[:110]} (rc {rc})')
+        bad += not good; n_out += 1
+        print(('ok   ' if good else 'BAD  ') + f'[{shape}] {label}: {out[:110]} (rc {rc})')
     for label, txt, want in APPLIED:
         p = os.path.join(d, 'm')
-        open(p, 'w').write(txt)
+        open(p, 'w').write(enc(txt, 'md5', shape))
         rc, out = run(['applied', 'cloud_claim_install_m4263', p])
         good = out.split(' ')[0].rstrip(':') == want and (rc == 0) == (want == 'MUTATION')
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'applied/{label}: {out[:110]} (rc {rc})')
+        bad += not good; n_out += 1
+        print(('ok   ' if good else 'BAD  ') + f'[{shape}] applied/{label}: {out[:110]} (rc {rc})')
     for label, txt, need, want in PRECHECK:
         p = os.path.join(d, 'p')
-        open(p, 'w').write(txt)
+        open(p, 'w').write(enc(txt, 'probe', shape))
         rc, out = run(['precheck', p, need])
         good = rc == want and out.startswith('ok ') == (want == 0)
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'precheck/{label}: {out[:110]} (rc {rc})')
+        bad += not good; n_out += 1
+        print(('ok   ' if good else 'BAD  ') + f'[{shape}] precheck/{label}: {out[:110]} (rc {rc})')
     for label, txt, want in FK:
         p = os.path.join(d, 'f')
-        open(p, 'w').write(txt)
+        open(p, 'w').write(enc(txt, 'fkcount', shape))
         rc, out = run(['fkcounts', 'x', p])
         good = out.splitlines()[-1] == want and (rc == 0) == (want != 'unreadable')
-        bad += not good
-        print(('ok   ' if good else 'BAD  ') + f'fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
-print(f'{len(CASES) + len(APPLIED) + len(PRECHECK) + len(FK)} canned outputs, {bad} wrong')
-sys.exit(1 if bad else 0)
+        bad += not good; n_out += 1
+        print(('ok   ' if good else 'BAD  ') + f'[{shape}] fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
+    for label, txt, key, want in COL:
+        r = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'verdict.py'), 'col', key], input=enc(txt, 'left', shape),
+                           capture_output=True, text=True)
+        got = r.stdout.strip() if r.returncode == 0 else None
+        good = got == want
+        bad += not good; n_out += 1
+        print(('ok   ' if good else 'BAD  ') + f'[{shape}] col/{label}: {got!r}')
+print(f'{n_out} canned outputs, {bad} wrong')
+sys.exit(1 if bad or n_out == 0 else 0)

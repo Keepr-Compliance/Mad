@@ -514,7 +514,7 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
   });
 
   const MUTANTS: Array<[string, string, string]> = [
-    ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
+    ['mutant-claim-read-before-lock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
     ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],
     ['mutant-off-check-before-lock.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
     ['mutant-deal-gate-before-lock.sql', 'cloud_upsert_deal', 'uuid, jsonb'],
@@ -543,11 +543,13 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
     expect(b).not.toMatch(/^\s*NULL;\s*$/m);
   });
 
-  it('two-session hold marker is the first line of the session-1 call and no session file carries it inline', () => {
+  it('two-session hold marker: first line of the session-1 call, and the first bytes of the holding statement only', () => {
     const cc = join(DIR, 'concurrency');
     expect(read(join(cc, 'hold-marker.sql')).startsWith('/*p_hold:__RUN__*/\n')).toBe(true);
     for (const f of readdirSync(cc).filter((x) => /^(r\d-|claim-|end)/.test(x))) {
-      expect(`${f}: ${read(join(cc, f)).includes('p_hold:')}`).toBe(`${f}: false`);
+      const code = read(join(cc, f)).replace(/^--[^\n]*\n/gm, '');
+      const want = /^r\d-.*-hold\.sql$/.test(f) ? ['/*p_hold:__RUN__*/ SELECT pg_sleep(4);'] : [];
+      expect(`${f}: ${JSON.stringify(code.match(/^.*p_hold:.*$/gm) ?? [])}`).toBe(`${f}: ${JSON.stringify(want)}`);
     }
     const run = read(join(cc, 'run.sh'));
     expect(run).toContain('{ cat "$here/hold-marker.sql"; cat "$here/guard.sql"; echo;');

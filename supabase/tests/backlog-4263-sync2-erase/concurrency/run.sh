@@ -50,7 +50,17 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$here" rev-parse --show-toplevel)"
-K=~/.claude/bin/kt-sql
+# Transport: SQL_TRANSPORT names an executable taking <file.sql> or -c "<sql>" and printing kt-sql's envelope (one JSON
+# line; on an error a 'kt-sql: HTTP <code>' line). Default: kt-sql (the hosted test database). A self-hosted dry-run
+# database is reached through a dry-run transport wrapper kept outside the repository. Refused before any call when
+# it does not exist or is not executable.
+K="${SQL_TRANSPORT:-$HOME/.claude/bin/kt-sql}"
+# Guard marker: guard.sql (first in every call) refuses any database without the hosted test database's marker user.
+# GUARD_MARKER_MD5 replaces that one literal in every text sent (32 hex characters); refused unless a non-default
+# SQL_TRANSPORT is named. The script cannot know where a transport points: with an override, what remains is the
+# transport's own fixed target and guard.sql's refusal of a database holding more than 100 tracker rows.
+HOSTED_MARKER=53a385187695375e2e8695625a20a77a
+MARKER="${GUARD_MARKER_MD5:-$HOSTED_MARKER}"
 CASE="${1:-}"; U="${2:-}"; MUT="${3:-}"
 usage() { sed -n '2,9p' "$0"; exit 2; }
 case "$CASE" in attach|c6g_skip|c6g_wait|cleanup) ;; *) usage ;; esac
@@ -62,16 +72,29 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 _hex="${U//-/}"; [ -z "${_hex//${_hex:0:1}/}" ] && { echo "refusing the fixture id ${U}: one repeated digit (use a fresh uuid4)" >&2; exit 2; }
 case "$CASE:$MUT" in attach:|attach:single_statement_fence|c6g_skip:|c6g_skip:no_skip_locked|c6g_wait:|c6g_wait:read_before_lock) ;;
   cleanup:*) [[ "$MUT" =~ ^[0-9a-f]{16}$ ]] || usage ;; *) echo "unknown mutant ${MUT}"; usage ;; esac
+[ -f "$K" ] && [ -x "$K" ] || { echo "refusing: the transport ${K} does not exist or is not executable" >&2; exit 2; }
+[[ "$MARKER" =~ ^[0-9a-f]{32}$ ]] || { echo "refusing: GUARD_MARKER_MD5 must be 32 lowercase hex characters" >&2; exit 2; }
+if [ "$MARKER" != "$HOSTED_MARKER" ]; then
+  [ -n "${SQL_TRANSPORT:-}" ] && [ "$K" != "$HOME/.claude/bin/kt-sql" ] || { echo "refusing: GUARD_MARKER_MD5 is only for a non-default SQL_TRANSPORT" >&2; exit 2; }
+  echo "guard marker substituted for a non-default transport (${K##*/})"
+fi
 umask 077
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-fill() {  # fill <template> <out>
+piece() {  # piece <template> <out>: the template with its placeholders filled (part of a call)
   sed -e "s/__U__/${U}/g" -e "s/__RUN__/${RUN:-}/g" -e "s/__I1__/${I1:-}/g" -e "s/__I2__/${I2:-}/g" -e "s/__X__/${X:-}/g" \
     -e "s/__D1__/${D1:-}/g" -e "s/__CLAIM_FN__/${CLAIM_FN:-}/g" -e "s/__SCRUB_FN__/${SCRUB_FN:-}/g" \
-    -e "s/__COPY_SIG__/${COPY_SIG:-}/g" "$here/$1" > "$tmp/$2"
+    -e "s/__COPY_SIG__/${COPY_SIG:-}/g" -e "s/${HOSTED_MARKER}/${MARKER}/g" "$1" > "$tmp/$2"
 }
-col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[-1][sys.argv[1]])' "$1"; }
-stats_reset() { $K -c "select extensions.pg_stat_statements_reset()" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
+fill() {  # fill <template> <out>: one call, guard.sql first
+  piece "$here/guard.sql" "$2.g"; piece "$here/$1" "$2.t"; { cat "$tmp/$2.g"; echo; cat "$tmp/$2.t"; } > "$tmp/$2"
+}
+holder() {  # holder <template> <out>: session A's call: the hold marker first, then guard.sql, then the template
+  piece "$here/hold-marker.sql" "$2.m"; piece "$here/guard.sql" "$2.g"; piece "$here/$1" "$2.t"
+  { cat "$tmp/$2.m" "$tmp/$2.g"; echo; cat "$tmp/$2.t"; } > "$tmp/$2"
+}
+col() { python3 -I "$here/verdict.py" col "$1"; }  # col <key> < output: one value of the call's tagged answer (both transports)
+stats_reset() { fill stats-reset.sql sr.sql; $K "$tmp/sr.sql" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2; }
 copies_left() { fill drop-copies.sql drop.sql; $K "$tmp/drop.sql" 2>/dev/null | col left 2>/dev/null || echo unreadable; }
 fk_counts() {  # fk_counts <label>: the non-zero per-table counts of the fixture user; last line 'total=<n> setnull=<m>'
   fill fk-counts.sql fk.sql
@@ -97,7 +120,7 @@ remove_user() {  # 0 when clean; otherwise TEARDOWN NOT CLEAN with the ids and t
 
 if [ "$CASE" = cleanup ]; then
   RUN="$MUT"
-  $K -c "SELECT (SELECT count(*) FROM auth.users WHERE id = '${U}' AND email IS DISTINCT FROM 'p4263c-${RUN}@example.test') AS n, (SELECT count(*) FROM auth.users WHERE id = '${U}') AS mine, (SELECT count(*) FROM auth.users) AS total" > "$tmp/own.out"
+  fill own.sql own.sql; $K "$tmp/own.sql" > "$tmp/own.out" 2>&1 || true
   [ "$(col n < "$tmp/own.out")" = 0 ] || { echo "refusing: ${U} is not the fixture user of run ${RUN}" >&2; exit 3; }
   AUTH_BEFORE=$(( $(col total < "$tmp/own.out") - $(col mine < "$tmp/own.out") ))
   left="$(copies_left)"; [ "$left" = 0 ] || { echo "CLEANUP NOT CLEAN: ${left} *_m4263 function(s) left; nothing deleted" >&2; exit 1; }
@@ -149,7 +172,8 @@ trap cleanup EXIT; trap 'INTERRUPTED=1; exit 130' INT TERM HUP
 if [ -n "$COPY" ]; then
   E1="${root}/supabase/migrations/20261123110000_backlog_4263_cloud_blob_erase.sql"
   sig="${COPY_SIG#*(}"; sig="${sig%)}"; sig="${sig//,/, }"
-  python3 -I "$here/copyfn.py" "$E1" "$COPY" "$sig" "$CASE" "$MUT" > "$tmp/copy.sql"   # refuses unless the change matches once
+  python3 -I "$here/copyfn.py" "$E1" "$COPY" "$sig" "$CASE" "$MUT" > "$tmp/copy.raw"   # refuses unless the change matches once
+  piece "$here/guard.sql" copy.g; { cat "$tmp/copy.g"; echo; cat "$tmp/copy.raw"; } > "$tmp/copy.sql"
   COPY_MADE=1
   $K "$tmp/copy.sql" > "$tmp/copy.out" 2>&1 || true
   fill md5.sql md5.sql
@@ -160,13 +184,14 @@ fi
 
 fill setup.sql setup.sql
 SETUP=1
-$K "$tmp/setup.sql" > "$tmp/setup.out"; echo "setup: $(cat "$tmp/setup.out")"
-X="$(col x < "$tmp/setup.out")"; D1="$(col d1 < "$tmp/setup.out")"
+$K "$tmp/setup.sql" > "$tmp/setup.out" 2>&1 || true; echo "setup: $(python3 -I "$here/verdict.py" summary "$tmp/setup.out")"
+X="$(col x < "$tmp/setup.out" 2>/dev/null)" || X=""; D1="$(col d1 < "$tmp/setup.out" 2>/dev/null)" || D1=""
+[[ "$X" =~ $UUID_RE ]] && [[ "$D1" =~ $UUID_RE ]] || { echo "setup failed" >&2; exit 1; }
 
 case "$CASE" in
-  attach)   fill attach-a.sql a.sql; fill attach-b.sql b1.sql ;;
-  c6g_skip) fill skip-a.sql a.sql;   fill skip-b.sql b1.sql ;;
-  c6g_wait) fill wait-a.sql a.sql;   fill wait-b.sql b1.sql ;;
+  attach)   holder attach-a.sql a.sql; piece "$here/attach-b.sql" b1.sql ;;
+  c6g_skip) holder skip-a.sql a.sql;   piece "$here/skip-b.sql" b1.sql ;;
+  c6g_wait) holder wait-a.sql a.sql;   piece "$here/wait-b.sql" b1.sql ;;
 esac
 fill gate.sql g.sql; cat "$tmp/g.sql" "$tmp/b1.sql" > "$tmp/b.sql"
 
@@ -175,5 +200,6 @@ sleep 1
 ( $K "$tmp/b.sql" > "$tmp/b.out" 2>&1 || true ) & pb=$!
 wait $pa $pb
 echo "a: $(python3 -I "$here/verdict.py" summary "$tmp/a.out")"; echo "b: $(python3 -I "$here/verdict.py" summary "$tmp/b.out")"
+python3 -I "$here/verdict.py" timing "$CASE" "$tmp/a.out" "$tmp/b.out" || true
 VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MUT" "$tmp/a.out" "$tmp/b.out" || true)"
 [ -n "$VERDICT" ] || VERDICT="INCONCLUSIVE: no verdict"
