@@ -195,8 +195,12 @@ MUTANTS = [
      ['c_n16_expiry_value'], 'red'),
     ('fixed_trigger_dropped', 'tn', [('drop', FIXED_TRG), ('replace', "(r ->> 'triggers')::int <> 2", "(r ->> 'triggers')::int <> 1")],
      ('', "NOT pg_temp.has_trigger('mcp_connections_version_fixed')"), ['c_n14_fixed'], 'red'),
+    # the bump branch left empty (no UPDATE, so nothing is bumped and the post-check's pending-request count, which
+    # follows the bump, is not taken) and the post-check's version line dropped: a coherent build without the bump.
+    # Its proof reads only the setting, so other users' rows cannot change whether it applies.
     ('bump_missing', 'tn',
-     [('replace', "    UPDATE public.mcp_settings s SET notice_version = 2, updated_at = now() WHERE s.id;       /*BUMP:update*/\n", ''),
+     [('replace', "    UPDATE public.mcp_settings s SET notice_version = 2, updated_at = now() WHERE s.id;       /*BUMP:update*/\n"
+                  "    PERFORM set_config('t4263n.bumped', 'on', true);\n", "    NULL;\n"),
       ('replace', " OR (r ->> 'version')::int <> 2\n", '\n')],
      ('', 'pg_temp.setting_version() = 1'), ['c_n2_new_is_2'], 'red'),
     ('bump_unconditional', 'tn',
@@ -388,6 +392,11 @@ BEGIN
      OR {fnbody('public._mcp_conn_reads_messages(uuid)')} IS DISTINCT FROM '{TS_PERM_MD5}'
      OR EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '{T_VERSION}') THEN
     RAISE EXCEPTION 'harness-n.sql: run it with 20261123140000 applied and {T_VERSION} NOT applied (mcp_settings.notice_version 1)';
+  END IF;
+  -- before T-N no connection can hold version 2 or later; one that does (an invented row) would make every rollback in
+  -- this call refuse, as the real rollback does
+  IF EXISTS (SELECT 1 FROM public.mcp_connections c WHERE c.notice_version >= 2) THEN
+    RAISE EXCEPTION 'harness-n.sql: a connection already holds approval page version 2 or later; T-N is not applied, so this state is not one the harness tests';
   END IF;
 END
 $notapplied4263n$;

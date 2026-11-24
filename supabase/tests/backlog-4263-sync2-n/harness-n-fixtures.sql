@@ -40,6 +40,11 @@ BEGIN
      OR EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261123150000') THEN
     RAISE EXCEPTION 'harness-n.sql: run it with 20261123140000 applied and 20261123150000 NOT applied (mcp_settings.notice_version 1)';
   END IF;
+  -- before T-N no connection can hold version 2 or later; one that does (an invented row) would make every rollback in
+  -- this call refuse, as the real rollback does
+  IF EXISTS (SELECT 1 FROM public.mcp_connections c WHERE c.notice_version >= 2) THEN
+    RAISE EXCEPTION 'harness-n.sql: a connection already holds approval page version 2 or later; T-N is not applied, so this state is not one the harness tests';
+  END IF;
 END
 $notapplied4263n$;
 -- BACKLOG-4263 sync 2.49, P11 (T-N) harness helpers. Loaded inside the one call (which ends in RAISE, so nothing persists).
@@ -726,7 +731,7 @@ BEGIN
   IF v IS NULL THEN
     RAISE EXCEPTION 'BACKLOG-4263 T-N: the mcp_settings row is missing';
   ELSIF v = 1 THEN
-    PERFORM set_config('t4263n.bumped', 'on', true);
+    NULL;
   ELSIF v <> 2 THEN
     RAISE EXCEPTION 'BACKLOG-4263 T-N: mcp_settings.notice_version is %, expected 1 or 2', v;  /*BUMP:refuse*/
   END IF;
@@ -1212,7 +1217,8 @@ BEGIN
   PERFORM pg_temp.chain('N11', 'A', 'chatgpt');
   first := pg_temp.try('rb');
   v := v || jsonb_build_object(
-    'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: 1 connection(s) hold approval page version 2 or later%',
+    -- the rollback counts every connection at version 2 or later (by design); only the refusal is asserted here
+    'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: % connection(s) hold approval page version 2 or later%',
     'unchanged', pg_temp.setting_version() = 2 AND pg_temp.has_trigger('mcp_connections_version_fixed'));
   DELETE FROM public.mcp_connections WHERE id = pg_temp.f('N11');
   second := pg_temp.try('rb');
