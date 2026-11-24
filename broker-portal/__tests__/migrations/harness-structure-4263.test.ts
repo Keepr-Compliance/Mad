@@ -45,12 +45,33 @@ function castFindings(sql: string): string[] {
 
 describe('BACKLOG-4263 T-S structure call and cast rule', () => {
   it('a helper that reads a public table is VOLATILE (a STABLE one would not see rows a tool call in the same expression wrote)', () => {
-    const lib = read('lib/helpers.sql') + read('lib/controls.sql');
-    const fns = [...lib.matchAll(/CREATE FUNCTION pg_temp\.(\w+)\([^)]*\)[\s\S]*?LANGUAGE sql( STABLE| IMMUTABLE| VOLATILE)? AS \$h\$([\s\S]*?)\$h\$/g)];
-    expect(fns.length).toBeGreaterThan(20);
-    const readsPublic = fns.filter((m) => /\bFROM\s+public\./.test(m[3]));
-    expect(readsPublic.map((m) => m[1]).sort()).toEqual(['last_outcome', 'reads']);
-    for (const m of readsPublic) expect(`${m[1]}${m[2] ?? ''}`).toBe(`${m[1]} VOLATILE`);
+    // every pg_temp function in the harness sources, any language, any dollar tag; a STABLE or IMMUTABLE one may not
+    // read a public table (FROM or JOIN). Stated limit: a STABLE helper that reads through a product function call.
+    const lib = read('lib/helpers.sql') + '\n' + read('lib/controls.sql') + '\n' + read('lib/fixtures.sql');
+    const fns = [...lib.matchAll(/CREATE (?:OR REPLACE )?FUNCTION pg_temp\.(\w+)\(([\s\S]*?)\bAS\s+(\$\w*\$)([\s\S]*?)\3/g)];
+    expect(fns.length).toBeGreaterThan(40);
+    const bad: string[] = [];
+    const readers: string[] = [];
+    for (const m of fns) {
+      const head = m[2];
+      const body = blank(m[4]);
+      const vol = /\b(STABLE|IMMUTABLE)\b/i.exec(head)?.[1]?.toUpperCase() ?? 'VOLATILE';
+      if (/\b(?:FROM|JOIN)\s+public\.\w+\b(?!\s*\()/i.test(body)) {
+        readers.push(`${m[1]} ${vol}`);
+        if (vol !== 'VOLATILE') bad.push(`${m[1]} ${vol}`);
+      }
+    }
+    expect(readers).toEqual(expect.arrayContaining(['reads VOLATILE', 'last_outcome VOLATILE']));
+    expect(bad).toEqual([]);
+  });
+
+  it('no control makes a tool call and reads what it logged in one statement', () => {
+    const t = blank(read('lib/controls.sql'));
+    const stmts = t.split(';');
+    const both = stmts.filter((st) => /pg_temp\.(?:lst|getm|access|tool|as_user|call_as|claim|tomb|walk|all_parts)\(/.test(st)
+      && /pg_temp\.(?:reads|last_outcome)\(/.test(st));
+    expect(both.map((x) => x.trim().slice(0, 80))).toEqual([]);
+    expect(stmts.filter((st) => /pg_temp\.last_outcome\(/.test(st)).length).toBeGreaterThan(3);
   });
 
   it('no non-text catalogue column is concatenated without a cast, in any generated harness file', () => {
