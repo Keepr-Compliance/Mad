@@ -70,8 +70,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # it does not exist or is not executable.
 K="${SQL_TRANSPORT:-$HOME/.claude/bin/kt-sql}"
 # Guard marker: guard.sql refuses any database without the hosted test database's marker user. GUARD_MARKER_MD5 replaces
-# that one literal in every text sent (32 hex characters), and only together with a non-default SQL_TRANSPORT, so a
-# run against the hosted test database always checks the hosted marker. Every repository file stays byte-identical.
+# GUARD_MARKER_MD5 replaces that one literal in every text sent (32 hex characters); refused unless a non-default
+# SQL_TRANSPORT is named. The script cannot know where a transport points: with an override, what remains is the
+# transport's own fixed target and guard.sql's refusal of a database holding more than 100 tracker rows.
 HOSTED_MARKER=53a385187695375e2e8695625a20a77a
 MARKER="${GUARD_MARKER_MD5:-$HOSTED_MARKER}"
 usage() { sed -n '2,10p' "$0"; exit 2; }

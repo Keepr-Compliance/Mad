@@ -296,6 +296,7 @@ mark = f'p_hold:{RUN}*/'
 for (case, mut), shape in [(c, s) for c in CASES for s in ('hosted', 'dry')]:
     rc, out, texts, _ = drive([case, RUN, USER] + ([mut] if mut else []), {'shape': shape})
     label = f'{case}{" " + mut if mut else ""} [{shape}]'
+    run_id = RUN
     holders = [t for t in texts if mark in t]
     ends = [len(t.encode()[:t.encode().index(mark.encode()) + len(mark)]) for t in holders]
     check(f'marker {label}: one holder call, marker ends at byte {ends} <= {MARKER_MAX}, gate sent',
@@ -306,6 +307,11 @@ for (case, mut), shape in [(c, s) for c in CASES for s in ('hosted', 'dry')]:
         check(f'gate {label}: the activity text shows the marker on both transports (whole call: first 1 kB; per statement: '
               f'{len(dry)} holding statement(s) start with it)', like(mark, hosted) and dry and all(s.startswith('/*' + mark) for s in dry))
     gates = [t for t in texts if "'%p_hold:' ||" in t]
+    gw = [re.sub(r'\s+', ' ', w) for g in gates for w in re.findall(r'WHERE(.*?)\)\s*LOOP', g, re.S)]
+    check(f'gate {label}: the gate waits for ANOTHER backend that is SLEEPING with the marker (pid, PgSleep and marker in one WHERE)',
+          len(gw) == 1 and 'pid <> pg_backend_pid()' in gw[0] and "wait_event = 'PgSleep'" in gw[0]
+          and "query LIKE '%p_hold:' || '" + run_id + "' || '*/%'" in gw[0]
+          and re.fullmatch(r"\s*pid <> pg_backend_pid\(\) AND wait_event = 'PgSleep' AND query LIKE '%p_hold:' \|\| '[0-9a-f]{16}' \|\| '\*/%'\s*", gw[0]) is not None)
     check(f'gate {label}: session 2 never matches its own gate (whole call and every statement)',
           len(gates) == 1 and not like(mark, gates[0]) and not any(like(mark, s) for s in statements(gates[0])))
     created = [m for t in texts for m in re.findall(r'CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(', t)]

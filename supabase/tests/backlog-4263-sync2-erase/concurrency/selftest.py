@@ -72,6 +72,9 @@ CASES = [  # (label, case, mutant, a.out, b.out, expected first word)
     ('attach gate timeout', 'attach', 'single_statement_fence', ATTACH_A, GATE_TIMEOUT, 'INCONCLUSIVE'),
     ('attach both ok, no overlap', 'attach', '', ATTACH_A, b(fenced=False, t_start=B0_LATE), 'INCONCLUSIVE'),
     ('attach fenced missing', 'attach', '', ATTACH_A, b(), 'INCONCLUSIVE'),
+    ('c6g_skip hold ended early (2 s, not 4): overlap from the real hold end', 'c6g_skip', '',
+     raised('P_A', {'t_start': A0, 't_hold': AH, 't_end': '2026-11-23T10:00:02.140000+00:00'}, 7),
+     b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'INCONCLUSIVE'),
     ('c6g_skip pass', 'c6g_skip', '', SKIP_A, b(t_end=BN, t_scrub=BS, answer={'state': 'skipped'}), 'PASS'),
     ('c6g_skip waited', 'c6g_skip', '', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'FAIL'),
     ('c6g_skip mutant caught', 'c6g_skip', 'no_skip_locked', SKIP_A, b(t_scrub=BS, answer={'state': 'scrubbed'}), 'CAUGHT'),
@@ -183,7 +186,9 @@ with tempfile.TemporaryDirectory() as d:
             good = out.splitlines()[-1] == want and (rc == 0) == (want != 'unreadable')
             bad += not good; n_out += 1
             print(('ok   ' if good else 'BAD  ') + f'[{shape}] fkcounts/{label}: last line {out.splitlines()[-1]} (rc {rc})')
-        for label, txt, key, want in (('residue', rows([{'n': 0, 'auth_users': 25}]), 'n', '0'), ('missing', rows([{'n': 0}]), 'x', None),
+        for label, txt, key, want in (('last tagged line wins', 'RAW:' + json.dumps([{'line': json.dumps({'tag': 'residue', 'n': 9})},
+                                       {'line': 'DO'}, {'line': json.dumps({'tag': 'residue', 'n': 0})}]), 'n', '0'),
+                                      ('residue', rows([{'n': 0, 'auth_users': 25}]), 'n', '0'), ('missing', rows([{'n': 0}]), 'x', None),
                                       ('error', LOCK_TIMEOUT, 'n', None)):
             r = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'verdict.py'), 'col', key], input=enc(txt, 'residue', shape),
                                capture_output=True, text=True)

@@ -105,10 +105,11 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   (the hosted test database). A self-hosted dry-run database is reached through a dry-run transport wrapper kept
   outside the repository. A transport path that does not exist or is not executable is refused before any call.
 - **Guard marker.** `guard.sql` (first in every call) refuses any database without the hosted test database's marker
-  user. `GUARD_MARKER_MD5` (32 hex characters) replaces that one literal in every text sent, and is accepted only
-  together with a non-default `SQL_TRANSPORT`, so a run against the hosted test database always checks the hosted
-  marker. Chosen over guarded copies because every repository file then stays byte-identical between the dry run and
-  the hosted run; only the environment differs. The dry-run marker's value is not in the repository.
+  user. `GUARD_MARKER_MD5` (32 hex characters) replaces that one literal in every text sent. The override is refused
+  unless a non-default `SQL_TRANSPORT` is named. The script cannot know where a transport points: with an override,
+  the remaining protection is the transport's own fixed target and `guard.sql`'s refusal of any database holding more
+  than 100 tracker rows. Chosen over guarded copies because every repository file then stays byte-identical between
+  the dry run and the hosted run; only the environment differs. The dry-run marker's value is not in the repository.
 - **Answers.** Every call that does not end in RAISE answers with ONE final `SELECT json_build_object('tag', …) AS a`.
   `verdict.py` reads the last tagged answer of the call, from either row shape: the final SELECT's column (a
   transport that returns the last statement's rows) or every statement's output line (a transport that returns every
@@ -144,7 +145,10 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   one call is one transaction there (the probe's `txn = one`) and which rows the Management API returns for a
   multi-statement call; `track_activity_query_size`; that the whole call text is what `pg_stat_activity.query` shows;
   real timings (gate, holds, the live claim's runtime over real rows); whether the API cancels a query when the client
-  disconnects (interrupt paths). The probe prints the first three as `probe:`.
+  disconnects (interrupt paths); that the session role holds EXECUTE on the four live S1 functions
+  (`cloud_claim_install`, `cloud_confirm_blob`, `set_my_cloud_autosave`, `cloud_upsert_deal`); and, by reading the
+  probe call's own `pg_stat_activity.query` back, whether the transport prefixes the call text, so the marker's byte
+  position on that transport is measured, not assumed. The probe prints the first three as `probe:`.
 - **Overlap and timing:** session 1 records `t_start`, `t_hold` (after its call) and `t_end` (after its 4 s hold, before
   its locks are released); session 2 records `t_start` (after the gate) and `t_end`, all from the database clock.
   Launch offset 1 s, hold 4 s: session 2 starts about 3 s before session 1's hold ends; the verdict needs at least
