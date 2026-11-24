@@ -22,13 +22,14 @@
 # switch is never flipped here (it is a shared row; the coordinator flips it).
 #   R1  IA writes a new deal and holds its transaction 4 s; IB claims with replace.
 #       Expect: the claim waits for the write (ends after the holder's t_end), the write applied, IB active.
-#       No claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE); R3 carries mutant-claim-nolock.sql.
+#       No claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE); R3 carries mutant-claim-read-before-lock.sql.
 #   R2  IA confirms its blob and holds 4 s; IB claims with replace.
 #       Expect: the claim waits; confirm answered object_missing; IB active afterwards.
 #       --mutant: mutant-confirm-nolock.sql (confirm without its settings FOR SHARE) -> no wait -> RED.
 #   R3  (needs one_computer ON) no active computer; IA claims and holds 4 s; IB claims without replace.
 #       Expect: IB waits, IA ok, IB computer_not_active, IA active (exactly one active).
-#       --mutant: mutant-claim-nolock.sql in both sessions -> both see no active computer -> both ok -> RED.
+#       --mutant: mutant-claim-read-before-lock.sql in both sessions (the read before the INSERT that waits, no FOR UPDATE)
+#       -> both see no active computer -> both ok -> RED
 #   R4  (needs one_computer ON) IA active; IB takes over and holds 4 s; IA's owed turn-off (with IA's install).
 #       Expect: the turn-off waits, then answers computer_not_active; both deals still there; Keepr Cloud still on.
 #       --mutant: mutant-off-check-before-lock.sql (the active check read before the settings lock; serially it still
@@ -158,7 +159,7 @@ MUTANT_FILE=""
 if [ "$MUT" = --mutant ]; then
   case "$CASE" in
     R2) MUTANT_FILE=mutant-confirm-nolock.sql ;;
-    R3) MUTANT_FILE=mutant-claim-nolock.sql ;;
+    R3) MUTANT_FILE=mutant-claim-read-before-lock.sql ;;
     R4) MUTANT_FILE=mutant-off-check-before-lock.sql ;;
     R6) MUTANT_FILE=mutant-deal-gate-before-lock.sql ;;
     *) echo "${CASE} has no mutant" >&2; exit 2 ;;
@@ -168,7 +169,7 @@ CLAIM_FN=cloud_claim_install; CONFIRM_FN=cloud_confirm_blob; OFF_FN=set_my_cloud
 MUTANT_SIG=""
 case "$MUTANT_FILE" in
   mutant-confirm-nolock.sql) CONFIRM_FN=cloud_confirm_blob_m4263; MUTANT_SIG='cloud_confirm_blob_m4263(uuid,uuid,uuid)' ;;
-  mutant-claim-nolock.sql) CLAIM_FN=cloud_claim_install_m4263; MUTANT_SIG='cloud_claim_install_m4263(uuid,uuid,boolean)' ;;
+  mutant-claim-read-before-lock.sql) CLAIM_FN=cloud_claim_install_m4263; MUTANT_SIG='cloud_claim_install_m4263(uuid,uuid,boolean)' ;;
   mutant-off-check-before-lock.sql) OFF_FN=set_my_cloud_autosave_m4263; MUTANT_SIG='set_my_cloud_autosave_m4263(uuid,boolean,integer,uuid)' ;;
   mutant-deal-gate-before-lock.sql) DEAL_FN=cloud_upsert_deal_m4263; MUTANT_SIG='cloud_upsert_deal_m4263(uuid,jsonb)' ;;
 esac

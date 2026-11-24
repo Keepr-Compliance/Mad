@@ -131,10 +131,15 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   take-over; mutants as their red shape says), mutant drop, teardown (deletes the fixture rows), and the last call's
   `pg_stat_statements_reset()` (statistics only). Read-only: the probe, md5, state, verify, per-table counts,
   `auth.users` total, cleanup's ownership check.
-- **Dry run** (self-hosted dry-run database, 2026-11-24): R1 PASS, R2 PASS, R2 `--mutant` RED, each with session 2
-  starting about 3 s before the hold ended (2.97–3.02 s) and every teardown clean (`auth.users` 1 before, 1 after; no
-  `_m4263` function left); a SIGTERM during the hold waited 8 s, dropped the mutant and tore down clean. R3–R6 and
-  their mutants were not run there: `one_computer` is off on that database and the scripts never flip it.
+- **Dry run** (self-hosted dry-run database, 2026-11-24), every teardown clean (`auth.users` 1 before, 1 after; no
+  `_m4263` function left), session 2 starting 2.89–3.03 s before the hold ended in every case:
+  - switch off: R1 PASS, R2 PASS, R2 `--mutant` RED; a SIGTERM during the hold waited 8 s, dropped the mutant and
+    tore down clean; R3 refused before setup.
+  - switch on: R1 PASS, R2 PASS, R2 `--mutant` RED (with the switch on, the take-over also records a move: `moves` 1
+    instead of 0, gone with the fixture user); R3 PASS, R4 PASS, R5 PASS, R6 PASS; R3 `--mutant` RED (the read-before-
+    lock mutant; the earlier FOR-UPDATE-removed mutant read ERROR, see the mutant table); R4 `--mutant` RED (the
+    turn-off waited for the take-over, then turned off and deleted both deals); R6 `--mutant` RED.
+  That each mutant is correct when run serially is reasoned from the code, not run.
 - **The first read-only call on the hosted test database must confirm** (the dry run could not show these): that
   one call is one transaction there (the probe's `txn = one`) and which rows the Management API returns for a
   multi-statement call; `track_activity_query_size`; that the whole call text is what `pg_stat_activity.query` shows;
@@ -187,13 +192,16 @@ run.sh cleanup <run-id> <fixture-user-id>           # one fixture user's leftove
   | Case | File | Function created (REVOKEd from every API role, granted to none) |
   |---|---|---|
   | R2 | `mutant-confirm-nolock.sql` | `public.cloud_confirm_blob_m4263(uuid, uuid, uuid)` |
-  | R3 | `mutant-claim-nolock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
+  | R3 | `mutant-claim-read-before-lock.sql` | `public.cloud_claim_install_m4263(uuid, uuid, boolean)` |
   | R4 | `mutant-off-check-before-lock.sql` | `public.set_my_cloud_autosave_m4263(uuid, boolean, integer, uuid)` |
   | R6 | `mutant-deal-gate-before-lock.sql` | `public.cloud_upsert_deal_m4263(uuid, jsonb)` |
 
   The live functions are never replaced; only the session files of that case call the `_m4263` name. R1 has no
   claim-side mutant: without FOR UPDATE the claim still waits at its UPDATE (it conflicts with the writer's FOR SHARE);
-  R3 carries `mutant-claim-nolock.sql`. R5 has no mutant.
+  R3 carries `mutant-claim-read-before-lock.sql` (the claim's read moved before its INSERT … ON CONFLICT, no FOR UPDATE). The
+  earlier R3 mutant, FOR UPDATE removed alone, read ERROR on the dry-run database: session 2 waited at the INSERT … ON
+  CONFLICT for session 1's uncommitted row version, then read IA active and refused, as the live code does, so it was
+  not a race mutant. R5 has no mutant.
 - **`cleanup`** removes one fixture user's leftovers: it refuses unless the user with that id has that run's fixture
   email, drops any `_m4263` function, then runs the same teardown and checks. There is no pattern-keyed sweep.
 - **Offline check:** `python3 -I concurrency/offline_check.py` drives `run.sh` against a local stub that records every

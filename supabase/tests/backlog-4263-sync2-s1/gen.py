@@ -788,9 +788,18 @@ def off_check():
 OFF_CHECK = off_check()
 OFF_ANCHOR = "  IF p_enabled IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;\n"
 CC_MUTANTS = {  # file -> (function, its signature, mutated statement)
-    'mutant-claim-nolock.sql': ('cloud_claim_install', 'uuid, uuid, boolean', mutant(
-        'cloud_claim_install', '    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR UPDATE;                  /*CLAIM:lock*/',
-        '    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid;                  /*CLAIM:lock*/')),
+    # the claim's read of the active computer made BEFORE the INSERT ... ON CONFLICT that waits for a holder of the row,
+    # and without FOR UPDATE. Serially it reads the committed state and refuses as the live code does. Removing FOR UPDATE
+    # alone (the earlier mutant) is not a race mutant: the INSERT ... ON CONFLICT waits for a take-over's uncommitted
+    # row version, and the read after it sees the committed state (measured on the dry-run database).
+    'mutant-claim-read-before-lock.sql': ('cloud_claim_install', 'uuid, uuid, boolean', mutant(
+        'cloud_claim_install', """  INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
+  SELECT x.active_install_id, x.active_since INTO v_old, v_since
+    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid FOR UPDATE;                  /*CLAIM:lock*/
+""", """  SELECT x.active_install_id, x.active_since INTO v_old, v_since
+    FROM public.cloud_autosave_settings x WHERE x.user_id = v_uid;                  /*CLAIM:lock*/
+  INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
+""")),
     'mutant-confirm-nolock.sql': ('cloud_confirm_blob', 'uuid, uuid, uuid', mutant(
         'cloud_confirm_blob', '  PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;                  /*LOCK:confirm*/\n', '')),
     # the turn-off's active check made BEFORE its settings lock (the read moved above the INSERT and the FOR UPDATE).

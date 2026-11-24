@@ -406,7 +406,7 @@ input 3f96dc41b9a930ffa12c3851721f528b supabase/tests/backlog-4263-sync2-s1/conc
 input 535652523032856b57a92c02664cfc6c supabase/tests/backlog-4263-sync2-s1/concurrency/lock-timeout-b.sql
 input 1b4014196710935669c55674a608f354 supabase/tests/backlog-4263-sync2-s1/concurrency/lock-timeout.sql
 input 67f99e5643b8e0383237bdebfe7864eb supabase/tests/backlog-4263-sync2-s1/concurrency/md5.sql
-input 382dcdf86f2bc1442d189c05df5f6675 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-claim-nolock.sql
+input bb76ffdbad1c1d859c127030ea46ea16 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-claim-read-before-lock.sql
 input 9ac281b8772783014feda028246ee0ff supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-confirm-nolock.sql
 input 998490740b09587466fb992184e98d95 supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-deal-gate-before-lock.sql
 input 3a916c80a3f790f6bb8cbbb27c3f421a supabase/tests/backlog-4263-sync2-s1/concurrency/mutant-off-check-before-lock.sql

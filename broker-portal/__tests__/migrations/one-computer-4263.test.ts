@@ -514,7 +514,7 @@ describe('BACKLOG-4263 S1 one computer: rollback file and test-project harness a
   });
 
   const MUTANTS: Array<[string, string, string]> = [
-    ['mutant-claim-nolock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
+    ['mutant-claim-read-before-lock.sql', 'cloud_claim_install', 'uuid, uuid, boolean'],
     ['mutant-confirm-nolock.sql', 'cloud_confirm_blob', 'uuid, uuid, uuid'],
     ['mutant-off-check-before-lock.sql', 'set_my_cloud_autosave', 'uuid, boolean, integer, uuid'],
     ['mutant-deal-gate-before-lock.sql', 'cloud_upsert_deal', 'uuid, jsonb'],
