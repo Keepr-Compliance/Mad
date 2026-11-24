@@ -97,6 +97,12 @@ else: p([{'r': {}}])
 results = []
 
 
+import importlib.util as _ilu
+_cs = _ilu.spec_from_file_location('call_shape4263', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+call_shape = _ilu.module_from_spec(_cs); _cs.loader.exec_module(call_shape)
+ALL_TEXTS = []   # every call text recorded in this offline run (for the call-class checks)
+
+
 def check(name, ok, detail=''):
     results.append(bool(ok))
     print(('ok   ' if ok else 'BAD  ') + name + (': ' + detail if detail else ''))
@@ -143,6 +149,7 @@ def drive(args, cfg=None, sig=None):
         out, _ = pr.communicate(timeout=180)
         names = sorted(os.listdir(outdir))
         texts = [open(os.path.join(outdir, f)).read() for f in names]
+        ALL_TEXTS.extend(texts)
         if sig:
             later = [os.path.getmtime(os.path.join(outdir, f)) for f in names[n_before:] if 'p_hold:' not in open(os.path.join(outdir, f)).read()]
             delay = (min(later) - t_sig) if later else None
@@ -392,5 +399,7 @@ for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
     rc, out, texts, delay = drive(['c6g_skip', USER], {'hold_s': 2}, sig=sig)
     check(f'signal {sig.name}: trap waits for the sessions and 8 s, then deletes (first trap call {delay and round(delay, 1)} s after)',
           delay is not None and delay >= 7.5 and any('/*t:delete*/' in t for t in texts) and 'interrupted: waiting 8 s' in out)
+for _n, _ok, _d in call_shape.concurrency_checks(FOLDER, open(os.path.join(FOLDER, 'README.md'), encoding='utf-8').read(), ALL_TEXTS):
+    check(_n, _ok, _d)
 print(f'{len(results)} checks, {results.count(False)} failed')
 sys.exit(0 if results and all(results) else 1)
