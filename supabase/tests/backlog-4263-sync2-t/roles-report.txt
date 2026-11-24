@@ -2,7 +2,7 @@
 # statements on objects another role owns, with the role in force (roles.py); files: every .sql under
 # supabase/tests/<folder> for the folders in roles.FOLDERS and the erase harness as composed; owners from the
 # migrations up to 20261123170000
-files 217
+files 218
 statements 242
 wrong_role 0
 migration_wrong_role 0
@@ -458,10 +458,11 @@ input 5013f27bde0bfff98ab5fd48812f4a4c supabase/tests/backlog-4263/lib/fixtures.
 input 199466cbb6f4a76bd47d37a84e5244c8 supabase/tests/backlog-4263/lib/probes.sql
 input 6f26ed088d24c6ad906f2e48db86d8fb supabase/tests/backlog-4263/rollback-4263.sql
 input 1ca8562005b7e859214c60b710969982 supabase/tests/backlog-4266/apply-20261123170000.sql
-input 35da2f5a71c2a4ae8753805805482adc supabase/tests/backlog-4266/harness-4266-fixtures.sql
-input 41be9666e8ceab141da68d02b4ec78c4 supabase/tests/backlog-4266/harness-4266-structure.sql
-input b62855c75e9cf77477c23424118fb612 supabase/tests/backlog-4266/harness-4266.sql
+input a2ff7c7b6e0243d6724c8645502e080d supabase/tests/backlog-4266/dryrun-foreign-rows.sql
+input 8a3daf9b997f8c62c35ebcf33129faba supabase/tests/backlog-4266/harness-4266-fixtures.sql
+input 7d8a365c4554c05f8ec0351ce5477c1d supabase/tests/backlog-4266/harness-4266-structure.sql
+input 948905f6d2184967f4df2733a38c0e8b supabase/tests/backlog-4266/harness-4266.sql
 input b1ac910dc85fbde8007506fe56ea12a9 supabase/tests/backlog-4266/lib/controls.sql
-input 5d90ca4ba4757a904f9f35803fce33a3 supabase/tests/backlog-4266/lib/fixtures.sql
-input ad1072d341680f57f3ab4c178b32c1fc supabase/tests/backlog-4266/lib/helpers.sql
+input 39ffa3b3ee55b99890a0305bbcbec37d supabase/tests/backlog-4266/lib/fixtures.sql
+input 73777813597884961c9372fe5bdc4c4a supabase/tests/backlog-4266/lib/helpers.sql
 input 5f9d5fb7ed527b79a00ee62656343b6d supabase/tests/backlog-4266/rollback-20261123170000.sql

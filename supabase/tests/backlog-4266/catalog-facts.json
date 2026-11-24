@@ -150,8 +150,8 @@
   "files": {
     "apply-20261123170000.sql": "1ca8562005b7e859214c60b710969982",
     "rollback-20261123170000.sql": "5f9d5fb7ed527b79a00ee62656343b6d",
-    "harness-4266.sql": "b62855c75e9cf77477c23424118fb612",
-    "harness-4266-structure.sql": "41be9666e8ceab141da68d02b4ec78c4",
-    "harness-4266-fixtures.sql": "35da2f5a71c2a4ae8753805805482adc"
+    "harness-4266.sql": "948905f6d2184967f4df2733a38c0e8b",
+    "harness-4266-structure.sql": "7d8a365c4554c05f8ec0351ce5477c1d",
+    "harness-4266-fixtures.sql": "8a3daf9b997f8c62c35ebcf33129faba"
   }
 }
