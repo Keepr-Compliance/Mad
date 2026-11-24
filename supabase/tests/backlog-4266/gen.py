@@ -672,6 +672,12 @@ def selftest(green_ok=False):
 if __name__ == '__main__':
     a = sys.argv[1:]
     if a[:1] == ['check']:
+        import importlib.util as _ilu
+        _cs = _ilu.spec_from_file_location('call_shape4263', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+        call_shape = _ilu.module_from_spec(_cs); _cs.loader.exec_module(call_shape)
+        _shape_ok = call_shape.gen_check(os.path.dirname(os.path.abspath(__file__)), {'harness-4266.sql': 'rolled_back', 'harness-4266-fixtures.sql': 'rolled_back', 'harness-4266-structure.sql': 'rolled_back', 'apply-20261123170000.sql': 'commits', 'rollback-20261123170000.sql': 'commits', 'dryrun-foreign-rows.sql': 'fragment'})
+        if not _shape_ok:
+            sys.exit(1)
         bad = [k for k, v in OUTS.items() if not os.path.exists(os.path.join(HERE, k)) or open(os.path.join(HERE, k), encoding='utf-8').read() != v]
         print('differs: ' + ', '.join(bad) if bad else 'all generated files match')
         sys.exit(1 if bad else 0)

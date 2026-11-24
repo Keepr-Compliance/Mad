@@ -934,6 +934,12 @@ if len(sys.argv) > 1 and sys.argv[1] == 'selftest':
     print(f'selftest: {"all cases as expected" if not f else "FAILED: " + ", ".join(f)}')
     sys.exit(1 if f else 0)
 if len(sys.argv) > 1 and sys.argv[1] == 'check':
+    import importlib.util as _ilu
+    _cs = _ilu.spec_from_file_location('call_shape4263', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+    call_shape = _ilu.module_from_spec(_cs); _cs.loader.exec_module(call_shape)
+    _shape_ok = call_shape.gen_check(os.path.dirname(os.path.abspath(__file__)), {'harness-s1.sql': 'rolled_back', 'apply-20261123100000.sql': 'commits', 'rollback-20261123100000.sql': 'commits'})
+    if not _shape_ok:
+        sys.exit(1)
     diff = [os.path.relpath(k, REPO) for k, v in OUTS.items() if not os.path.exists(k) or open(k, encoding='utf-8').read() != v]
     print('differs: ' + ', '.join(diff) if diff else 'all generated files match')
     sys.exit(1 if diff else 0)
