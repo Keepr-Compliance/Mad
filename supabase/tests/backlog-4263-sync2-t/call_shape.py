@@ -22,6 +22,98 @@ import sys
 TXN = re.compile(r'(?is)^(COMMIT|END|ROLLBACK|ABORT|BEGIN|START\s+TRANSACTION|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b')
 
 
+def _comment_end(text, i):
+    """index just past the block comment opening at i. PostgreSQL nests block comments: /* a /* b */ c */ is ONE comment."""
+    depth, n = 0, len(text)
+    while i < n:
+        if text.startswith('/*', i):
+            depth += 1
+            i += 2
+        elif text.startswith('*/', i):
+            depth -= 1
+            i += 2
+            if depth == 0:
+                return i
+        else:
+            i += 1
+    return n
+
+
+def _code_words(text):
+    """the words and semicolons of text with comments, string literals, quoted names and dollar-quoted texts blanked"""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith('--', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            out.append(' ')
+            continue
+        if text.startswith('/*', i):
+            i = _comment_end(text, i)
+            out.append(' ')
+            continue
+        c = text[i]
+        if c in "'\"":
+            j = i + 1
+            while True:
+                j = text.find(c, j)
+                if j < 0 or text[j + 1:j + 2] != c:
+                    break
+                j += 2
+            i = n if j < 0 else j + 1
+            out.append(' ')
+            continue
+        if c == '$' and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')):
+            m = re.match(r'\$([A-Za-z_][A-Za-z0-9_]*)?\$', text[i:])
+            if m:
+                j = text.find(m.group(0), i + len(m.group(0)))
+                i = n if j < 0 else j + len(m.group(0))
+                out.append(' ')
+                continue
+        out.append(c)
+        i += 1
+    return re.findall(r'[A-Za-z_][A-Za-z0-9_]*|;', ''.join(out))
+
+
+def exit_paths(body):
+    """ways a DO body can end without raising, other than by an error: RETURN anywhere; EXIT or CONTINUE outside a
+    loop or with a label (a labelled EXIT leaves a block); an EXCEPTION handler on the outermost block (it catches the
+    final RAISE). EXIT/CONTINUE inside a loop and handlers of nested blocks only end that loop or that block."""
+    w = [x.upper() for x in _code_words(body)]
+    stack, bad = [], []
+    i = 0
+    while i < len(w):
+        x, nxt = w[i], (w[i + 1] if i + 1 < len(w) else '')
+        prev = w[i - 1] if i else ''
+        if x == 'BEGIN':
+            stack.append('B')
+        elif x == 'CASE':
+            stack.append('C')
+        elif x == 'LOOP':
+            stack.append('L')
+        elif x == 'END':
+            if nxt == 'IF':
+                i += 1
+            elif nxt in ('LOOP', 'CASE'):
+                want = nxt[0]
+                if want in stack:
+                    del stack[len(stack) - 1 - stack[::-1].index(want)]
+                i += 1
+            elif stack:
+                stack.pop()
+        elif x == 'RETURN':
+            bad.append('RETURN')
+        elif x in ('EXIT', 'CONTINUE'):
+            if 'L' not in stack:
+                bad.append(x + ' outside a loop')
+            elif nxt not in ('WHEN', ';'):
+                bad.append('%s %s (a labelled %s)' % (x, nxt, x))
+        elif x == 'EXCEPTION' and prev != 'RAISE' and stack == ['B']:
+            bad.append('an EXCEPTION handler on the outermost block')
+        i += 1
+    return bad
+
+
 def statements(text):
     """[(statement text, trailing text after it)]: top-level statements, comments removed."""
     out, cur, i, n = [], [], 0, len(text)
@@ -31,8 +123,7 @@ def statements(text):
             i = n if j < 0 else j
             continue
         if text.startswith('/*', i):
-            j = text.find('*/', i + 2)
-            i = n if j < 0 else j + 2
+            i = _comment_end(text, i)
             cur.append(' ')
             continue
         c = text[i]
@@ -86,28 +177,56 @@ def result_block(st):
     if len(body) < 2 or not re.match(r'(?is)^END$', body[-1].strip()):
         return False
     last = re.sub(r'(?is)^(DECLARE\b.*?\bBEGIN|BEGIN)\s+', '', body[-2].strip())
-    return bool(re.match(r"(?is)^RAISE\s+EXCEPTION\s+'[A-Z][A-Z0-9_]*\b[^']*'", last))
+    return bool(re.match(r"(?is)^RAISE\s+EXCEPTION\s+'[A-Z][A-Z0-9_]*\b[^']*'", last)) and not exit_paths(m.group(2))
+
+
+def result_block_exits(st):
+    """for a statement shaped like a result block, the exit paths that keep it from being one ([] otherwise)"""
+    m = re.match(r'(?is)^DO\s+(\$[A-Za-z_0-9]*\$)(.*)\1\s*$', st)
+    return exit_paths(m.group(2)) if m else []
 
 
 def _tail_ok(text):
     """nothing but whitespace or comments after the last semicolon"""
     st = statements(text)
-    return not st or text.rstrip().endswith(';') or re.sub(r'(?s)--[^\n]*|/\*.*?\*/', '', text[text.rfind(';') + 1:]).strip() == ''
+    return not st or text.rstrip().endswith(';') or not statements(text[text.rfind(';') + 1:])
 
 
 def txn_control(text):
     return ['top-level transaction control: ' + ' '.join(s.split())[:40] for s in statements(text) if TXN.match(s)]
 
 
-def pglast_count(text):
+PG_TXN = {'BEGIN_P', 'START', 'COMMIT', 'END_P', 'ROLLBACK', 'ABORT_P', 'SAVEPOINT', 'RELEASE'}
+REQUIRE_PGLAST = False   # sweep --require-pglast: a missing pglast is then a problem, not a skipped check
+
+
+def pglast_problems(text, n_here):
+    """None when pglast cannot be imported (and it is not required). Otherwise the problems PostgreSQL's own scanner
+    finds: a split that fails, a statement count that differs from this file's split, and any statement whose first
+    token starts a transaction-control statement (TransactionStmt); where the whole text parses, any TransactionStmt."""
     try:
         from pglast import parser
+        import pglast
     except Exception:
-        return None
+        return ['pglast is required (--require-pglast) and cannot be imported'] if REQUIRE_PGLAST else None
     try:
-        return len(parser.split(text, with_parser=False))
+        parts = parser.split(text, with_parser=False)
+    except Exception as e:
+        return ['pglast could not split the text: %s' % str(e)[:120]]
+    bad = []
+    if len(parts) != n_here:
+        bad.append('statement split differs from pglast (%d here, %d pglast)' % (n_here, len(parts)))
+    for p in parts:
+        toks = [x.name for x in parser.scan(p) if x.name not in ('C_COMMENT', 'SQL_COMMENT')]
+        if toks and (toks[0] in PG_TXN or toks[:2] == ['PREPARE', 'TRANSACTION']):
+            bad.append('pglast: transaction control: ' + ' '.join(p.split())[:40])
+    try:
+        kinds = [type(s.stmt).__name__ for s in pglast.parse_sql(re.sub(r'__[A-Z][A-Z0-9_]*__', 'x4263', text))]
     except Exception:
-        return None
+        kinds = []   # a fragment or a placeholder that does not parse on its own: the scan above still ran
+    if 'TransactionStmt' in kinds and not any(b.startswith('pglast: transaction') for b in bad):
+        bad.append('pglast: a TransactionStmt')
+    return bad
 
 
 def rolled_back(text):
@@ -118,11 +237,11 @@ def rolled_back(text):
         bad.append('%d result blocks (want exactly 1)' % len(finals))
     elif finals[0] != len(st) - 1:
         bad.append('the result block is not the last statement (%d statement(s) follow it)' % (len(st) - 1 - finals[0]))
+    if len(finals) == 0 and st and result_block_exits(st[-1]):
+        bad.append('the last block can end without raising: ' + ', '.join(result_block_exits(st[-1])))
     if not _tail_ok(text):
         bad.append('text follows the last statement')
-    n = pglast_count(text)
-    if n is not None and n != len(st):
-        bad.append('statement split differs from pglast (%d here, %d pglast)' % (len(st), n))
+    bad += pglast_problems(text, len(st)) or []
     return bad
 
 
@@ -131,11 +250,12 @@ def commits(text):
     bad = txn_control(text)
     if st and result_block(st[-1]):
         bad.append('ends in a result RAISE: it would never commit')
+    bad += pglast_problems(text, len(st)) or []
     return bad
 
 
 def fragment(text):
-    return txn_control(text)
+    return txn_control(text) + (pglast_problems(text, len(statements(text))) or [])
 
 
 KINDS = {'rolled_back': rolled_back, 'commits': commits, 'fragment': fragment}
@@ -153,9 +273,23 @@ def folder(here, classes):
     return probs
 
 
+GEN_ROW = re.compile(r'^\| `([\w.-]+\.(?:sql|tpl))` \| (rolled_back|commits|fragment) \|', re.M)
+
+
+def readme_classes(path):
+    """{file: class} from the 'Call classes' table of a README"""
+    return {m.group(1): m.group(2) for m in GEN_ROW.finditer(open(path, encoding='utf-8').read())}
+
+
 def gen_check(here, classes):
-    """for a gen.py check: print the result, return True when the folder is clean"""
+    """for a gen.py check: print the result, return True when the folder is clean. The classes passed in must equal
+    the README's 'Call classes' table, so a class is never changed in the code alone."""
+    import os
     probs = folder(here, classes)
+    table = readme_classes(os.path.join(here, 'README.md'))
+    if table != classes:
+        probs.append('README.md call classes differ from the check\'s: %s' % sorted(
+            set(table.items()) ^ set(classes.items())))
     for x in probs:
         print('CALL SHAPE ' + x)
     print('call shape: %d files (%s): %d problem(s)' % (len(classes), ', '.join('%d %s' % (list(classes.values()).count(k), k)
@@ -224,7 +358,24 @@ def concurrency_checks(folder, readme_text, recorded):
     return out
 
 
+def selftest():
+    """the shared cases (call_shape_cases.json, read by the jest pin too): each one's verdict is as written there"""
+    import json
+    import os
+    cases = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'call_shape_cases.json'), encoding='utf-8'))
+    wrong = 0
+    for c in cases:
+        probs = KINDS[c['kind']](c['text'])
+        good = (not probs) == c['ok']
+        wrong += not good
+        print('%s %s (%s): %s' % ('ok  ' if good else 'FAIL', c['name'], c['kind'], '; '.join(probs) or 'no problem'))
+    print('call shape selftest: %d cases, %d wrong' % (len(cases), wrong))
+    return 1 if wrong or len(cases) < 30 else 0
+
+
 if __name__ == '__main__':
+    if sys.argv[1:2] == ['selftest']:
+        sys.exit(selftest())
     kind, files = sys.argv[1], sys.argv[2:]
     res = check_files(kind, files)
     bad = 0

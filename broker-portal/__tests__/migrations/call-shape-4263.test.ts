@@ -21,6 +21,95 @@ import { join } from 'path';
 const T = join(__dirname, '../../../supabase/tests');
 const read = (p: string): string => readFileSync(join(T, p), 'utf8').replace(/\r\n?/g, '\n');
 
+/** index just past the block comment opening at i; PostgreSQL nests block comments */
+function commentEnd(text: string, start: number): number {
+  let depth = 0;
+  let i = start;
+  while (i < text.length) {
+    if (text.startsWith('/*', i)) {
+      depth += 1;
+      i += 2;
+    } else if (text.startsWith('*/', i)) {
+      depth -= 1;
+      i += 2;
+      if (depth === 0) return i;
+    } else i += 1;
+  }
+  return text.length;
+}
+
+/** the words and semicolons of text, with comments, strings, quoted names and dollar-quoted texts blanked */
+function codeWords(text: string): string[] {
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    if (text.startsWith('--', i)) {
+      const j = text.indexOf('\n', i);
+      i = j < 0 ? n : j;
+      out += ' ';
+      continue;
+    }
+    if (text.startsWith('/*', i)) {
+      i = commentEnd(text, i);
+      out += ' ';
+      continue;
+    }
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      for (;;) {
+        j = text.indexOf(c, j);
+        if (j < 0 || text[j + 1] !== c) break;
+        j += 2;
+      }
+      i = j < 0 ? n : j + 1;
+      out += ' ';
+      continue;
+    }
+    if (c === '$' && (i === 0 || !/[A-Za-z0-9_]/.test(text[i - 1]))) {
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
+      if (m) {
+        const j = text.indexOf(m[0], i + m[0].length);
+        i = j < 0 ? n : j + m[0].length;
+        out += ' ';
+        continue;
+      }
+    }
+    out += c;
+    i += 1;
+  }
+  return out.match(/[A-Za-z_][A-Za-z0-9_]*|;/g) ?? [];
+}
+
+/** ways a DO body can end without raising (the same rule as call_shape.exit_paths) */
+function exitPaths(body: string): string[] {
+  const w = codeWords(body).map((x) => x.toUpperCase());
+  const stack: string[] = [];
+  const bad: string[] = [];
+  for (let i = 0; i < w.length; i += 1) {
+    const x = w[i];
+    const nxt = w[i + 1] ?? '';
+    const prev = i ? w[i - 1] : '';
+    if (x === 'BEGIN') stack.push('B');
+    else if (x === 'CASE') stack.push('C');
+    else if (x === 'LOOP') stack.push('L');
+    else if (x === 'END') {
+      if (nxt === 'IF') i += 1;
+      else if (nxt === 'LOOP' || nxt === 'CASE') {
+        const k = stack.lastIndexOf(nxt[0]);
+        if (k >= 0) stack.splice(k, 1);
+        i += 1;
+      } else stack.pop();
+    } else if (x === 'RETURN') bad.push('RETURN');
+    else if (x === 'EXIT' || x === 'CONTINUE') {
+      if (!stack.includes('L')) bad.push(`${x} outside a loop`);
+      else if (nxt !== 'WHEN' && nxt !== ';') bad.push(`${x} ${nxt} (a labelled ${x})`);
+    } else if (x === 'EXCEPTION' && prev !== 'RAISE' && stack.length === 1 && stack[0] === 'B') bad.push('an EXCEPTION handler on the outermost block');
+  }
+  return bad;
+}
+
 /** top-level statements, comments removed, string and dollar-quoted text kept */
 function statements(text: string): string[] {
   const out: string[] = [];
@@ -34,8 +123,7 @@ function statements(text: string): string[] {
       continue;
     }
     if (text.startsWith('/*', i)) {
-      const j = text.indexOf('*/', i + 2);
-      i = j < 0 ? n : j + 2;
+      i = commentEnd(text, i);
       cur += ' ';
       continue;
     }
@@ -91,7 +179,7 @@ function resultBlock(st: string): boolean {
   const body = statements(m[2]);
   if (body.length < 2 || !/^END$/i.test(body[body.length - 1].trim())) return false;
   const last = body[body.length - 2].trim().replace(/^(DECLARE\b[\s\S]*?\bBEGIN|BEGIN)\s+/i, '');
-  return /^RAISE\s+EXCEPTION\s+'[A-Z][A-Z0-9_]*\b[^']*'/i.test(last);
+  return /^RAISE\s+EXCEPTION\s+'[A-Z][A-Z0-9_]*\b[^']*'/i.test(last) && exitPaths(m[2]).length === 0;
 }
 
 function problems(kind: string, text: string): string[] {
@@ -101,7 +189,7 @@ function problems(kind: string, text: string): string[] {
     const finals = st.map((s, i) => (resultBlock(s) ? i : -1)).filter((i) => i >= 0);
     if (finals.length !== 1) bad.push(`${finals.length} result blocks`);
     else if (finals[0] !== st.length - 1) bad.push(`${st.length - 1 - finals[0]} statement(s) after the result block`);
-    if (!text.trimEnd().endsWith(';') && text.slice(text.lastIndexOf(';') + 1).replace(/--[^\n]*/g, '').trim() !== '') bad.push('text after the last statement');
+    if (st.length && !text.trimEnd().endsWith(';') && statements(text.slice(text.lastIndexOf(';') + 1)).length) bad.push('text after the last statement');
   }
   if (kind === 'commits' && st.length && resultBlock(st[st.length - 1])) bad.push('ends in a result RAISE');
   return bad;
@@ -123,7 +211,34 @@ const FOLDERS: Record<string, Record<string, string>> = {
     'harness-4266.sql': 'rolled_back', 'harness-4266-fixtures.sql': 'rolled_back', 'harness-4266-structure.sql': 'rolled_back',
     'apply-20261123170000.sql': 'commits', 'rollback-20261123170000.sql': 'commits', 'dryrun-foreign-rows.sql': 'fragment',
   },
+  'backlog-4263-sync2-erase': {
+    'apply-20261123110000.sql': 'commits', 'rollback-20261123110000.sql': 'commits', 'rollback-20261123120000.sql': 'commits',
+  },
 };
+/** the file whose check passes the same classes to call_shape.gen_check */
+const CHECKER: Record<string, string> = { 'backlog-4263-sync2-erase': 'harness.py' };
+
+const WRITE = /^(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|GRANT|REVOKE|TRUNCATE|COMMENT|DO)\b|\bpublic\.__[A-Z]+_FN__\(|\bpublic\.cloud_\w+\(|pg_stat_statements_reset\(/i;
+/** line of the first top-level statement that writes or may write (call_shape.first_write), or 'none' */
+function firstWrite(text: string): string {
+  for (const st of statements(text)) {
+    if (WRITE.test(st)) {
+      const k = text.indexOf(st.slice(0, 40));
+      return String(text.slice(0, k).split('\n').length);
+    }
+  }
+  return 'none';
+}
+const readmeClasses = (p: string): Record<string, string> =>
+  Object.fromEntries([...read(p).matchAll(/^\| `([\w.-]+\.(?:sql|tpl))` \| (rolled_back|commits|fragment) \|/gm)].map((m) => [m[1], m[2]]));
+/** the classes dict a folder's check passes to call_shape.gen_check, read from its source */
+function checkerClasses(folder: string): Record<string, string> {
+  const src = read(`${folder}/${CHECKER[folder] ?? 'gen.py'}`);
+  const m = [...src.matchAll(/\.gen_check\([^{]*(\{[^}]*\})\)/g)];
+  expect(m.length).toBe(1);
+  return JSON.parse(m[0][1].replace(/'/g, '"'));
+}
+
 
 describe('BACKLOG-4263 call shape', () => {
   for (const [folder, classes] of Object.entries(FOLDERS)) {
@@ -131,20 +246,31 @@ describe('BACKLOG-4263 call shape', () => {
       const files = readdirSync(join(T, folder)).filter((f) => f.endsWith('.sql')).sort();
       expect(files).toEqual(Object.keys(classes).sort());
       for (const [f, kind] of Object.entries(classes)) expect(`${f} ${problems(kind, read(`${folder}/${f}`)).join('; ')}`).toBe(`${f} `);
-      expect(Object.values(classes).filter((k) => k === 'rolled_back').length).toBeGreaterThan(0);
+      expect(Object.values(classes).length).toBeGreaterThan(2);
+    });
+    it(`${folder}: the classes agree in three places (this test, the folder's check, the README table)`, () => {
+      expect(readmeClasses(`${folder}/README.md`)).toEqual(classes);
+      expect(checkerClasses(folder)).toEqual(classes);
     });
   }
 
   for (const folder of ['backlog-4263-sync2-s1/concurrency', 'backlog-4263-sync2-erase/concurrency']) {
-    it(`${folder}: the README declares every file's class, and each file has its class's shape`, () => {
+    it(`${folder}: the README declares every file's class and first write, and each file has its class's shape`, () => {
       const rows = [...read(`${folder}/README.md`).matchAll(/^\| `([\w.-]+\.sql)` \| (rolled_back|commits|fragment) \| (none|\d+) \|/gm)];
       const table = Object.fromEntries(rows.map((m) => [m[1], m[2]]));
       const files = readdirSync(join(T, folder)).filter((f) => f.endsWith('.sql')).sort();
       expect(Object.keys(table).sort()).toEqual(files);
       for (const [f, kind] of Object.entries(table)) expect(`${f} ${problems(kind, read(`${folder}/${f}`)).join('; ')}`).toBe(`${f} `);
+      for (const m of rows) if (m[2] !== 'fragment') expect(`${m[1]} first write ${firstWrite(read(`${folder}/${m[1]}`))}`).toBe(`${m[1]} first write ${m[3]}`);
       expect(Object.values(table).filter((k) => k === 'commits').length).toBeGreaterThan(3);
     });
   }
+
+  it('the shared cases (call_shape_cases.json) get the same verdict here as in call_shape.py selftest', () => {
+    const cases: { name: string; kind: string; text: string; ok: boolean }[] = JSON.parse(read('backlog-4263-sync2-t/call_shape_cases.json'));
+    expect(cases.length).toBeGreaterThan(30);
+    for (const c of cases) expect(`${c.name}: ${problems(c.kind, c.text).length === 0}`).toBe(`${c.name}: ${c.ok}`);
+  });
 
   it('the rule sees the shapes that would commit', () => {
     const ok = "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n";

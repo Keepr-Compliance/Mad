@@ -73,9 +73,16 @@ describe('BACKLOG-4263 erase harness run history', () => {
 
   it('every call ends in its one final RAISE (otherwise it commits), checked by harness.py check', () => {
     // the final block is the last part appended, then the parts are joined: nothing can follow it
-    const fin = "    parts.append(\"DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;\" % marker)\n    text = '\\n'.join(parts)";
+    const fin = "    return \"DO $fin4263e$ BEGIN RAISE EXCEPTION '%s %%', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4263e_out); END $fin4263e$;\" % marker\n";
     expect(PY).toContain(fin);
-    expect(PY).toContain("probs += ends_in_raise(compose({'stage': st}, run='0' * 24), st)");
+    expect(PY).toContain("    parts.append(fin(stage))\n    text = '\\n'.join(parts)");
+    expect(PY).toContain("probs += send_problems(compose({'stage': st}, run='0' * 24), st)");
+    // run() checks the exact text it is about to send, and sends nothing when that check fails
+    expect(PY).toContain("    text = compose(sel, guard=guard)\n    probs = send_problems(text, stage_of(sel))\n    if probs:");
+    expect(PY).toContain("    elif stage is not None and st[-1] + ';' != fin(stage):");
+    expect(PY).toContain("    bad += ['%s call (call shape): %s' % (stage, x) for x in _call_shape().rolled_back(text)]");
+    // --marker is refused with the default transport, given or not
+    expect(PY).toContain("    if guard != GUARD_MD5 and (not transport or os.path.realpath(transport) == os.path.realpath(os.path.expanduser('~/.claude/bin/kt-sql'))):");
     expect(PY).toContain('if len(fins) != 1 or st[-1] is not fins[0]:');
     expect(PY).toContain('(COMMIT|END|ROLLBACK|ABORT|BEGIN|START');
   });

@@ -92,3 +92,15 @@ An approve whose transaction began before T-N's needs two sessions (one call has
 | `harness-n-fixtures.sql` | The fixtures and the timing probes |
 | `answers-report.txt` | `answers.py` (backlog-4263-sync2-t) over `lib/*.sql` against the migrations through 20261123150000 |
 | `two-session/` | The approve-before-T-N two-session control (hand-written; not run without the coordinator's go) |
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `gen.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `gen.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `harness-n.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-n-fixtures.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-n-structure.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `apply-20261123150000.sql` | commits | the migration text, then its ledger row |
+| `rollback-20261123150000.sql` | commits | on its own, to roll the migration back |

@@ -279,3 +279,13 @@ before-note names a fresh uuid4 first); the run id is printed at the start. See 
 
 Row shapes: see the header of `lib/helpers.sql`. Message and file rows are inserted directly in the shapes the writers
 leave (cited there), not written through `cloud_upsert_*`, which need a licensed fixture account.
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `harness.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `harness.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `apply-20261123110000.sql` | commits | E1's text unchanged, then its ledger row (written by `harness.py write`) |
+| `rollback-20261123110000.sql` | commits | on its own to roll E1 back; inside every harness stage as a part, where the final RAISE rolls it back |
+| `rollback-20261123120000.sql` | commits | on its own to roll E3 back; inside every harness stage as a part, where the final RAISE rolls it back |

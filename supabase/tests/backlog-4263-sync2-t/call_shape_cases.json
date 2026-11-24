@@ -1,0 +1,260 @@
+[
+ {
+  "name": "the plain shape",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "block comment, then COMMIT",
+  "kind": "rolled_back",
+  "text": "/* c */ COMMIT;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "nested block comment, then COMMIT, on its own line",
+  "kind": "rolled_back",
+  "text": "/* a /* b */ c */ COMMIT;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "nested block comment, then COMMIT, on an existing line",
+  "kind": "rolled_back",
+  "text": "SELECT 1; /* a /* b */ c */ COMMIT;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "nested block comment, no COMMIT",
+  "kind": "rolled_back",
+  "text": "/* a /* b */ c */\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "COMMIT after a dollar-quoted body with a tag",
+  "kind": "rolled_back",
+  "text": "DO $t_4263x9$ BEGIN NULL; END $t_4263x9$;\nCOMMIT;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "$$ inside a string literal, then COMMIT",
+  "kind": "rolled_back",
+  "text": "SELECT '$$';\nCOMMIT;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "$$ inside a string literal",
+  "kind": "rolled_back",
+  "text": "SELECT '$$';\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "the final RAISE inside a handler that swallows it",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN BEGIN RAISE EXCEPTION 'X_RESULT %', 1; EXCEPTION WHEN OTHERS THEN NULL; END; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "the final RAISE inside IF false",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN IF false THEN RAISE EXCEPTION 'X_RESULT %', 1; END IF; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "RETURN before the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RETURN; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a conditional RETURN before the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN IF true THEN RETURN; END IF; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "RETURN in a nested block before the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN BEGIN RETURN; END; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a labelled EXIT that leaves the block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ <<o>> BEGIN EXIT o; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a labelled EXIT inside a loop",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ <<o>> BEGIN LOOP EXIT o; END LOOP; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "EXIT outside any loop",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN EXIT; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "EXIT inside a loop ends only the loop",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN LOOP EXIT WHEN true; END LOOP; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "a handler on a nested block before the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "a handler on the outermost block, after the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; EXCEPTION WHEN OTHERS THEN NULL; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "a CASE expression before the final RAISE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN PERFORM CASE WHEN true THEN 1 END; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "a word RETURN inside a string",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN PERFORM 'RETURN'; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "another upper-case marker",
+  "kind": "rolled_back",
+  "text": "DO $e$ BEGIN RAISE EXCEPTION 'OTHER_MARKER %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "a line comment holding COMMIT after the result block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n-- COMMIT; SELECT 2;\n",
+  "ok": true
+ },
+ {
+  "name": "a statement after the result block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\nSELECT 2;\n",
+  "ok": false
+ },
+ {
+  "name": "a statement after the result block, no semicolon",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\nSELECT 2",
+  "ok": false
+ },
+ {
+  "name": "a block comment after the result block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n/* trailing */\n",
+  "ok": true
+ },
+ {
+  "name": "a nested block comment after the result block",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n/* a /* b */ c */\n",
+  "ok": true
+ },
+ {
+  "name": "two result blocks",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "the final RAISE is a NOTICE",
+  "kind": "rolled_back",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE NOTICE 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "top-level END",
+  "kind": "rolled_back",
+  "text": "END;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "top-level BEGIN",
+  "kind": "rolled_back",
+  "text": "BEGIN;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "top-level SAVEPOINT",
+  "kind": "rolled_back",
+  "text": "SAVEPOINT s;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "top-level PREPARE TRANSACTION",
+  "kind": "rolled_back",
+  "text": "PREPARE TRANSACTION 'x';\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "lower-case commit and chain",
+  "kind": "rolled_back",
+  "text": "commit and chain;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "'COMMIT' in a string inside a DO body",
+  "kind": "rolled_back",
+  "text": "DO $d$ BEGIN PERFORM 'COMMIT'; END $d$;\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "an unterminated dollar quote, then COMMIT",
+  "kind": "rolled_back",
+  "text": "DO $q$ x;\nCOMMIT;\n",
+  "ok": false
+ },
+ {
+  "name": "an E-string with a backslash quote (one string; a false red, the safe direction)",
+  "kind": "rolled_back",
+  "text": "SELECT E'x\\'; COMMIT; y';\nSELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "commits: ends in a result block",
+  "kind": "commits",
+  "text": "SELECT 1;\nDO $e$ BEGIN RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": false
+ },
+ {
+  "name": "commits: a top-level COMMIT",
+  "kind": "commits",
+  "text": "INSERT INTO t VALUES (1);\nCOMMIT;\n",
+  "ok": false
+ },
+ {
+  "name": "commits: a plain write",
+  "kind": "commits",
+  "text": "INSERT INTO t VALUES (1);\n",
+  "ok": true
+ },
+ {
+  "name": "commits: ends in a block that RETURNs before its RAISE (it commits)",
+  "kind": "commits",
+  "text": "SELECT 1;\nDO $e$ BEGIN RETURN; RAISE EXCEPTION 'X_RESULT %', 1; END $e$;\n",
+  "ok": true
+ },
+ {
+  "name": "fragment: a setting",
+  "kind": "fragment",
+  "text": "SET LOCAL lock_timeout = '3s';\n",
+  "ok": true
+ },
+ {
+  "name": "fragment: a nested-comment COMMIT",
+  "kind": "fragment",
+  "text": "/* a /* b */ c */ COMMIT;\n",
+  "ok": false
+ }
+]

@@ -102,3 +102,13 @@ Inferred, not run: setting `cloud_message_id` also takes `FOR KEY SHARE` on the 
 | `apply-20261123130000.sql` | The migration text unchanged + its ledger row, one transaction |
 | `rollback-20261123130000.sql` | Undoes 20261123130000 (pre-check, five bodies back, ledger row removed, post-check) |
 | `harness-s2.sql` | Single-session controls and their mutants; ends in the rollback and a RAISE |
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `gen.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `gen.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `harness-s2.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `apply-20261123130000.sql` | commits | the migration text, then its ledger row |
+| `rollback-20261123130000.sql` | commits | on its own, to roll the migration back |

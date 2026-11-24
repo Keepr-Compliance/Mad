@@ -154,3 +154,17 @@ JSON text literal, and expected answers kept in jsonb variables.
 | `casts.py` | Cast check: a non-text catalogue column (`"char"`, boolean, oid, name, aclitem[]) is never an operand of `\|\|` or a direct argument of concat / concat_ws / string_agg / format without an explicit cast; run by `gen.py check` |
 | `answers.py`, `answers-report.txt` | Answer check of the harness against the migrations, and its pinned result |
 | `roles.py`, `roles-report.txt` | Role check: every statement on an object another role owns, in every .sql file of the hosted-MCP and Keepr Cloud test folders, with the role in force; pinned result |
+
+## Call classes
+
+What each `.sql` file in this folder is when it is sent. `gen.py check` (through `../backlog-4263-sync2-t/call_shape.py`) and the jest pin `broker-portal/__tests__/migrations/call-shape-4263.test.ts` compare this table with the classes in `gen.py check` and with the test's own list. A class changed in one or two of the three places is red; a file not in the table is red.
+
+| File | Class | Sent as |
+|---|---|---|
+| `harness-t.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-t-controls.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-t-mutants.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-t-fixtures.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `harness-t-structure.sql` | rolled_back | one call; ends in its result RAISE, so nothing persists |
+| `apply-20261123140000.sql` | commits | the migration text, then its ledger row |
+| `rollback-20261123140000.sql` | commits | on its own, to roll the migration back |
