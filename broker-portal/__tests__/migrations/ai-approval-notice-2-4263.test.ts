@@ -200,6 +200,7 @@ describe('BACKLOG-4263 T-N and T-S harnesses do not depend on other users\' rows
 
   it("C-N11 asserts the rollback's refusal without its database-wide count", () => {
     expect(N).toContain("'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: % connection(s) hold approval page version 2 or later%',");
+    expect(N).toContain("'refused_count', coalesce(substring(first FROM 'ROLLBACK 20261123150000: ([0-9]+) connection\\(s\\)')::int > 0, false),");
   });
 
   it('the not-applied check refuses a database where a connection already holds version 2 or later', () => {
@@ -209,5 +210,6 @@ describe('BACKLOG-4263 T-N and T-S harnesses do not depend on other users\' rows
   it("T-S c_log_view reads the fixture user's own get_message row and asserts no other user's row is listed", () => {
     expect(T_CONTROLS).toContain("AND e ->> 'read_id' IN (SELECT x.id::text FROM public.mcp_message_reads x WHERE x.user_id = pg_temp.f('A')));");
     expect(T_CONTROLS).toContain("'own_rows_only', NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'reads') e");
+    expect(T_CONTROLS).toContain("WHERE e ->> 'read_id' IS NULL");
   });
 });

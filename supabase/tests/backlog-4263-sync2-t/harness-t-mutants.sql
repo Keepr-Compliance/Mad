@@ -634,7 +634,9 @@ BEGIN
              AND e ->> 'read_id' IN (SELECT x.id::text FROM public.mcp_message_reads x WHERE x.user_id = pg_temp.f('A')));
   v := v || jsonb_build_object('count', jsonb_array_length(r -> 'reads') = 6,
     'own_rows_only', NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'reads') e
-                                  WHERE e ->> 'read_id' NOT IN (SELECT x.id::text FROM public.mcp_message_reads x WHERE x.user_id = pg_temp.f('A'))),
+                                  WHERE e ->> 'read_id' IS NULL
+                                     OR NOT EXISTS (SELECT 1 FROM public.mcp_message_reads x
+                                                     WHERE x.user_id = pg_temp.f('A') AND x.id::text = e ->> 'read_id')),
     'lin', lin ->> 'subject' = 'Offer accepted' AND lin ->> 'from' = 'Seller Agent <seller@example.test>' AND lin ->> 'message_state' = 'live'
            AND lin ->> 'deal_state' = 'live' AND lin ->> 'address' = 'Fixture dA Street' AND lin ->> 'app_name' = 'Fixture app K2'
            AND (lin ->> 'part')::int = 1 AND lin ->> 'channel' = 'email' AND lin ->> 'deal_id' = pg_temp.s('dA'));

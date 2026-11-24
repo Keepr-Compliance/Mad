@@ -10,7 +10,10 @@ and `apply-wrappers-4263.test.ts` check the files' text in CI (no database there
 
 20261123140000 applied and 20261123150000 **not** applied (`mcp_settings.notice_version` 1). Every call applies T-N's
 text itself, inside its own transaction, and ends in RAISE, so nothing is kept. Before applying T-N to a database, run the
-calls there; afterwards they refuse (the not-applied check).
+calls there; afterwards they refuse (the not-applied check). No connection may hold approval page version 2 or later (a
+state T-N alone can produce): when one does, every call stops at the not-applied check with
+`harness-n.sql: a connection already holds approval page version 2 or later; T-N is not applied, so this state is not one
+the harness tests`.
 
 ## Order on the test project (one engineer at a time; a before-note to the coordinator for each call)
 
@@ -21,7 +24,9 @@ calls there; afterwards they refuse (the not-applied check).
    read-log rows). Among those rows are a pending, unexpired authorization request and a version-1 connection. All
    three must read the same verdict. The prefix file is kept outside the repository for now. Expected effects of T-N
    on those rows, by design: the bump expires every pending request of every user, and `mcp_authorize_begin` deletes
-   anyone's expired requests. Nothing else of theirs may change.
+   anyone's expired requests. Nothing else of theirs may change in what the migration's own text does. Mutant blocks do
+   touch other users' rows, inside subtransactions that are undone: `backfill_before_trigger` updates every
+   connection's version, and the `expire_to_now` block makes one update that leaves the value as it was.
 1. Fixtures: `kt-sql harness-n-fixtures.sql > fx.txt; python3 gen.py report-fixtures fx.txt` -> `decision: FULL` (the
    timing probes: the fixture, one approval chain, one application of T-N's text; the estimate must be at most 45 s).
 2. Structure (only if the coordinator allows it as a stage): `kt-sql harness-n-structure.sql > st.txt;
