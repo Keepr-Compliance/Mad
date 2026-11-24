@@ -21,7 +21,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 MIGDIR = os.path.join(REPO, 'supabase', 'migrations')
-LAST = '20261123150000'
+LAST = '20261123170000'
 SESSION = 'postgres'
 
 
@@ -272,7 +272,7 @@ FOLDERS = ['backlog-4236', 'backlog-4238', 'backlog-4243', 'backlog-4244', 'back
            'backlog-4263-pr4a', 'backlog-4263-pr4b', 'backlog-4263-pr4c', 'backlog-4263-pr5', 'backlog-4263-pr6',
            'backlog-4263-pr8', 'backlog-4263-prod', 'backlog-4263-prod-verify', 'backlog-4263-addr', 'backlog-4263-age', 'backlog-4263-bounds', 'backlog-4263-notice',
            'backlog-4263-sync2-s1', 'backlog-4263-sync2-s2', 'backlog-4263-sync2-erase', 'backlog-4263-sync2-t',
-           'backlog-4263-sync2-n']
+           'backlog-4263-sync2-n', 'backlog-4266']
 
 
 def lane_files():

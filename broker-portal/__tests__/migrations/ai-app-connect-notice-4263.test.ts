@@ -34,6 +34,23 @@ const bodyOf = (stmt: string): string => {
   return m[1];
 };
 
+/** What is wrong with an exchange body's notice write (BACKLOG-4266): [] when the INSERT is outside every exception
+ * handler and is followed at once by the row-count check that raises MC004. */
+function swallowProblems(b: string): string[] {
+  const out: string[] = [];
+  const ins = b.indexOf('INSERT INTO public.ai_app_connect_notices (user_id, provider, replaced)');
+  if (ins < 0 || b.split('INSERT INTO public.ai_app_connect_notices').length !== 2) return ['not exactly one INSERT'];
+  const tokenBlockEnd = b.indexOf("RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';\n  END;\n");
+  if (tokenBlockEnd < 0 || tokenBlockEnd > ins) out.push('INSERT before the token block');
+  const between = b.slice(tokenBlockEnd, ins);
+  const after = b.slice(ins, b.indexOf("  RETURN jsonb_build_object('ok', true"));
+  if (/\n {2}BEGIN\n/.test(between) || /EXCEPTION\s+WHEN/i.test(after)) out.push('handler around the INSERT');
+  if (!/^INSERT [^;]*; {3}\/\*NOTICE:exchange\*\/\n {2}GET DIAGNOSTICS v_k = ROW_COUNT;\n {2}IF v_k IS DISTINCT FROM 1 THEN {3}\/\*NOTICE:count\*\/\n {4}RAISE EXCEPTION USING ERRCODE = 'MC004', MESSAGE = 'mcp connect notice not written';\n {2}END IF;\n$/.test(after)) {
+    out.push('no row-count check after the INSERT');
+  }
+  return out;
+}
+
 const EXCHANGE = statementOf(RAW, 'mcp_exchange_code');
 const OLD_EXCHANGE = statementOf(read(PR5), 'mcp_exchange_code');
 const CLAIM = statementOf(RAW, 'ai_app_notice_claim');
@@ -78,17 +95,33 @@ describe('BACKLOG-4263 AI-app connect notice migration file', () => {
     expect(back).toBe(OLD_EXCHANGE);
   });
 
-  it('the notice insert sits in its own block that swallows any error, after the tokens are stored', () => {
-    const b = bodyOf(EXCHANGE);
-    const ins = b.indexOf('INSERT INTO public.ai_app_connect_notices (user_id, provider, replaced)');
-    expect(b.split('INSERT INTO public.ai_app_connect_notices')).toHaveLength(2);
-    const blockStart = b.lastIndexOf('  BEGIN\n', ins);
-    expect(b.slice(blockStart, ins)).toBe('  BEGIN\n    ');
-    expect(b.slice(ins)).toMatch(/^INSERT [^;]*;   \/\*NOTICE:exchange\*\/\n {2}EXCEPTION WHEN OTHERS THEN\n {4}NULL;\n {2}END;\n/);
-    expect(ins).toBeGreaterThan(b.indexOf("RAISE EXCEPTION USING ERRCODE = 'MC001'"));
-    expect(ins).toBeLessThan(b.indexOf(RETURN_LINE.trim()));
-    expect(b).toContain('SELECT c.user_id, c.provider, v_n > 0 FROM public.mcp_connections c WHERE c.id = v_code.connection_id;');
-    expect(b.indexOf('GET DIAGNOSTICS v_n = ROW_COUNT;')).toBeLessThan(ins);
+  it('the notice insert is no longer swallowed: the live definition writes it with the exchange and checks the row count (BACKLOG-4266)', () => {
+    // 20261118180000 wrapped the INSERT in BEGIN ... EXCEPTION WHEN OTHERS THEN NULL; END; that body is superseded.
+    // The live definition is the last migration that defines the function; it must have no handler around the INSERT.
+    const definers = readdirSync(MIGRATIONS)
+      .filter((f) => /^\d{14}_.*\.sql$/.test(f))
+      .sort()
+      .filter((f) => /CREATE OR REPLACE FUNCTION public\.mcp_exchange_code\(/.test(read(join(MIGRATIONS, f))));
+    const latestFile = definers[definers.length - 1];
+    expect(latestFile).toBe('20261123170000_backlog_4266_connect_notice_with_exchange.sql');
+    const live = bodyOf(statementOf(read(join(MIGRATIONS, latestFile)), 'mcp_exchange_code'));
+    expect(swallowProblems(live)).toEqual([]);
+    // the old shape: the block 20261118180000 wrote, put back into the live body -> red
+    const oldBlock = bodyOf(EXCHANGE).slice(bodyOf(EXCHANGE).indexOf('  -- 4263 PR-10.7: one notice'), bodyOf(EXCHANGE).indexOf(RETURN_LINE));
+    const liveBlock = live.slice(live.indexOf('  -- 4266: one notice'), live.indexOf(RETURN_LINE));
+    expect(oldBlock).toContain('EXCEPTION WHEN OTHERS THEN\n    NULL;');
+    expect(liveBlock.length).toBeGreaterThan(0);
+    const swallowRestored = live.replace(liveBlock, oldBlock);
+    expect(swallowRestored).not.toBe(live);
+    expect(swallowProblems(swallowRestored)).toEqual(expect.arrayContaining(['handler around the INSERT']));
+    // the most likely wrong fixes, each red
+    const warned = live.replace(liveBlock, `  BEGIN\n${liveBlock}  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'x';\n  END;\n`);
+    expect(swallowProblems(warned)).toContain('handler around the INSERT');
+    const noCount = live.replace(/ {2}GET DIAGNOSTICS v_k = ROW_COUNT;\n {2}IF v_k IS DISTINCT FROM 1 THEN {3}\/\*NOTICE:count\*\/\n {4}RAISE EXCEPTION USING ERRCODE = 'MC004', MESSAGE = 'mcp connect notice not written';\n {2}END IF;\n/, '');
+    expect(noCount).not.toBe(live);
+    expect(swallowProblems(noCount)).toContain('no row-count check after the INSERT');
+    const asMc001 = live.replace("ERRCODE = 'MC004'", "ERRCODE = 'MC001'");
+    expect(swallowProblems(asMc001)).toContain('no row-count check after the INSERT');
   });
 
   it('keeps the exchange anon-callable, portal secret checked first, grants restated', () => {

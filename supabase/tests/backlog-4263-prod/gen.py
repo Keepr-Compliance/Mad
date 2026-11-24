@@ -219,7 +219,17 @@ def pre_lane_function(name):
 
 state = {'fn': {}, 'dropped': set(), 'tables': {}, 'cols': {}, 'cons': {}, 'conexpr': {}, 'idx': {}, 'cron': {}, 'ledger': set(), 'trg': {}}
 # data values a migration sets and its post-check pins (one row of a settings table; no personal data): version -> [(name, value)]
-DATA_SET = {'20261123150000': [('mcp_settings.notice_version', '2')]}
+DATA_SET = {'20261123150000': [('mcp_settings.notice_version', '2')],
+            # BACKLOG-4266: the notice row the exchange must write passes the notice table's provider CHECK for every
+            # provider a connection can have; 'equal' when both tables' provider CHECK definitions are the same text
+            '20261123170000': [('provider CHECK of ai_app_connect_notices = mcp_connections', 'equal')]}
+_PROVIDER_CHECK = lambda t: (f"(SELECT string_agg(pg_catalog.pg_get_constraintdef(k.oid)::text, ' & ' ORDER BY pg_catalog.pg_get_constraintdef(k.oid)::text) "
+                             f"FROM pg_catalog.pg_constraint k WHERE k.conrelid = 'public.{t}'::regclass AND k.contype = 'c' "
+                             f"AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'provider')]::smallint[])")
+DATA_EXPR = {'mcp_settings.notice_version': '(SELECT s.notice_version::text FROM public.mcp_settings s WHERE s.id)',
+             'provider CHECK of ai_app_connect_notices = mcp_connections':
+                 f"(SELECT CASE WHEN x.a IS NOT NULL AND x.a = x.b THEN 'equal' ELSE coalesce(x.a, '(none)') || ' <> ' || coalesce(x.b, '(none)') END "
+                 f"FROM (SELECT {_PROVIDER_CHECK('ai_app_connect_notices')} AS a, {_PROVIDER_CHECK('mcp_connections')} AS b) x)"}
 per = {}          # version -> what the migration touched
 default_dep = {}  # assertion id -> why it rests on a default or on state from before the lane
 stmt_kinds = {}
@@ -828,7 +838,9 @@ def render(k):
     if trg_rows or dat_rows:
         ctes.insert(-2, values('trg', 'name, tbl, want', trg_rows))
         ctes.insert(-2, values('dat', 'name, want', dat_rows))
-        ctes[-1] = CHECKS[:-1] + EXTRA_CHECKS + ')'
+        names = [n for n in keys.get('data', [])]
+        case = 'CASE d.name ' + ' '.join(f'WHEN {lit(n)} THEN {DATA_EXPR[n]}' for n in names) + ' END' if names else 'NULL::text'
+        ctes[-1] = CHECKS[:-1] + EXTRA_CHECKS.replace('@@DATA_CASE@@', case) + ')'
     return head + 'WITH\n' + ',\n'.join(ctes) + '\n' + FINAL_SELECT.replace('@@LABEL@@', k)
 
 
@@ -976,7 +988,7 @@ EXTRA_CHECKS = """  UNION ALL
     FROM trg g
   UNION ALL
   SELECT 'data ' || d.name, 'data value', d.want,
-         CASE d.name WHEN 'mcp_settings.notice_version' THEN (SELECT s.notice_version::text FROM public.mcp_settings s WHERE s.id) END
+         @@DATA_CASE@@
     FROM dat d
 """
 FINAL_SELECT = """SELECT CASE WHEN f.must IS NULL THEN 'ok'
