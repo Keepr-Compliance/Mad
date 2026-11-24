@@ -355,7 +355,73 @@ def concurrency_checks(folder, readme_text, recorded):
             if len(sig) < 12 or not any(sig in x for x in recorded):
                 unseen.append(f)
     out.append(('call classes: every file that writes was sent in the offline run, guard first', not unseen, 'not seen: %s' % unseen))
+    # read, not run: every place run.sh can send a call, including paths this offline run never takes
+    rel = '/'.join(os.path.normpath(os.path.abspath(folder)).split(os.sep)[-2:])
+    names, bad = transport_sites(open(os.path.join(folder, 'run.sh'), encoding='utf-8').read(), transport_rules(rel))
+    out.append(('call sites: every $K call in run.sh sends a file built guard first (%d files, read from the script)' % len(names),
+                not bad, '; '.join(bad)[:600]))
     return out
+
+
+MENTION = re.compile(r'\$\{?K\}?(?![A-Za-z0-9_])')
+INVOKE = re.compile(r'(?:^|[\s(;&|])"?\$K"?\s+"\$tmp/([A-Za-z0-9_.$-]+)"')
+FUNC = re.compile(r'^\s*([A-Za-z_]\w*)\(\)\s*\{')
+
+
+def transport_sites(text, rules):
+    """(sent file names, problems) for a run.sh, read as text, not run. Every mention of the transport $K is either an
+    invocation `$K "$tmp/<file>"` or one of rules['non_calls'] (exact lines: refusals and tests of $K). A `$1`/`$2`
+    file inside a function is resolved through that function's calls. Every file sent is produced by a guarded
+    helper (rules['producer'], with {N} for the name), a pinned hand-built line (rules['hand_built']) or a composer
+    output (rules['compose_outputs']), and no other line writes it. The helpers' own lines (rules['helpers']) are
+    pinned exactly, so the guard stays first in what they build. A new raw call site anywhere, run or not, is red."""
+    lines = text.replace('\r\n', '\n').split('\n')
+    code = [re.sub(r'(^|\s)#(\s.*)?$', r'\1', x).rstrip() for x in lines]
+    stripped = [x.strip() for x in code]
+    bad, sent, func = [], [], None
+    for no, x in enumerate(code, 1):
+        m = FUNC.match(x)
+        if m:
+            func = m.group(1)
+        mentions = len(MENTION.findall(x))
+        names = INVOKE.findall(x)
+        if mentions > len(names) and x.strip() not in rules['non_calls']:
+            bad.append('run.sh:%d: a mention of $K that is neither an invocation of a guarded file nor a pinned non-call: %s' % (no, x.strip()[:90]))
+        for nm in names:
+            if re.fullmatch(r'\$[1-9]', nm) and func:
+                k = int(nm[1])
+                calls = [c.split()[k] for c in stripped if re.match(r'%s\s' % re.escape(func), c) and len(c.split()) > k]
+                if not calls:
+                    bad.append('run.sh:%d: %s inside %s() is never given a file' % (no, nm, func))
+                sent += [(no, c) for c in calls]
+            elif '$' in nm:
+                bad.append('run.sh:%d: a sent file name that is not fixed: %s' % (no, nm))
+            else:
+                sent.append((no, nm))
+        if func and (x.strip() == '}' or (m and x.rstrip().endswith('}'))):
+            func = None
+    for want in rules['non_calls'] + rules['helpers'] + rules['hand_built']:
+        if want not in stripped:
+            bad.append('pinned line not in run.sh: %s' % want[:90])
+    for no, nm in sent:
+        e = re.escape(nm)
+        produced = nm in rules.get('compose_outputs', []) or any(re.search(rules['producer'].replace('{N}', e) + r'(?=[\s;]|$)', c) for c in stripped) \
+            or any(re.search(r'>\s*"\$tmp/%s"' % e, h) for h in rules['hand_built'])
+        if not produced:
+            bad.append('run.sh:%d: %s is sent but built by no guarded helper' % (no, nm))
+        for c in stripped:
+            if re.search(r'>\s*"\$tmp/%s"' % e, c) and c not in rules['hand_built']:
+                bad.append('%s is written outside the guarded helpers: %s' % (nm, c[:90]))
+    names = sorted(set(n for _, n in sent))
+    if len(names) < 5:
+        bad.append('only %d sent files found: the scan is not reading this run.sh' % len(names))
+    return names, sorted(set(bad))
+
+
+def transport_rules(folder_rel):
+    import json
+    import os
+    return json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'call_sites.json'), encoding='utf-8'))[folder_rel]
 
 
 def selftest():
@@ -373,9 +439,26 @@ def selftest():
     return 1 if wrong or len(cases) < 30 else 0
 
 
+SITE_FOLDERS = ('backlog-4263-sync2-s1/concurrency', 'backlog-4263-sync2-erase/concurrency', 'backlog-4263-sync2-n/two-session')
+
+
+def sites(rel):
+    """the static call-site pin for one folder, printed; True when clean"""
+    import os
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', rel)
+    names, bad = transport_sites(open(os.path.join(here, 'run.sh'), encoding='utf-8').read(), transport_rules(rel))
+    for x in bad:
+        print('CALL SITES %s: %s' % (rel, x))
+    print('call sites %s: %d files sent, %d problem(s)' % (rel, len(names), len(bad)))
+    return not bad
+
+
 if __name__ == '__main__':
     if sys.argv[1:2] == ['selftest']:
+        REQUIRE_PGLAST = '--require-pglast' in sys.argv   # the pglast gate: a missing pglast is then a failure
         sys.exit(selftest())
+    if sys.argv[1:2] == ['sites']:
+        sys.exit(0 if all([sites(f) for f in (sys.argv[2:] and [x for x in sys.argv[2:] if not x.startswith('--')] or SITE_FOLDERS)]) else 1)
     kind, files = sys.argv[1], sys.argv[2:]
     res = check_files(kind, files)
     bad = 0

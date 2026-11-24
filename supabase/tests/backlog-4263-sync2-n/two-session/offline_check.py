@@ -31,6 +31,7 @@ shape = os.environ['STUB_SHAPE']
 log = open(os.environ['STUB_LOG'], 'a')
 tag = (re.search(r'/\*t:(\w+)\*/', f) or re.search(r'(pg_stat_statements_reset)', f)).group(1)
 log.write(tag + '\n')
+open(os.environ['STUB_LOG'] + '.texts', 'a').write(json.dumps(f) + '\n')
 base = {'ledger_head': '20261123140000', 'notice_version': 1, 'tn_objects': 0, 'auth_users': 7}
 pre = {'txn': 'one', 'iso': 'read committed', 'fixture_by_id': 0, 'fixture_by_pattern': 0, 'fixture_fk_rows': 0, 'client_exists': 0,
        'pending_requests': 1 if shape == 'refused' else 0, 'connections_v2': 0, 'enabled': False,
@@ -109,6 +110,8 @@ def main(argv):
     os.symlink(kt, alias)
     marker = compose.md5('offline-check-marker')
 
+    SENT = []
+
     def run_case(folder, shape, args, env_over):
         log = os.path.join(d, f'log-{shape}-{len(os.listdir(d))}')
         env = dict(os.environ, T4263N_RUNNER=stub, T4263N_MARKER_MD5=marker, T4263N_REPO=compose.REPO, STUB_HERE=HERE,
@@ -121,6 +124,8 @@ def main(argv):
         r = subprocess.run(['/bin/bash', os.path.join(folder, 'run.sh'), 'fedcba9876543210', '41111111-2222-4333-8444-555555555555'] + args,
                            capture_output=True, text=True, env=env, timeout=60)
         calls = open(log).read().split() if os.path.exists(log) else []
+        if os.path.exists(log + '.texts'):
+            SENT.extend(json.loads(x) for x in open(log + '.texts').read().splitlines())
         return r.returncode, r.stdout + r.stderr, calls
 
     full = ['precheck', 'setup', 'session2', 'session1', 'state', 'probe', 'rollback', 'teardown', 'verify', 'pg_stat_statements_reset']
@@ -151,6 +156,33 @@ def main(argv):
         if not ok:
             print('     ' + out[-800:].replace('\n', '\n     '))
         bad += not ok
+    # call classes (README table), guard first, and every call site of run.sh read from the script
+    cspec2 = importlib.util.spec_from_file_location('call_shape4263n2s', os.path.join(HERE, '..', '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+    call_shape = importlib.util.module_from_spec(cspec2)
+    cspec2.loader.exec_module(call_shape)
+    table = call_shape.readme_classes(os.path.join(HERE, 'README.md'))
+    composed = {f'{m}/{f}': open(os.path.join(d, m, f)).read() for m in ('pristine', 'mutant') for f in os.listdir(os.path.join(d, m))
+                if f.endswith(('.sql', '.tpl'))}
+    names = sorted(set(k.split('/', 1)[1] for k in composed))
+    shape_bad = [f'{k} ({table[k.split("/", 1)[1]]}): {x}' for k, t in sorted(composed.items()) if k.split('/', 1)[1] in table
+                 for x in call_shape.KINDS[table[k.split('/', 1)[1]]](t)]
+    ok = names == sorted(table) and len(names) > 8 and not shape_bad
+    print(f"{'ok  ' if ok else 'FAIL'} call classes: {len(composed)} composed texts, each in the README table with its class's shape"
+          f"{'' if names == sorted(table) else ' (table differs: ' + str(sorted(set(names) ^ set(table))) + ')'} {shape_bad[:3]}")
+    bad += not ok
+    first = lambda t: (call_shape.statements(t) or [''])[0]
+    nog = [k for k, t in composed.items() if not first(t).startswith('DO $guard4263n2s$')]
+    nog_sent = [i for i, t in enumerate(SENT) if not first(t).startswith('DO $guard4263n2s$')]
+    ok = not nog and not nog_sent and len(SENT) > 20
+    print(f"{'ok  ' if ok else 'FAIL'} guard first: in {len(composed)} composed texts and in all {len(SENT)} texts the stub runs received {nog[:3]} {nog_sent[:3]}")
+    bad += not ok
+    rules = call_shape.transport_rules('backlog-4263-sync2-n/two-session')
+    sent_names, site_bad = call_shape.transport_sites(open(os.path.join(HERE, 'run.sh')).read(), rules)
+    outs = sorted(f for f in table if f.endswith('.sql'))
+    ok = not site_bad and sorted(rules['compose_outputs']) == outs
+    print(f"{'ok  ' if ok else 'FAIL'} call sites: run.sh read as text sends {len(sent_names)} files, each composed guard first "
+          f"{site_bad[:3]}{'' if sorted(rules['compose_outputs']) == outs else ' compose_outputs differ from the table: ' + str(outs)}")
+    bad += not ok
     # compose.py refuses on its own too (the second layer behind run.sh)
     for name, mk, want in [('compose without a marker', '', 'T4263N_MARKER_MD5 must be'), ('compose with the hosted marker', hosted, 'hosted test database marker')]:
         r = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'compose.py'), os.path.join(d, 'x'), 'pristine', '0123456789abcdef',

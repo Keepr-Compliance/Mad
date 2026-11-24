@@ -1,0 +1,67 @@
+{
+ "_about": "BACKLOG-4263: every place each run.sh may send a call (call_shape.transport_sites, read by the offline checks and the jest pin). A new $K call site, a sent file built outside these helpers, or an edit to a helper line is red until this file says so.",
+ "backlog-4263-sync2-s1/concurrency": {
+  "non_calls": [
+   "[ -f \"$K\" ] && [ -x \"$K\" ] || { echo \"refusing: the transport ${K} does not exist or is not executable\" >&2; exit 2; }",
+   "[ -n \"${SQL_TRANSPORT:-}\" ] && [ \"$K\" != \"$HOME/.claude/bin/kt-sql\" ] || { echo \"refusing: GUARD_MARKER_MD5 is only for a non-default SQL_TRANSPORT\" >&2; exit 2; }",
+   "echo \"guard marker substituted for a non-default transport (${K##*/})\""
+  ],
+  "helpers": [
+   "guarded() {",
+   "holder() {",
+   "{ cat \"$here/guard.sql\"; echo; for f in \"$@\"; do cat \"$here/$f\"; echo; done; } | fill > \"$tmp/$out\"",
+   "{ cat \"$here/hold-marker.sql\"; cat \"$here/guard.sql\"; echo; for f in \"$@\"; do cat \"$here/$f\"; echo; done; } | fill > \"$tmp/$out\""
+  ],
+  "producer": "\\b(?:guarded|holder) {N}",
+  "hand_built": [],
+  "compose_outputs": []
+ },
+ "backlog-4263-sync2-erase/concurrency": {
+  "non_calls": [
+   "[ -f \"$K\" ] && [ -x \"$K\" ] || { echo \"refusing: the transport ${K} does not exist or is not executable\" >&2; exit 2; }",
+   "[ -n \"${SQL_TRANSPORT:-}\" ] && [ \"$K\" != \"$HOME/.claude/bin/kt-sql\" ] || { echo \"refusing: GUARD_MARKER_MD5 is only for a non-default SQL_TRANSPORT\" >&2; exit 2; }",
+   "echo \"guard marker substituted for a non-default transport (${K##*/})\""
+  ],
+  "helpers": [
+   "fill() {",
+   "holder() {",
+   "piece \"$here/guard.sql\" \"$2.g\"; piece \"$here/$1\" \"$2.t\"; { cat \"$tmp/$2.g\"; echo; cat \"$tmp/$2.t\"; } > \"$tmp/$2\"",
+   "piece \"$here/hold-marker.sql\" \"$2.m\"; piece \"$here/guard.sql\" \"$2.g\"; piece \"$here/$1\" \"$2.t\"",
+   "{ cat \"$tmp/$2.m\" \"$tmp/$2.g\"; echo; cat \"$tmp/$2.t\"; } > \"$tmp/$2\""
+  ],
+  "producer": "\\b(?:fill|holder) \\S+ {N}",
+  "hand_built": [
+   "piece \"$here/guard.sql\" copy.g; { cat \"$tmp/copy.g\"; echo; cat \"$tmp/copy.raw\"; } > \"$tmp/copy.sql\"",
+   "fill gate.sql g.sql; cat \"$tmp/g.sql\" \"$tmp/b1.sql\" > \"$tmp/b.sql\""
+  ],
+  "compose_outputs": []
+ },
+ "backlog-4263-sync2-n/two-session": {
+  "non_calls": [
+   "[ -n \"$K\" ] && [ -x \"$K\" ] || { echo \"refusing: T4263N_RUNNER must name the dry-run transport wrapper (an executable)\" >&2; usage; }",
+   "K_REAL=\"$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$K\")\"",
+   "case \"$(basename \"$K\")\" in kt-sql|kt-sql.*) echo \"refusing: T4263N_RUNNER is the hosted transport (${K}); this control commits T-N\" >&2; exit 2 ;; esac"
+  ],
+  "helpers": [
+   "send() { \"$K\" \"$tmp/$1\" > \"$tmp/$2\" 2>\"$tmp/$2.err\" || true; }",
+   "py \"$here/compose.py\" \"$tmp/c\" \"$MODE\" \"$RUN\" \"$A\" \"$O\" \"$M\" \"$C\" \"$R\"",
+   "cp \"$tmp/c\"/* \"$tmp/\""
+  ],
+  "producer": "(?!)",
+  "hand_built": [
+   "sed -e \"s/__ENABLED__/${ENABLED}/g\" -e \"s/__UPDATED_AT__/${UPDATED_AT}/g\" \"$tmp/teardown.tpl\" > \"$tmp/teardown.sql\"",
+   "sed -e \"s/__NONCE__/${NONCE}/g\" \"$tmp/session2.tpl\" > \"$tmp/session2.sql\""
+  ],
+  "compose_outputs": [
+   "precheck.sql",
+   "setup.sql",
+   "session1.sql",
+   "state.sql",
+   "rollback.sql",
+   "rollback-other.sql",
+   "verify.sql",
+   "probe.sql",
+   "reset.sql"
+  ]
+ }
+}

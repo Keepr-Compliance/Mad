@@ -240,6 +240,49 @@ function checkerClasses(folder: string): Record<string, string> {
 }
 
 
+
+type Sites = { non_calls: string[]; helpers: string[]; producer: string; hand_built: string[]; compose_outputs: string[] };
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** the same reading of a run.sh as call_shape.transport_sites: [sent file names, problems] */
+function transportSites(text: string, rules: Sites): [string[], string[]] {
+  const code = text.replace(/\r\n/g, '\n').split('\n').map((x) => x.replace(/(^|\s)#(\s.*)?$/, '$1').trimEnd());
+  const stripped = code.map((x) => x.trim());
+  const bad = new Set<string>();
+  const sent: [number, string][] = [];
+  let func: string | null = null;
+  code.forEach((x, k) => {
+    const no = k + 1;
+    const m = /^\s*([A-Za-z_]\w*)\(\)\s*\{/.exec(x);
+    if (m) func = m[1];
+    const mentions = (x.match(/\$\{?K\}?(?![A-Za-z0-9_])/g) ?? []).length;
+    const names = [...x.matchAll(/(?:^|[\s(;&|])"?\$K"?\s+"\$tmp\/([A-Za-z0-9_.$-]+)"/g)].map((y) => y[1]);
+    if (mentions > names.length && !rules.non_calls.includes(x.trim())) bad.add(`run.sh:${no}: a mention of $K that is neither an invocation of a guarded file nor a pinned non-call`);
+    for (const nm of names) {
+      if (/^\$[1-9]$/.test(nm) && func) {
+        const i = Number(nm[1]);
+        const f: string = func;
+        const calls = stripped.filter((c) => new RegExp(`^${esc(f)}\\s`).test(c) && c.split(/\s+/).length > i).map((c) => c.split(/\s+/)[i]);
+        if (!calls.length) bad.add(`run.sh:${no}: ${nm} inside ${f}() is never given a file`);
+        for (const c of calls) sent.push([no, c]);
+      } else if (nm.includes('$')) bad.add(`run.sh:${no}: a sent file name that is not fixed: ${nm}`);
+      else sent.push([no, nm]);
+    }
+    if (func && (x.trim() === '}' || (m && x.trimEnd().endsWith('}')))) func = null;
+  });
+  for (const want of [...rules.non_calls, ...rules.helpers, ...rules.hand_built]) if (!stripped.includes(want)) bad.add(`pinned line not in run.sh: ${want.slice(0, 90)}`);
+  for (const [no, nm] of sent) {
+    const e = esc(nm);
+    const w = new RegExp(`>\\s*"\\$tmp/${e}"`);
+    const produced = rules.compose_outputs.includes(nm)
+      || stripped.some((c) => new RegExp(`${rules.producer.replace('{N}', e)}(?=[\\s;]|$)`).test(c)) || rules.hand_built.some((h) => w.test(h));
+    if (!produced) bad.add(`run.sh:${no}: ${nm} is sent but built by no guarded helper`);
+    for (const c of stripped) if (w.test(c) && !rules.hand_built.includes(c)) bad.add(`${nm} is written outside the guarded helpers: ${c.slice(0, 90)}`);
+  }
+  const uniq = [...new Set(sent.map(([, n]) => n))].sort();
+  if (uniq.length < 5) bad.add(`only ${uniq.length} sent files found: the scan is not reading this run.sh`);
+  return [uniq, [...bad].sort()];
+}
+
 describe('BACKLOG-4263 call shape', () => {
   for (const [folder, classes] of Object.entries(FOLDERS)) {
     it(`${folder}: every .sql file is declared, rolled-back calls end in their result RAISE, committing files do not`, () => {
@@ -265,6 +308,26 @@ describe('BACKLOG-4263 call shape', () => {
       expect(Object.values(table).filter((k) => k === 'commits').length).toBeGreaterThan(3);
     });
   }
+
+  const SITES: Record<string, Sites> = JSON.parse(read('backlog-4263-sync2-t/call_sites.json'));
+  const SENT: Record<string, number> = { 'backlog-4263-sync2-s1/concurrency': 14, 'backlog-4263-sync2-erase/concurrency': 12, 'backlog-4263-sync2-n/two-session': 11 };
+  for (const [folder, n] of Object.entries(SENT)) {
+    it(`${folder}: every $K call in run.sh, read from the script, sends a file built guard first`, () => {
+      const [names, bad] = transportSites(read(`${folder}/run.sh`), SITES[folder]);
+      expect(bad).toEqual([]);
+      expect(names.length).toBe(n);
+    });
+  }
+
+  it('backlog-4263-sync2-n/two-session: the README classes, compose.py and call_sites.json name the same composed texts', () => {
+    const table = readmeClasses('backlog-4263-sync2-n/two-session/README.md');
+    const src = read('backlog-4263-sync2-n/two-session/compose.py');
+    const block = src.slice(src.indexOf("    files = {'precheck.sql'"), src.indexOf('    os.makedirs(outdir'));
+    const composed = [...block.matchAll(/'([\w.-]+\.(?:sql|tpl))':/g)].map((m) => m[1]).sort();
+    expect(Object.keys(table).sort()).toEqual(composed);
+    expect([...SITES['backlog-4263-sync2-n/two-session'].compose_outputs].sort()).toEqual(composed.filter((f) => f.endsWith('.sql')));
+    expect(composed.length).toBe(11);
+  });
 
   it('the shared cases (call_shape_cases.json) get the same verdict here as in call_shape.py selftest', () => {
     const cases: { name: string; kind: string; text: string; ok: boolean }[] = JSON.parse(read('backlog-4263-sync2-t/call_shape_cases.json'));

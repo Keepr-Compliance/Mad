@@ -124,7 +124,6 @@ finish() {
   wait 2>/dev/null
   [ "$INTERRUPTED" = 1 ] && { echo "interrupted: waiting 8 s for the sessions before the trap's first call"; sleep 8; }
   restore || rc=1
-  echo "select extensions.pg_stat_statements_reset();" > "$tmp/reset.sql"
   "$K" "$tmp/reset.sql" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed" >&2
   rm -rf "$tmp"
   [ "$CLEANUP" = 1 ] && { echo "cleanup done (exit ${rc})"; exit $rc; }
