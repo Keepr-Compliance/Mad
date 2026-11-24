@@ -1,5 +1,7 @@
 /*p_hold:__RUN__*/
--- session A: the hold marker above is FIRST in the call (pg_stat_activity.query keeps the first 1 kB only).
+-- The holding statement (the DO below) starts with the marker: a transport that submits statement by statement
+-- shows only the current statement in pg_stat_activity.query. hold-marker.sql, first in the call, serves one that
+-- submits the whole call as one text (the activity view keeps its first 1 kB).
 -- c6g_skip A: takes the owner's settings row FOR UPDATE (what cloud_claim_install does), holds 4 s, RAISE.
 DO $a$ DECLARE t0 timestamptz := clock_timestamp(); th timestamptz; BEGIN
   PERFORM set_config('lock_timeout', '3s', true);

@@ -1,2 +1,3 @@
--- session 2 answer: the function's result and the database clock after the gate and after the call.
-SELECT current_setting('p4263.r')::jsonb AS r, current_setting('p4263.t_start') AS t_start, clock_timestamp() AS t_end;
+-- session 2 answer (one tagged json): the function's result and the database clock after the gate and after the call.
+SELECT json_build_object('tag', 'session', 'r', current_setting('p4263.r')::jsonb, 't_start', current_setting('p4263.t_start'),
+                         't_end', clock_timestamp()) AS a;

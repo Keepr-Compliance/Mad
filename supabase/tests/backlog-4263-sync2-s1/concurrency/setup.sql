@@ -46,5 +46,5 @@ BEGIN
    WHERE user_id = A;
 END
 $s1cc$;
-SELECT (SELECT id FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid ORDER BY id LIMIT 1) AS blob,
-       (SELECT one_computer FROM public.cloud_release_switches WHERE id) AS one_computer;
+SELECT json_build_object('tag', 'setup', 'blob', (SELECT id FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid ORDER BY id LIMIT 1),
+       'one_computer', (SELECT one_computer FROM public.cloud_release_switches WHERE id)) AS a;

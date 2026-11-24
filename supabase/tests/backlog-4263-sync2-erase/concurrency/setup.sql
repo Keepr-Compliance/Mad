@@ -22,5 +22,5 @@ BEGIN
     FROM (SELECT gen_random_uuid() AS g) s;
 END
 $s$;
-SELECT (SELECT id FROM public.cloud_blobs WHERE owner_user_id = '__U__') AS x,
-       (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__U__' AND source_install_id = '__I1__') AS d1;
+SELECT json_build_object('tag', 'setup', 'x', (SELECT id FROM public.cloud_blobs WHERE owner_user_id = '__U__'),
+       'd1', (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__U__' AND source_install_id = '__I1__')) AS a;
