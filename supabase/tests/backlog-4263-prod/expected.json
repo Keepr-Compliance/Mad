@@ -60,6 +60,10 @@
     "20261123140000": {
       "file": "supabase/migrations/20261123140000_backlog_4263_mcp_message_tools.sql",
       "file_md5": "0ca12e1e52d34001fe6ef644f17828d0"
+    },
+    "20261123170000": {
+      "file": "supabase/migrations/20261123170000_backlog_4266_connect_notice_with_exchange.sql",
+      "file_md5": "c925e47500409cd959994d550afd75d3"
     }
   },
   "labels": {
@@ -389,6 +393,28 @@
       "mcp_restore_todo(text,bytea,text,text,text)",
       "mcp_update_todo(text,bytea,text,text,jsonb,text)",
       "mcp_write_access(text,bytea,text)"
+    ],
+    "20261123170000": [
+      "mcp_add_todo(text,bytea,text,text,text,text,text,text)",
+      "mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)",
+      "mcp_check_access(text,bytea,text)",
+      "mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+      "mcp_find_people(text,bytea,text,text,text,text,text,text,text)",
+      "mcp_get_deal(text,bytea,text,text)",
+      "mcp_get_deal_checklists(text,bytea,text,text,boolean,text)",
+      "mcp_get_message(text,bytea,text,text,integer)",
+      "mcp_get_status(text,bytea,text)",
+      "mcp_list_all_deals(text,bytea,text,text,text,text,text)",
+      "mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text)",
+      "mcp_list_deals(text,bytea,text,text,text,integer,text)",
+      "mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text)",
+      "mcp_message_access(text,bytea,text)",
+      "mcp_refresh(text,bytea,text,text,bytea,bytea)",
+      "mcp_register_client(text,text,text,text[],bytea)",
+      "mcp_remove_todo(text,bytea,text,text,text)",
+      "mcp_restore_todo(text,bytea,text,text,text)",
+      "mcp_update_todo(text,bytea,text,text,jsonb,text)",
+      "mcp_write_access(text,bytea,text)"
     ]
   },
   "authenticated_callable_mcp_by_stage": {
@@ -513,6 +539,15 @@
       "mcp_list_my_connections()"
     ],
     "20261123140000": [
+      "mcp_authorize_approve(text,bytea,text,bytea)",
+      "mcp_authorize_deny(text,bytea,text)",
+      "mcp_authorize_view(text,bytea)",
+      "mcp_disconnect(uuid)",
+      "mcp_disconnect_all_mine()",
+      "mcp_list_my_connections()",
+      "mcp_list_my_message_reads(text,integer)"
+    ],
+    "20261123170000": [
       "mcp_authorize_approve(text,bytea,text,bytea)",
       "mcp_authorize_deny(text,bytea,text)",
       "mcp_authorize_view(text,bytea)",
@@ -19086,6 +19121,129 @@
         }
       }
     },
+    "20261123170000": {
+      "file": "postcheck-20261123170000.sql",
+      "counts": {
+        "functions": 1,
+        "functions_absent": 0,
+        "tables_or_sequences": 0,
+        "pre_lane_tables": 0,
+        "columns_added": 0,
+        "constraints": 0,
+        "indexes": 0,
+        "cron_jobs": 0,
+        "ledger_rows": 1,
+        "must_hold": 20,
+        "report_only": 1
+      },
+      "pins": {
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) exists": {
+          "label": "MUST HOLD",
+          "kind": "function exists",
+          "want": "true"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5": {
+          "label": "MUST HOLD",
+          "kind": "function md5",
+          "want": "cc2810ee59467829f60d2a9e61455b6c"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) owner": {
+          "label": "MUST HOLD",
+          "kind": "function owner",
+          "want": "postgres"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) security_definer": {
+          "label": "MUST HOLD",
+          "kind": "function security_definer",
+          "want": "true"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) volatility": {
+          "label": "MUST HOLD",
+          "kind": "function volatility",
+          "want": "v"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) language": {
+          "label": "MUST HOLD",
+          "kind": "function language",
+          "want": "plpgsql"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) config": {
+          "label": "MUST HOLD",
+          "kind": "function config",
+          "want": "search_path=\"\""
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) returns": {
+          "label": "MUST HOLD",
+          "kind": "function returns",
+          "want": "jsonb"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) strict": {
+          "label": "MUST HOLD",
+          "kind": "function strict",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) leakproof": {
+          "label": "MUST HOLD",
+          "kind": "function leakproof",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) parallel": {
+          "label": "MUST HOLD",
+          "kind": "function parallel",
+          "want": "u"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute PUBLIC": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute anon": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "true"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute authenticated": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute service_role": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute mcp_reader": {
+          "label": "MUST HOLD",
+          "kind": "function execute api role",
+          "want": "false"
+        },
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) execute other roles": {
+          "label": "REPORT ONLY",
+          "kind": "grants to other roles",
+          "want": ""
+        },
+        "ledger row 20261123170000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
+        "anon-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "anon-callable list",
+          "want": "mcp_add_todo(text,bytea,text,text,text,text,text,text), mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea), mcp_check_access(text,bytea,text), mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea), mcp_find_people(text,bytea,text,text,text,text,text,text,text), mcp_get_deal(text,bytea,text,text), mcp_get_deal_checklists(text,bytea,text,text,boolean,text), mcp_get_message(text,bytea,text,text,integer), mcp_get_status(text,bytea,text), mcp_list_all_deals(text,bytea,text,text,text,text,text), mcp_list_deal_messages(text,bytea,text,text,text,text,integer,text), mcp_list_deals(text,bytea,text,text,text,integer,text), mcp_list_todos(text,bytea,text,text,text,text,text,boolean,boolean,text), mcp_message_access(text,bytea,text), mcp_refresh(text,bytea,text,text,bytea,bytea), mcp_register_client(text,text,text,text[],bytea), mcp_remove_todo(text,bytea,text,text,text), mcp_restore_todo(text,bytea,text,text,text), mcp_update_todo(text,bytea,text,text,jsonb,text), mcp_write_access(text,bytea,text)"
+        },
+        "authenticated-callable mcp_ functions": {
+          "label": "MUST HOLD",
+          "kind": "authenticated-callable list",
+          "want": "mcp_authorize_approve(text,bytea,text,bytea), mcp_authorize_deny(text,bytea,text), mcp_authorize_view(text,bytea), mcp_disconnect(uuid), mcp_disconnect_all_mine(), mcp_list_my_connections(), mcp_list_my_message_reads(text,integer)"
+        },
+        "ai_app_/_mcp_/_cloud_ functions executable by anon or authenticated": {
+          "label": "MUST HOLD",
+          "kind": "internal-prefix sweep",
+          "want": ""
+        }
+      }
+    },
     "final-249": {
       "file": "postcheck-final-249.sql",
       "counts": {
@@ -19097,8 +19255,8 @@
         "constraints": 46,
         "indexes": 15,
         "cron_jobs": 4,
-        "ledger_rows": 15,
-        "must_hold": 1710,
+        "ledger_rows": 16,
+        "must_hold": 1711,
         "report_only": 140
       },
       "pins": {
@@ -23445,7 +23603,7 @@
         "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5": {
           "label": "MUST HOLD",
           "kind": "function md5",
-          "want": "9a33bff2db31288bd77a57489558a65b"
+          "want": "cc2810ee59467829f60d2a9e61455b6c"
         },
         "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) owner": {
           "label": "MUST HOLD",
@@ -28337,6 +28495,11 @@
           "kind": "ledger row",
           "want": "true"
         },
+        "ledger row 20261123170000": {
+          "label": "MUST HOLD",
+          "kind": "ledger row",
+          "want": "true"
+        },
         "anon-callable mcp_ functions": {
           "label": "MUST HOLD",
           "kind": "anon-callable list",
@@ -28419,6 +28582,12 @@
         "anon-callable mcp_ functions"
       ],
       "20261123140000": [
+        "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "function _mcp_r_list_all_deals(text,date,date,uuid) md5",
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions",
@@ -28572,6 +28741,23 @@
         "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "function cloud_todo_push(uuid,uuid,text,jsonb) md5",
+        "function cloud_upsert_deal(uuid,jsonb) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "function set_my_cloud_autosave(uuid,boolean,integer) exists",
+        "function cloud_upsert_parties(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_checklists(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb) exists",
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_mark_deal_synced(uuid,uuid,uuid) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function _mcp_r_list_deals(text,text,integer,timestamp with time zone,uuid) md5",
+        "function _mcp_r_deal_checklists(uuid,boolean,uuid) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118120000": {
@@ -28614,6 +28800,12 @@
         "anon-callable mcp_ functions"
       ],
       "20261123140000": [
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
         "function cloud_list_install_rows(uuid,uuid,text,uuid,integer) md5",
         "anon-callable mcp_ functions",
@@ -28682,6 +28874,14 @@
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "function mcp_refresh(text,bytea,text,text,bytea,bytea) md5",
+        "function mcp_authorize_view(text,bytea) md5",
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118140000": {
@@ -28715,10 +28915,19 @@
       "20261123140000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118150000": {
       "20261123140000": [
+        "constraint mcp_call_log.mcp_call_log_tool_check",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "constraint mcp_call_log.mcp_call_log_tool_check",
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
@@ -28728,10 +28937,18 @@
       "20261123140000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118170000": {
       "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ]
@@ -28740,10 +28957,19 @@
       "20261123140000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261118190000": {
       "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ]
@@ -28762,10 +28988,22 @@
         "function cloud_register_blob(uuid,uuid,text,bigint,text) md5",
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "function cloud_upsert_messages(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_upsert_files(uuid,uuid,uuid,jsonb) md5",
+        "function cloud_tombstone(uuid,uuid,text,uuid[]) md5",
+        "function cloud_register_blob(uuid,uuid,text,bigint,text) md5",
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261123110000": {
       "20261123140000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
       ]
@@ -28774,15 +29012,24 @@
       "20261123140000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
     "20261123130000": {
       "20261123140000": [
         "anon-callable mcp_ functions",
         "authenticated-callable mcp_ functions"
+      ],
+      "20261123170000": [
+        "anon-callable mcp_ functions",
+        "authenticated-callable mcp_ functions"
       ]
     },
-    "20261123140000": {}
+    "20261123140000": {},
+    "20261123170000": {}
   },
   "expected_at_final_state": {
     "20261118100000": [
@@ -28874,6 +29121,7 @@
       "authenticated-callable mcp_ functions"
     ],
     "20261118180000": [
+      "function mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea) md5",
       "anon-callable mcp_ functions",
       "authenticated-callable mcp_ functions"
     ],
@@ -28901,7 +29149,8 @@
       "anon-callable mcp_ functions",
       "authenticated-callable mcp_ functions"
     ],
-    "20261123140000": "ok"
+    "20261123140000": "ok",
+    "20261123170000": "ok"
   },
   "report_only_expected_on_keepr_test": {
     "final": [
@@ -28945,6 +29194,7 @@
     "20261123140000": [
       "table mcp_call_log grants service_role"
     ],
+    "20261123170000": [],
     "final-249": [
       "table cloud_autosave_settings grants service_role",
       "table cloud_deal_checklist_items grants service_role",
@@ -29121,6 +29371,10 @@
     "20261118130000 mcp_authorize_view(text,bytea)": {
       "md5": "a9b5a3de003671600e0033d7d952d804",
       "pre_check_of": "20261118170000"
+    },
+    "20261118180000 mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)": {
+      "md5": "9a33bff2db31288bd77a57489558a65b",
+      "pre_check_of": "20261123170000"
     },
     "20261123100000 cloud_upsert_messages(uuid,uuid,uuid,jsonb)": {
       "md5": "a71abe9743d2f9b6557c261ec09959a9",

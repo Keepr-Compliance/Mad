@@ -1,0 +1,149 @@
+{
+  "migration": "supabase/migrations/20261123170000_backlog_4266_connect_notice_with_exchange.sql",
+  "migration_md5": "c925e47500409cd959994d550afd75d3",
+  "exchange": "public.mcp_exchange_code(text,bytea,text,text,text,text,bytea,bytea)",
+  "exchange_md5_before": "9a33bff2db31288bd77a57489558a65b",
+  "exchange_md5_after": "cc2810ee59467829f60d2a9e61455b6c",
+  "controls": [
+    "c_notice",
+    "c_none",
+    "c_fail_check",
+    "c_fail_deadlock",
+    "c_fail_lock",
+    "c_zero_row",
+    "c_catalogue",
+    "c_reruns"
+  ],
+  "mutants": {
+    "M01_swallow_restored": {
+      "want": "red",
+      "primary": [
+        "c_fail_check",
+        "c_fail_deadlock",
+        "c_fail_lock",
+        "c_zero_row"
+      ]
+    },
+    "M02_warning_then_continue": {
+      "want": "red",
+      "primary": [
+        "c_fail_check",
+        "c_fail_deadlock",
+        "c_zero_row"
+      ]
+    },
+    "M03_reraised_as_mc001": {
+      "want": "red",
+      "primary": [
+        "c_fail_check",
+        "c_fail_deadlock",
+        "c_zero_row"
+      ]
+    },
+    "M04_no_row_count_check": {
+      "want": "red",
+      "primary": [
+        "c_zero_row"
+      ]
+    },
+    "M05_token_fail_answer": {
+      "want": "red",
+      "primary": [
+        "c_fail_check",
+        "c_fail_deadlock",
+        "c_zero_row"
+      ]
+    },
+    "M06_handler_narrowed": {
+      "want": "red",
+      "primary": [
+        "c_fail_check"
+      ]
+    },
+    "M07_count_only_above_one": {
+      "want": "red",
+      "primary": [
+        "c_zero_row"
+      ]
+    },
+    "M08_insert_twice": {
+      "want": "red",
+      "primary": [
+        "c_notice"
+      ]
+    },
+    "M09_no_insert": {
+      "want": "red",
+      "primary": [
+        "c_notice"
+      ]
+    },
+    "M10_replaced_always_false": {
+      "want": "red",
+      "primary": [
+        "c_notice"
+      ]
+    },
+    "D01_granted_authenticated": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D02_granted_public": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D03_anon_revoked": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D04_security_invoker": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D05_search_path_public": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D06_notices_force_rls": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D07_notices_trigger": {
+      "want": "red",
+      "primary": [
+        "c_catalogue"
+      ]
+    },
+    "D08_old_precheck_widened": {
+      "want": "red",
+      "primary": [
+        "c_reruns"
+      ]
+    },
+    "N01_noop_probe": {
+      "want": "not_applied",
+      "primary": []
+    }
+  },
+  "apply_md5": "a35a1624e483c8e6245f4be42755cffa",
+  "rollback_md5": "5f9d5fb7ed527b79a00ee62656343b6d",
+  "files": {
+    "apply-20261123170000.sql": "a35a1624e483c8e6245f4be42755cffa",
+    "rollback-20261123170000.sql": "5f9d5fb7ed527b79a00ee62656343b6d",
+    "harness-4266.sql": "044e59bfc03e6d5e00363bf44c40215c",
+    "harness-4266-structure.sql": "7e4dccbd029ce25f95b8914a5a3cc4a9",
+    "harness-4266-fixtures.sql": "fad7d8e087c55c54763752ca3654608c"
+  }
+}

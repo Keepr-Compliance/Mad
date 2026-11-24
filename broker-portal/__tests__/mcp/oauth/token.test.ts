@@ -427,3 +427,59 @@ describe('H16b: logging and the route-level catch', () => {
     }
   });
 });
+
+// BACKLOG-4266: mcp_exchange_code raises (MC004 when the connect notice is not written, or the INSERT's own error) and
+// the whole call rolls back. PostgREST answers a raised exception with {code: <SQLSTATE>, message, details, hint};
+// postgrest-js returns it as `error`. The route answers 503 and sends Sentry ONE static message tagged with the route,
+// the grant and the database code only.
+describe('BACKLOG-4266: a database error on the token call → 503 and one Sentry message', () => {
+  const raised = (code: string) => ({
+    data: null,
+    error: { code, message: `mcp connect notice not written ${PLANTED_PLAIN}`, details: PLANTED_PLAIN, hint: null },
+  });
+  const SECRETS = [CODE, VERIFIER, CLIENT_ID, REFRESH, PLANTED_PLAIN, PORTAL_SECRET, REDIRECT_URI];
+
+  it.each([
+    ['MC004', 'authorization_code', CODE_GRANT],
+    ['23514', 'authorization_code', CODE_GRANT],
+    ['40P01', 'authorization_code', CODE_GRANT],
+    ['MC004', 'refresh_token', REFRESH_GRANT],
+  ] as const)('%s on %s → 503 temporarily_unavailable, one Sentry message with route, grant and code only', async (code, grant, params) => {
+    mockRpc.mockResolvedValue(raised(code));
+    const res = await post(form(params));
+    await expectError(res, 503, 'temporarily_unavailable');
+    expect(res.headers.get('retry-after')).toBe('2');
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+    expect(mockCapture.mock.calls[0]).toEqual([
+      'mcp-oauth token database call failed',
+      { level: 'error', tags: { route: 'token', grant, db_code: code } },
+    ]);
+    const sent = JSON.stringify(mockCapture.mock.calls);
+    for (const s of SECRETS) expect(sent).not.toContain(s);
+    expect(sent).not.toMatch(/kpr_(at|rt|ac)_/);
+  });
+
+  it('a malformed answer (transport) also sends the one message, db_code none', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    await expectError(await post(form(CODE_GRANT)), 503, 'temporarily_unavailable');
+    expect(mockCapture.mock.calls).toEqual([['mcp-oauth token database call failed', { level: 'error', tags: { route: 'token', grant: 'authorization_code', db_code: 'none' } }]]);
+  });
+
+  it('an issued token and a refusal send nothing to Sentry (a refusal as invalid_request is a 400, not this path)', async () => {
+    await post(form(CODE_GRANT));
+    mockRpc.mockResolvedValue({ data: refusal('invalid_request'), error: null });
+    await expectError(await post(form(CODE_GRANT)), 400, 'invalid_request');
+    mockRpc.mockResolvedValue({ data: refusal('invalid_grant'), error: null });
+    await expectError(await post(form(CODE_GRANT)), 400, 'invalid_grant');
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('Sentry throwing does not change the answer', async () => {
+    mockCapture.mockImplementationOnce(() => {
+      throw new Error('sentry down');
+    });
+    mockRpc.mockResolvedValue(raised('MC004'));
+    await expectError(await post(form(CODE_GRANT)), 503, 'temporarily_unavailable');
+  });
+});
