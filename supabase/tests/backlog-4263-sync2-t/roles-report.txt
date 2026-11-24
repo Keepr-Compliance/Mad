@@ -389,8 +389,8 @@ input 9c236b7e899d58f5de8127d2e15782d1 supabase/tests/backlog-4263-sync2-erase/c
 input b0e5dde2f915ab93ab99c37327f9fb83 supabase/tests/backlog-4263-sync2-erase/concurrency/stats-reset.sql
 input 9e15c5e3d55997e1197859276eb39926 supabase/tests/backlog-4263-sync2-erase/concurrency/wait-a.sql
 input 738326f2ce367ac964d0691cf69a59fb supabase/tests/backlog-4263-sync2-erase/concurrency/wait-b.sql
-input 2e6731d57db8e7940d45ed4ebd036eec supabase/tests/backlog-4263-sync2-erase/lib/helpers.sql
-input e24c8b837e55fac3fe5385b2a3a6519b supabase/tests/backlog-4263-sync2-erase/lib/probes.sql
+input 9ad19323b5f1dda33b89cd678ea99879 supabase/tests/backlog-4263-sync2-erase/lib/helpers.sql
+input b98fe00c4ba8ed7e1bd0d2d7fa8fe44d supabase/tests/backlog-4263-sync2-erase/lib/probes.sql
 input 2998304d0addc762f0d4bf1dbce6d192 supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql
 input 9bef89c9afd00393f9bf8e4f45dedba1 supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql
 input 4d3f040f20d5af4d75d84ebc0cd234bd supabase/tests/backlog-4263-sync2-n/apply-20261123150000.sql

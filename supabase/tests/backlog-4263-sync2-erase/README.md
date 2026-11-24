@@ -1,9 +1,80 @@
 # BACKLOG-4263 sync plan P3 harness: file-byte erase job (E1 `20261123110000`, E3 `20261123120000`)
 
-Venue: the test project through `~/.claude/bin/kt-sql` (it refuses the production ref); the two-session scripts take
-the transport as a parameter (below). **Nothing here has been run
-yet.** Runs are arranged by the main session one at a time, each under a before-note to the coordinator. Cap: 3 full
-runs per batch; `harness.py` resets `pg_stat_statements` after each call.
+Venue: the test project through `~/.claude/bin/kt-sql` (it refuses the production ref); `harness.py run --transport=`
+and the two-session scripts take another transport as a parameter (below). Runs are arranged by the main session one at
+a time, each under a before-note to the coordinator. Cap: 3 full runs per batch; `harness.py` resets
+`pg_stat_statements` after each call. Every call begins with the guard (it refuses any database that is not the test
+database: more than 100 tracker rows, or the test database's marker user absent).
+
+## Staged procedure (every stage, in this order; the next stage only after the previous one is OK)
+
+0. **Dry run first, required before any stage is requested on the test project; never cited as a result for it.** On
+   a self-hosted dry-run database, through the dry-run transport wrapper (kept outside the repository), with that
+   database's marker: `harness.py run --stage=<stage> --transport=<wrapper> --marker=<its marker md5>`. Each stage
+   runs three times there: plain; after the standing foreign-rows prefix without log rows; and after the prefix with
+   log rows (it carries run and lease rows). Expected in all three: the stage's result below, with `history_cleared`
+   0/0, 0/0 and at least 1/1. The prefix's watch prints `FR4263_TOUCHED` lines for foreign rows the call changes.
+   Designed touches: the clearing DELETE on run and lease rows; the claim fencing unreferenced old blobs of every
+   owner (the job's purpose); rows touched inside a mutant's subtransaction. Any other touch is a finding.
+1. `--stage=fixtures`: the setup alone (history cleared, both rollbacks, E1, helpers, probes) and a timing probe (one
+   dry claim). Last line `fixtures: OK`. It prints `room` (`ok`, or the PRECONDITION the listing probes would give).
+2. `--stage=structure`: each mechanism once, every block byte-identical to the full call's (`check` asserts it):
+   `p_invoke_url`, `p_grants`, `p_rollback_refuses_history`, `p_rollback`, one function-body mutant
+   (`Invoke_without_url_check`), one catalogue mutant (`Invoke_granted_service_role`) and the rollback-text mutant
+   (`RB1_history_check_dropped`). Last line `controls=4 mutants=3 problems=0`.
+3. `--stage=full` (or `controls` then `mutants`): last line `controls=18 mutants=27 problems=0`.
+4. `--stage=history_mutant`: the call-level mutant (below). Last line `CAUGHT  M_History_not_cleared (call level) -> ...`.
+
+Read a saved output with `harness.py report <file> --stage=<stage>`; it builds the mutants first. `report` on an empty
+expectation table refuses (exit 4) instead of reading every mutant as want=red.
+
+## Run history (cloud_blob_erase_runs, cloud_blob_erase_leases)
+
+The E1 rollback refuses while `cloud_blob_erase_runs` holds rows, and every call runs it. So each call (after the
+guard and the timeouts) deletes **every** run and lease row, records the counts as `history_cleared` (report only,
+never asserted), then proceeds. The final RAISE undoes the deletion with everything else. `p_rollback_refuses_history`
+then proves the refusal still fires: with one marked run row the E1 rollback must refuse with its own text, and once
+that row is gone (deleted by its mark) it must run.
+
+The call-level mutant `--stage=history_mutant` leaves the clearing out and writes one marked run row first. The
+embedded E1 rollback must then refuse and the call give no result: the reporter reads that refusal as CAUGHT, and a
+result (or any other error) as MISSED.
+
+**Before a call on a database that HOLDS run history**, save it to a local file, so that a call that committed (HTTP
+200) can be repaired. Neither table holds a secret, so every column is saved.
+
+```sql
+SELECT jsonb_build_object(
+  'runs',   (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.started_at, r.id), '[]') FROM (SELECT id, started_at, ended_at, mode, outcome, counts FROM public.cloud_blob_erase_runs) r),
+  'leases', (SELECT coalesce(jsonb_agg(to_jsonb(l) ORDER BY l.run_id, l.blob_id), '[]') FROM (SELECT blob_id, run_id, leased_until FROM public.cloud_blob_erase_leases) l)) AS saved;
+```
+
+Repair, only after a call answered HTTP 200 (`<saved>` = the saved JSON):
+
+```sql
+INSERT INTO public.cloud_blob_erase_runs (id, started_at, ended_at, mode, outcome, counts)
+SELECT r.id, r.started_at, r.ended_at, r.mode, r.outcome, r.counts
+  FROM jsonb_to_recordset('<saved>'::jsonb -> 'runs') AS r(id uuid, started_at timestamptz, ended_at timestamptz, mode text, outcome text, counts jsonb)
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.cloud_blob_erase_leases (blob_id, run_id, leased_until)
+SELECT l.blob_id, l.run_id, l.leased_until
+  FROM jsonb_to_recordset('<saved>'::jsonb -> 'leases') AS l(blob_id uuid, run_id uuid, leased_until timestamptz)
+ON CONFLICT (blob_id) DO NOTHING;
+```
+
+Locks: the clearing takes row locks on every run and lease row. The embedded E1 rollback's DROP takes ACCESS EXCLUSIVE
+on both tables until the call ends. A scheduled job tick during the call waits for the call's length, up to its own
+timeouts.
+
+## STOP RULES
+
+- Stop on any call that does not end `kt-sql: HTTP 400`. **HTTP 200 means the call committed:** stop, repair the run
+  history from the saved file (above), report it.
+- Stop on SQLSTATE `57014` (statement timeout) or `55P03` (lock timeout) in any output. On the dry-run database a
+  `40P01` or `55P03` is a scheduling collision with another session: re-run once and say so.
+- Stop when a stage is NOT OK; the next stage is not sent. No re-send of a stage on the test project without the
+  coordinator's go.
+- Do not start a call between minute 15 and minute 30 of the hour (E3's job fires at minute 23).
 
 Prerequisite on the test project: S1 `20261123100000` applied (E1 refuses to apply without
 `cloud_autosave_settings.active_install_id`, `active_since` and `cloud_release_switches.one_computer`).
@@ -17,10 +88,12 @@ rolls back, so nothing changes (inferred, not run). Then run `../backlog-4263-pr
 | Script | What it does | Commits? |
 |---|---|---|
 | `harness.py check` | offline: every mutant fragment matches its function exactly once; `apply-20261123110000.sql` matches E1; structure of helpers, probes, the composed call and every literal text (closed strings and dollar quotes, balanced parentheses, pg_temp argument counts, no constant in GROUP/ORDER BY) | no database call |
-| `harness.py selftest` | offline: the report path on canned outputs in kt-sql's shape (CRASH, PRECONDITION, NOT APPLIED IN DB, a missed mutant and a FAIL each exit 1; no result line exits 2; zero tests exits 3) | no database call |
+| `harness.py selftest [--control-green-ok]` | offline: the report path on canned outputs in kt-sql's shape (CRASH, PRECONDITION, NOT APPLIED IN DB, a missed mutant and a FAIL each exit 1; no result line exits 2; zero tests exits 3; an empty expectation table exits 4; the history mutant's refusal, a result and another error; the structure call's block set). `--control-green-ok` asserts a missed mutant is ok and must make it fail | no database call |
+| `harness.py report <file> [--stage=<stage>]` | offline: reads a saved output (builds the mutants first) | no database call |
+| `harness.py run --stage=fixtures` / `structure` / `history_mutant` | the stages above | no: each call ends in RAISE |
 | `harness.py write` | offline: writes `apply-20261123110000.sql` from E1 (checked also by `broker-portal/__tests__/migrations/apply-wrappers-4263.test.ts`) | no database call |
-| `harness.py run --controls` | one call: E3 and E1 rollback files, E1 from the working tree, helpers, 17 controls each in a subtransaction undone at its end, then RAISE | no: the call ends in RAISE |
-| `harness.py run --mutants` | the same setup, then 26 mutants (exact-string replace on one E1 function, checked by `md5(prosrc)` in the database before its probe) | no |
+| `harness.py run --controls` | one call: guard, run history cleared, E3 and E1 rollback files, E1 from the working tree, helpers, 18 controls each in a subtransaction undone at its end, then RAISE | no: the call ends in RAISE |
+| `harness.py run --mutants` | the same setup, then 27 mutants (exact-string replace on one E1 function, checked by `md5(prosrc)` in the database before its probe) | no |
 | `harness.py run --controls --mutants` | both in one call | no |
 | `concurrency/run.sh attach <fixture-user-id> [single_statement_fence]` | P3 condition 1, attach versus orphan sweep, two sessions | **yes**: 8 fixture rows plus session A's attach row (9), deleted by the trap, residue checked |
 | `concurrency/run.sh c6g_skip <fixture-user-id> [no_skip_locked]` | C-6g (ii): a claim holding the settings row makes the batch skip that owner | **yes**: 8 fixture rows |
@@ -130,9 +203,9 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 ## Load on the shared test database
 
 - `lock_timeout = 3s` on every harness statement; the concurrency scripts: 3 s on every call that writes and in session A, 8 s in session B; holds 4 s.
-- Every `harness.py` call runs both rollback files and then E1, so once E1 is applied on the test project the call
-  drops and recreates `cloud_blob_erase_runs` and `cloud_blob_erase_leases` and holds ACCESS EXCLUSIVE on them for
-  the whole call (rolled back at its end). No other existing table is locked. Run the harness before E1 is applied,
+- Every `harness.py` call deletes every run and lease row first (row locks), then runs both rollback files and then
+  E1, so once E1 is applied on the test project the call drops and recreates `cloud_blob_erase_runs` and
+  `cloud_blob_erase_leases` and holds ACCESS EXCLUSIVE on them for the whole call (rolled back at its end). No other existing table is locked. Run the harness before E1 is applied,
   or with E3's cron job not due (it fires at minute 23): an erase run that starts during a harness call waits up to
   its own timeouts on those two tables.
 - A control that runs the live claim takes row locks (`FOR UPDATE SKIP LOCKED`) on any eligible row in the
@@ -161,15 +234,18 @@ must see the same rows). Each session is one DO block that ends in RAISE, except
 | `p_dry_run` | the schedule is first applied in dry_run: a dry claim and scrub change nothing but add one run row | `Dry_claim_does_live_work`, `Dry_scrub_does_live_work` |
 | `p_e3` | E3 refuses without the URL secret; schedules minute 23 calling invoke | — |
 | `p_rollback` | both rollback files remove every object | — |
+| `p_rollback_refuses_history` | the E1 rollback refuses while a run row exists (its own text; the count is not asserted), and runs once that row is gone | `RB1_history_check_dropped` (the rollback text handed to it, without its run-rows check; proven by the text's md5 in the database) |
+| (call level) | the call clears the run history before the embedded E1 rollback | `M_History_not_cleared` (`--stage=history_mutant`) |
 
 ## Expected results (the controls must all PASS before the mutants are run)
 
-- `harness.py run --controls`: **17 PASS**, problems=0.
-- `harness.py run --mutants`: **26 mutants: 25 CAUGHT, 1 EQUIV** (`C6f_install_filter_select_only`: the UPDATE re-check
+- `harness.py run --controls`: **18 PASS**, problems=0.
+- `harness.py run --mutants`: **27 mutants: 26 CAUGHT, 1 EQUIV** (`C6f_install_filter_select_only`: the UPDATE re-check
   stops the wrong scrub, so the fixture cannot show it; equivalent for safety only), problems=0.
 - Preconditions on the shared database: fewer than 900 unreferenced blobs (`p_c6c` returns PRECONDITION otherwise);
-  fewer than 1000 fenced blobs and fewer than 1000 rowless objects older than 3 days (`p_c6a` and `p_c6e` would
-  otherwise FAIL with "not listed", because their fixture rows sort after real ones; not checked inside the probes).
+  fewer than 900 unreferenced blobs and fewer than 900 rowless objects older than 24 h for `p_c6a`, `p_c6e` and `p_c6f`
+  (`pg_temp.room()`: they return PRECONDITION instead of a result, because their fixture rows would sort after real
+  ones). `--stage=fixtures` prints `room`.
 
 Counting: a mutant is caught only when its probe returns `FAIL`. `CRASH` (the mutated function or the probe raised),
 `PRECONDITION` and `NOT APPLIED IN DB` are printed as such and make the run not-ok.
