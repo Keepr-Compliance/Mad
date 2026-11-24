@@ -307,7 +307,7 @@ for (case, mut), shape in [(c, s) for c in CASES for s in ('hosted', 'dry')]:
         check(f'gate {label}: the activity text shows the marker on both transports (whole call: first 1 kB; per statement: '
               f'{len(dry)} holding statement(s) start with it)', like(mark, hosted) and dry and all(s.startswith('/*' + mark) for s in dry))
     gates = [t for t in texts if "'%p_hold:' ||" in t]
-    gw = [re.sub(r'\s+', ' ', w) for g in gates for w in re.findall(r'WHERE(.*?)\)\s*LOOP', g, re.S)]
+    gw = [re.sub(r'\s+', ' ', w) for g in gates for w in re.findall(r'WHILE NOT EXISTS \(SELECT 1 FROM pg_catalog\.pg_stat_activity\s+WHERE(.*?)\)\s*LOOP', g, re.S)]
     check(f'gate {label}: the gate waits for ANOTHER backend that is SLEEPING with the marker (pid, PgSleep and marker in one WHERE)',
           len(gw) == 1 and 'pid <> pg_backend_pid()' in gw[0] and "wait_event = 'PgSleep'" in gw[0]
           and "query LIKE '%p_hold:' || '" + run_id + "' || '*/%'" in gw[0]
