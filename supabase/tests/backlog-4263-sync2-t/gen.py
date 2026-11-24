@@ -1157,6 +1157,12 @@ if __name__ == '__main__':
     if a and a[0] == 'selftest':
         sys.exit(selftest(green_ok=len(a) > 1 and a[1] == '--control-green-ok'))
     if a and a[0] == 'check':
+        import importlib.util as _ilu
+        _cs = _ilu.spec_from_file_location('call_shape4263', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+        call_shape = _ilu.module_from_spec(_cs); _cs.loader.exec_module(call_shape)
+        _shape_ok = call_shape.gen_check(os.path.dirname(os.path.abspath(__file__)), {'harness-t.sql': 'rolled_back', 'harness-t-controls.sql': 'rolled_back', 'harness-t-mutants.sql': 'rolled_back', 'harness-t-fixtures.sql': 'rolled_back', 'harness-t-structure.sql': 'rolled_back', 'apply-20261123140000.sql': 'commits', 'rollback-20261123140000.sql': 'commits'})
+        if not _shape_ok:
+            sys.exit(1)
         mutants(show=True)
         bad = arity_problems(HARNESS)
         for b in bad:

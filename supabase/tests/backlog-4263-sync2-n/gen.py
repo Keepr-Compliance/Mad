@@ -807,6 +807,12 @@ def main(argv):
         print(f'wrote {len(OUTS)} files; controls {len(CONTROLS)}, mutants {len(MUTS)} (negative {len(NEG_IDS)})')
         return 1 if pr else 0
     if cmd == 'check':
+        import importlib.util as _ilu
+        _cs = _ilu.spec_from_file_location('call_shape4263', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backlog-4263-sync2-t', 'call_shape.py'))
+        call_shape = _ilu.module_from_spec(_cs); _cs.loader.exec_module(call_shape)
+        _shape_ok = call_shape.gen_check(os.path.dirname(os.path.abspath(__file__)), {'harness-n.sql': 'rolled_back', 'harness-n-fixtures.sql': 'rolled_back', 'harness-n-structure.sql': 'rolled_back', 'apply-20261123150000.sql': 'commits', 'rollback-20261123150000.sql': 'commits'})
+        if not _shape_ok:
+            return 1
         all_mutants(show=True)
         stale = [p for p, text in OUTS.items() if not os.path.exists(p) or open(p, encoding='utf-8').read() != text]
         for p in stale:
