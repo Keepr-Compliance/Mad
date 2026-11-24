@@ -51,6 +51,9 @@ import { AI_APPS, CONSENT, M_A } from '@/lib/mcp/account/messages';
 import { CONNECTION_ID, CONNECTION_ID_2, EMAIL, clearMcpEnv, connectionRow, refused, setMcpEnv } from './fixtures';
 import { captureConsole } from '../oauth/fixtures';
 
+/** The page's props when the address has no query. */
+const NO_PARAMS = { searchParams: Promise.resolve({}) };
+
 let restoreEnv: () => void;
 beforeEach(() => {
   restoreEnv = setMcpEnv();
@@ -80,7 +83,7 @@ function listOk(rows: unknown[]) {
 }
 
 async function renderPage() {
-  return render(await AiAppsPage());
+  return render(await AiAppsPage(NO_PARAMS));
 }
 
 const rows = () => screen.queryAllByTestId('ai-app-row');
@@ -88,7 +91,7 @@ const rows = () => screen.queryAllByTestId('ai-app-row');
 describe('MCP off', () => {
   it('is notFound before any header read or database call', async () => {
     clearMcpEnv();
-    await expect(AiAppsPage()).rejects.toBeInstanceOf(NotFound);
+    await expect(AiAppsPage(NO_PARAMS)).rejects.toBeInstanceOf(NotFound);
     expect(mockRpc).not.toHaveBeenCalled();
     expect(mockGetUser).not.toHaveBeenCalled();
   });
@@ -104,7 +107,7 @@ describe('before the list call', () => {
 
   it('signed out → /login, no rpc', async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
-    await expect(AiAppsPage()).rejects.toMatchObject({ to: '/login' });
+    await expect(AiAppsPage(NO_PARAMS)).rejects.toMatchObject({ to: '/login' });
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });
@@ -260,7 +263,7 @@ describe('the list', () => {
 
   it('not_signed_in → /login', async () => {
     mockList.mockResolvedValue({ data: refused('not_signed_in'), error: null });
-    await expect(AiAppsPage()).rejects.toMatchObject({ to: '/login' });
+    await expect(AiAppsPage(NO_PARAMS)).rejects.toMatchObject({ to: '/login' });
   });
 });
 
@@ -285,7 +288,7 @@ describe('log lines', () => {
     const logs = captureConsole();
     try {
       mockList.mockResolvedValue({ data: refused('not_signed_in'), error: null });
-      await expect(AiAppsPage()).rejects.toMatchObject({ to: '/login' });
+      await expect(AiAppsPage(NO_PARAMS)).rejects.toMatchObject({ to: '/login' });
       expect(logs.lines()).toHaveLength(1);
       expect(logs.lines()[0]).toContain('"outcome":"list_not_signed_in"');
     } finally {

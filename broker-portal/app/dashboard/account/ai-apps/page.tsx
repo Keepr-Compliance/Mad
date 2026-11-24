@@ -38,7 +38,7 @@ function Shell({ email, children }: { email: string | null; children: React.Reac
   );
 }
 
-export default async function AiAppsPage(props?: { searchParams?: Promise<{ reads?: string | string[] }> }) {
+export default async function AiAppsPage({ searchParams }: { searchParams: Promise<{ reads?: string | string[] }> }) {
   if (!mcpEnabled()) notFound();
   const started = Date.now();
 
@@ -71,7 +71,7 @@ export default async function AiAppsPage(props?: { searchParams?: Promise<{ read
       </Shell>
     );
   }
-  const sp = (await props?.searchParams) ?? {};
+  const sp = (await searchParams) ?? {};
   const cursor = typeof sp.reads === 'string' ? sp.reads : null;
   const [access, reads] = await Promise.all([
     list.connections.length > 0 ? listMyConnectionAccess() : Promise.resolve(null),
