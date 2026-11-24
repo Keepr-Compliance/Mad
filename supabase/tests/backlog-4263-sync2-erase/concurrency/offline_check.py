@@ -233,7 +233,7 @@ def probe_checks(args):
     check('probe: one transaction proven -> the run goes on and prints the probe line', len(texts) > 3
           and 'probe: ok' in out and 'txn=one' in out and 'track_activity_query_size=' in out and 'bypassrls=' in out)
 def statements(text):
-    """Split a call into statements the way a client that submits statement by statement does (psql): at ';' outside
+    """Split a call into statements the way a client that submits statement by statement does: at ';' outside
     quotes, dollar quotes and comments; each statement's text starts after the previous ';' with leading whitespace
     removed, comments kept (observed on the dry-run database: '/*m*/ SELECT pg_sleep(3);' and, for a first statement,
     '/*m*/\n-- c\nDO $a$ ... $a$;')."""

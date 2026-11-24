@@ -232,12 +232,30 @@ def col(key, text):
     return True, a[key]
 
 
+def timing(f1, f2):
+    """One line of the measured times (database clock), for the record; never part of the verdict."""
+    a, _ = answer(f1, 'session')
+    b, _ = answer(f2, 'session')
+    if not a or not b:
+        return 'timing: unreadable'
+    t = {k: ts(v) for k, v in (('a0', a.get('t_start')), ('ah', a.get('t_hold')), ('ae', a.get('t_end')), ('b0', b.get('t_start')),
+                                ('be', b.get('t_end')))}
+    if None in t.values():
+        return 'timing: unreadable'
+    s = lambda x, y: f"{(t[y] - t[x]).total_seconds():.3f}"
+    return (f"timing: session 1 {s('a0', 'ae')} s (hold {s('ah', 'ae')} s); session 2 {s('b0', 'be')} s; "
+            f"overlap: session 2 started {s('b0', 'ae')} s before the hold ended; session 2 ended {s('ae', 'be')} s after it")
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == 'col':
         found, v = col(sys.argv[2], sys.stdin.read())
         if not found:
             sys.exit(1)
         print(v)
+        sys.exit(0)
+    if len(sys.argv) == 4 and sys.argv[1] == 'timing':
+        print(timing(sys.argv[2], sys.argv[3]))
         sys.exit(0)
     if len(sys.argv) == 4 and sys.argv[1] == 'applied':
         out = applied(sys.argv[2], sys.argv[3]).replace('\n', ' ')

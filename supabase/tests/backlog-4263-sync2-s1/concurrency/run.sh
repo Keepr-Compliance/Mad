@@ -256,5 +256,6 @@ guarded assert.filled.sql assert.sql
 $K "$tmp/assert.filled.sql" > "$tmp/state.out" 2>&1 || true
 echo "state:  $(cat "$tmp/state.out")"
 
+python3 -I "$here/verdict.py" timing "$tmp/first.out" "$tmp/second.out" || true
 VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MODE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" "$IA" "$IB" || true)"
 [ -n "$VERDICT" ] || VERDICT="ERROR: no verdict"

@@ -199,5 +199,6 @@ sleep 1
 ( $K "$tmp/b.sql" > "$tmp/b.out" 2>&1 || true ) & pb=$!
 wait $pa $pb
 echo "a: $(python3 -I "$here/verdict.py" summary "$tmp/a.out")"; echo "b: $(python3 -I "$here/verdict.py" summary "$tmp/b.out")"
+python3 -I "$here/verdict.py" timing "$CASE" "$tmp/a.out" "$tmp/b.out" || true
 VERDICT="$(python3 -I "$here/verdict.py" "$CASE" "$MUT" "$tmp/a.out" "$tmp/b.out" || true)"
 [ -n "$VERDICT" ] || VERDICT="INCONCLUSIVE: no verdict"

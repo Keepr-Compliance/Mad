@@ -230,6 +230,21 @@ def probe(r, need):
                   f"fk_columns={len(fk)}")
 
 
+def timing(case, fa, fb):
+    """One line of the measured times (database clock), for the record; never part of the verdict."""
+    a = answer(fa, 'attach_a') if case == 'attach' else marker(fa, 'P_A')
+    b = marker(fb, 'P_B')
+    if not a or not b:
+        return 'timing: unreadable'
+    t = {k: ts(v) for k, v in (('a0', a.get('t_start')), ('ah', a.get('t_hold') or a.get('t_start')), ('ae', a.get('t_end')),
+                                ('b0', b.get('t_start')), ('be', b.get('t_end')))}
+    if None in t.values():
+        return 'timing: unreadable'
+    s = lambda x, y: f"{(t[y] - t[x]).total_seconds():.3f}"
+    return (f"timing: session A {s('a0', 'ae')} s (hold {s('ah', 'ae')} s); session B {s('b0', 'be')} s; "
+            f"overlap: B started {s('b0', 'ae')} s before A's hold ended; B ended {s('ae', 'be')} s after it")
+
+
 def precheck(path, case):
     a = answer(path, 'probe')
     if a is None:
@@ -283,6 +298,9 @@ if __name__ == '__main__':
         out = applied(a[1], a[2]).replace('\n', ' ')
         print(out)
         sys.exit(0 if out.startswith('MUTATION APPLIED ') else 1)
+    if len(a) == 4 and a[0] == 'timing':
+        print(timing(a[1], a[2], a[3]))
+        sys.exit(0)
     if len(a) == 2 and a[0] == 'summary':
         print(safe(a[1]).replace('\n', ' '))
         sys.exit(0)

@@ -168,7 +168,7 @@ def enc(x, tag, shape):
         return json.dumps([{'a': rows[-1]}])
     lines = [{'line': 'SET'}, {'line': '{"sub" : "x", "role" : "authenticated"}'}, {'line': 'DO'}]
     lines += [{'line': json.dumps(r, separators=(', ', ' : '))} for r in rows]
-    return 'nas-sql-like stderr line\n' + json.dumps(lines) + '\nkt-sql: HTTP 200\n'
+    return 'transport stderr line\n' + json.dumps(lines) + '\nkt-sql: HTTP 200\n'
 
 
 bad = 0
