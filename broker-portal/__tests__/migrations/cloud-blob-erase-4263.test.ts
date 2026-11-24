@@ -6,6 +6,7 @@
  * mutants). This file pins the lines a later edit is most likely to drop or loosen.
  */
 
+import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -219,8 +220,36 @@ describe('BACKLOG-4263 cloud blob erase schedule (E3)', () => {
 });
 
 describe('BACKLOG-4263 cloud blob erase rollback files', () => {
-  it('E3 rollback unschedules the job', () => {
+  const RB1_RAW = read('supabase/tests/backlog-4263-sync2-erase/rollback-20261123110000.sql');
+  const RB3_RAW = read('supabase/tests/backlog-4263-sync2-erase/rollback-20261123120000.sql');
+  const firstStatement = (raw: string): string => statements(raw).split(';')[0];
+  const between = (raw: string, a: string, b: string): string => raw.slice(raw.indexOf(a), raw.indexOf(b, raw.indexOf(a) + a.length));
+  it('E3 rollback unschedules the job, then checks the job and ledger row are gone and nothing else changed', () => {
     expect(RB3).toContain("PERFORM cron.unschedule('cloud-blob-erase')");
+    expect(firstStatement(RB3_RAW)).toBe("SET LOCAL lock_timeout = '3s'");
+    const post = between(RB3_RAW, 'DO $postrb4263e3$', '$postrb4263e3$;');
+    for (const x of ["RAISE EXCEPTION 'ROLLBACK POST-CHECK 20261123120000 FAILED, nothing changed: %'", "'cron job cloud-blob-erase still present; '",
+      "'another cron job changed; '", "'a function of 20261123110000 changed; '", "'ledger row still present; '"]) expect(post).toContain(x);
+    expect(RB3_RAW.trimEnd().endsWith('$postrb4263e3$;')).toBe(true);
+  });
+  it('E1 rollback: lock_timeout first, refuses on the job, a drifted body or run history, and post-checks', () => {
+    expect(firstStatement(RB1_RAW)).toBe("SET LOCAL lock_timeout = '3s'");
+    const pre = between(RB1_RAW, 'DO $rb4263e1$', '$rb4263e1$;');
+    expect(pre).toContain('run rollback-20261123120000.sql first (cron job cloud-blob-erase exists)');
+    // the six bodies as E1 wrote them: md5(prosrc) of each function in the migration text
+    const fns = [...E1_RAW.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.(cloud_blob_erase_\w+)\(([^)]*)\)[\s\S]*?\bAS\s+(\$\w*\$)([\s\S]*?)\3/g)];
+    expect(fns).toHaveLength(6);
+    for (const m of fns) {
+      const sig = `'public.${m[1]}(${m[2].split(',').filter((a) => a.trim()).map((a) => a.trim().replace(/\s+DEFAULT\s+.*$/i, '').split(/\s+/).slice(1).join(' ')).join(',')})'`;
+      expect(pre).toContain(`(${sig}, '${createHash('md5').update(m[4], 'utf8').digest('hex')}')`);
+    }
+    expect(pre).toContain('is not at the body 20261123110000 wrote (md5 %)');
+    expect(pre).toContain("holds % rows (the erase job''s run history); keep a copy, then delete them first");
+    const post = between(RB1_RAW, 'DO $postrb4263e1$', '$postrb4263e1$;');
+    for (const x of ["RAISE EXCEPTION 'ROLLBACK POST-CHECK 20261123110000 FAILED, nothing changed: %'", "' still present; '", "'a table still present; '",
+      "' vault row(s) of the job still present; '", "'ledger row still present; '", "'other rows or functions changed: before '"]) expect(post).toContain(x);
+    expect(RB1_RAW.indexOf('DO $postrb4263e1$')).toBeGreaterThan(RB1_RAW.indexOf("DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261123110000';"));
+    expect(RB1_RAW).not.toMatch(/decrypted_secret|SELECT\s+secret\b|\.secret\b/i);
   });
   it('E1 rollback removes everything E1 created', () => {
     for (const s of [
