@@ -16,6 +16,12 @@ calls there; afterwards they refuse (the not-applied check).
 
 0. Dry run on the self-hosted dry-run database first (guarded copies: the marker md5 replaced by an exact-string replace
    that must match once per file and prints `SUBSTITUTION APPLIED <file> 1`). Never cited as a result for the test project.
+   **Each stage runs three times on the dry-run database, each as one rolled-back call:** plain, and twice with a
+   prefix of invented rows belonging to other users sent first in the same call (one variant without and one with
+   read-log rows). Among those rows are a pending, unexpired authorization request and a version-1 connection. All
+   three must read the same verdict. The prefix file is kept outside the repository for now. Expected effects of T-N
+   on those rows, by design: the bump expires every pending request of every user, and `mcp_authorize_begin` deletes
+   anyone's expired requests. Nothing else of theirs may change.
 1. Fixtures: `kt-sql harness-n-fixtures.sql > fx.txt; python3 gen.py report-fixtures fx.txt` -> `decision: FULL` (the
    timing probes: the fixture, one approval chain, one application of T-N's text; the estimate must be at most 45 s).
 2. Structure (only if the coordinator allows it as a stage): `kt-sql harness-n-structure.sql > st.txt;

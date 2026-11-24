@@ -188,3 +188,26 @@ describe('BACKLOG-4263 T-N two-session control refuses the test project (text ch
     expect(RUN.indexOf('refusing: T4263N_MARKER_MD5 is the hosted')).toBeLessThan(RUN.indexOf('send precheck.sql'));
   });
 });
+
+describe('BACKLOG-4263 T-N and T-S harnesses do not depend on other users\' rows', () => {
+  const N = read(`${DIR}/harness-n.sql`);
+  const T_CONTROLS = read('supabase/tests/backlog-4263-sync2-t/lib/controls.sql');
+
+  it("bump_missing leaves the bump branch empty (no UPDATE and no bumped flag), so other users' pending requests cannot stop it applying", () => {
+    const gen = read(`${DIR}/gen.py`);
+    expect(gen).toContain(`"    PERFORM set_config('t4263n.bumped', 'on', true);\\n", "    NULL;\\n"),`);
+  });
+
+  it("C-N11 asserts the rollback's refusal without its database-wide count", () => {
+    expect(N).toContain("'refused', first LIKE 'ERR P0001 ROLLBACK 20261123150000: % connection(s) hold approval page version 2 or later%',");
+  });
+
+  it('the not-applied check refuses a database where a connection already holds version 2 or later', () => {
+    expect(N).toContain('IF EXISTS (SELECT 1 FROM public.mcp_connections c WHERE c.notice_version >= 2) THEN');
+  });
+
+  it("T-S c_log_view reads the fixture user's own get_message row and asserts no other user's row is listed", () => {
+    expect(T_CONTROLS).toContain("AND e ->> 'read_id' IN (SELECT x.id::text FROM public.mcp_message_reads x WHERE x.user_id = pg_temp.f('A')));");
+    expect(T_CONTROLS).toContain("'own_rows_only', NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'reads') e");
+  });
+});
