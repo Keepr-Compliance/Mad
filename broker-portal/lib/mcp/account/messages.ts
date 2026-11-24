@@ -91,19 +91,19 @@ export const CONSENT_V2 = {
 
 /** What the approval page shows; every version has these, version 2 adds readLog. */
 export interface ConsentText {
-  lead: (provider: string) => string;
+  lead: (_provider: string) => string;
   nameLabel: string;
-  nameHost: (host: string) => string;
-  replaces: (provider: string) => string;
-  onlyIf: (provider: string) => string;
+  nameHost: (_host: string) => string;
+  replaces: (_provider: string) => string;
+  onlyIf: (_provider: string) => string;
   scope: string;
-  agreement: (provider: string) => string;
+  agreement: (_provider: string) => string;
   readLog?: string;
   disconnect: string;
   whatDisconnects: string;
-  signedInAs: (email: string) => string;
-  startedAgo: (seconds: number) => string;
-  write: { lead: (provider: string) => string; scope: string; changes: string };
+  signedInAs: (_email: string) => string;
+  startedAgo: (_seconds: number) => string;
+  write: { lead: (_provider: string) => string; scope: string; changes: string };
 }
 
 /** The approval page text per version the database answers. A version not listed here cannot be approved on this page. */
